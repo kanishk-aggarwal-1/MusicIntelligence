@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MusicIntelligence - Song Explorer</title>
+    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>Song Explorer</h1>
+      <p>Browse your library in one spreadsheet-style view with column filters, metadata status, and discovery provenance.</p>
+      <nav class="topnav">
+        <a href="./index.html">Home</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a class="active" href="./songs.html">Song Explorer</a>
+        <a href="./filters.html">Filters</a>
+        <a href="./playlists.html">Playlists</a>
+        <a href="./features.html">Features</a>
+      </nav>
+      <p class="page-meta">API: <span id="apiBaseDisplay"></span></p>
+    </header>
+
+    <main class="page-grid">
+      <section class="card">
+        <h2>Song Table</h2>
+        <div class="row">
+          <label for="genre">Genre</label>
+          <input id="genre" type="text" placeholder="e.g. rock (optional)" />
+        </div>
+        <div class="row">
+          <label for="enrichmentStatus">Metadata Status</label>
+          <input id="enrichmentStatus" type="text" placeholder="pending | partial | complete | failed" />
+        </div>
+        <div class="row">
+          <label for="songLimit">Limit</label>
+          <input id="songLimit" type="number" min="1" max="5000" value="1000" />
+          <button data-action="songs" type="button">Get Songs</button>
+        </div>
+        <div id="songsOutput" class="output"></div>
+        
+      </section>
+    </main>
+
+    <script src="./app.js?v=20260310-3"></script>
+  </body>
+</html>
+
+
+
+

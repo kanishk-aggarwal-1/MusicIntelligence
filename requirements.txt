@@ -1,0 +1,15 @@
+﻿fastapi
+uvicorn
+spotipy
+requests
+pandas
+sqlalchemy
+psycopg2
+scikit-learn
+python-dotenv
+asyncpg
+celery
+redis
+alembic
+cryptography
+pytest

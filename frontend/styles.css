@@ -1,0 +1,380 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+:root {
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --text: #13202e;
+  --muted: #4d5f73;
+  --accent: #007a5a;
+  --accent-2: #0a5ea8;
+  --border: #d5dce3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
+  background: radial-gradient(circle at 10% 0%, #d9eaf8 0%, var(--bg) 40%);
+  color: var(--text);
+}
+
+.hero {
+  padding: 24px 20px 12px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.hero p {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.topnav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.topnav a {
+  text-decoration: none;
+  color: #fff;
+  background: #27415a;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.topnav a.active {
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+}
+
+.page-meta {
+  font-size: 0.85rem;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  padding: 16px 20px 24px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 2px 12px rgba(19, 32, 46, 0.08);
+}
+
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 1.1rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+label {
+  font-weight: 600;
+}
+
+input, select {
+  flex: 1;
+  min-width: 150px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  font-weight: 600;
+}
+
+button:hover {
+  filter: brightness(1.06);
+}
+
+.output {
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: #0e1822;
+  color: #d8f2ff;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.output-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.output-section {
+  margin-bottom: 10px;
+}
+
+.output-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.output-table th,
+.output-table td {
+  border: 1px solid #24415b;
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.output-table th {
+  background: #16314a;
+}
+
+.output-hint {
+  color: #9bc0da;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.chart-card {
+  background: #0f1c29;
+  border-radius: 10px;
+  padding: 10px;
+  color: #d8f2ff;
+}
+
+.chart-card h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 42px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.bar-label {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-track {
+  background: #20374c;
+  border-radius: 999px;
+  height: 12px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(120deg, #00a67a, #1f7bc5);
+}
+
+.bar-value {
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.link-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.link-card {
+  display: block;
+  text-decoration: none;
+  color: #fff;
+  background: #1b3348;
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.link-card:hover {
+  background: #234662;
+}
+
+@media (max-width: 720px) {
+  .hero h1 {
+    font-size: 1.6rem;
+  }
+
+  .bar-row {
+    grid-template-columns: 90px 1fr 36px;
+  }
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 2px;
+}
+
+.metric-card {
+  background: #11283b;
+  border: 1px solid #1f3f59;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.metric-label {
+  font-size: 0.72rem;
+  color: #9bc0da;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metric-value {
+  margin-top: 6px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #e7f6ff;
+}
+
+.metric-inline {
+  font-size: 0.78rem;
+  color: #b8d8ee;
+  margin-bottom: 8px;
+}
+
+.spark-svg {
+  width: 100%;
+  height: 120px;
+  background: linear-gradient(180deg, #0f2434 0%, #0d1c29 100%);
+  border: 1px solid #1d3d56;
+  border-radius: 10px;
+}
+
+.spark-line {
+  fill: none;
+  stroke: #28d39e;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spark-axis {
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: #9bc0da;
+}
+
+.hour-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(28px, 1fr));
+  gap: 6px;
+}
+
+.hour-cell {
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ecf7ff;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.song-explorer-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.song-explorer-table .filter-row th {
+  background: #10283b;
+  position: sticky;
+  top: 34px;
+  z-index: 2;
+}
+
+.song-filter-input {
+  width: 100%;
+  min-width: 110px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #35526d;
+  background: #0b1620;
+  color: #d8f2ff;
+  font-size: 0.76rem;
+}
+
+.song-filter-input::placeholder {
+  color: #87aeca;
+}
+
+.song-table-toolbar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.sort-header-btn {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #d8f2ff;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.sort-header-btn:hover {
+  color: #9de8cc;
+}
+
+.song-explorer-table select.song-filter-input,
+.song-explorer-table input.song-filter-input {
+  margin: 0;
+}
+
+.song-explorer-table td {
+  white-space: nowrap;
+}

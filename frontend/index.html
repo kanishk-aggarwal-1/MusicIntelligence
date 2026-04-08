@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MusicIntelligence - Home</title>
+    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>MusicIntelligence</h1>
+      <p>API setup, Spotify login, sync, and metadata refresh.</p>
+      <nav class="topnav">
+        <a class="active" href="./index.html">Home</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a href="./songs.html">Song Explorer</a>
+        <a href="./filters.html">Filters</a>
+        <a href="./playlists.html">Playlists</a>
+        <a href="./features.html">Features</a>
+      </nav>
+    </header>
+
+    <main class="page-grid">
+      <section class="card">
+        <h2>API Setup</h2>
+        <label for="apiBase">API Base URL</label>
+        <div class="row">
+          <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
+          <button id="saveBase" type="button">Save</button>
+        </div>
+        
+      </section>
+
+      <section class="card">
+        <h2>Login and Sync</h2>
+        <div class="actions">
+          <button data-action="login" type="button">Spotify Login</button>
+        </div>
+        <div class="row">
+          <button data-action="sync" type="button">Sync Recent History</button>
+        </div>
+        <div class="row">
+          <label for="backfillLimit">Backfill Limit</label>
+          <input id="backfillLimit" type="number" min="1" max="5000" value="500" />
+        </div>
+        <div class="row">
+          <label><input id="retryPartial" type="checkbox" /> Retry partial songs</label>
+          <label><input id="retryFailed" type="checkbox" /> Retry failed songs</label>
+          <button data-action="backfill" type="button">Backfill Missing Metadata</button>
+        </div>
+
+        <div id="userFlowOutput" class="output"></div>
+        
+      </section>
+
+
+    </main>
+
+    <script src="./app.js?v=20260310-3"></script>
+  </body>
+</html>
+
+
+
+
+

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MusicIntelligence - Features Lab</title>
+    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>Features Lab</h1>
+      <p>Timeline, discovery, feedback, goals, safe dedup, monitoring, and reports.</p>
+      <nav class="topnav">
+        <a href="./index.html">Home</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a href="./songs.html">Song Explorer</a>
+        <a href="./filters.html">Filters</a>
+        <a href="./playlists.html">Playlists</a>
+        <a class="active" href="./features.html">Features</a>
+      </nav>
+      <p class="page-meta">API: <span id="apiBaseDisplay"></span></p>
+    </header>
+
+    <main class="page-grid">
+      <section class="card">
+        <h2>Taste Timeline</h2>
+        <div class="row">
+          <label for="timelineMonths">Months</label>
+          <input id="timelineMonths" type="number" min="1" max="24" value="6" />
+          <button data-action="tasteTimeline" type="button">Load Timeline</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Discovery Feed</h2>
+        <div class="row">
+          <label for="discoveryLimit">Items</label>
+          <input id="discoveryLimit" type="number" min="1" max="100" value="20" />
+          <button data-action="discoveryFeed" type="button">Load Feed</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Data Quality</h2>
+        <div class="actions">
+          <button data-action="dataQuality" type="button">Check Coverage</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Feedback</h2>
+        <div class="row">
+          <label for="feedbackSongId">Song ID</label>
+          <input id="feedbackSongId" type="number" min="1" placeholder="e.g. 12" />
+          <label for="feedbackAction">Action</label>
+          <select id="feedbackAction">
+            <option value="like">Like</option>
+            <option value="skip">Skip</option>
+            <option value="dislike">Dislike</option>
+          </select>
+          <button data-action="submitFeedback" type="button">Submit</button>
+        </div>
+        <div class="actions">
+          <button data-action="feedbackSummary" type="button">Feedback Summary</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Listening Goals</h2>
+        <div class="row">
+          <label for="goalType">Goal Type</label>
+          <select id="goalType">
+            <option value="new_songs_per_week">New Songs Per Week</option>
+            <option value="listening_days_per_week">Listening Days Per Week</option>
+            <option value="repeat_rate_max">Max Repeat Rate (%)</option>
+          </select>
+          <label for="goalTarget">Target</label>
+          <input id="goalTarget" type="number" min="1" value="10" />
+          <button data-action="createGoal" type="button">Create Goal</button>
+        </div>
+        <div class="actions">
+          <button data-action="goalsStatus" type="button">Goal Status</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Smart Dedup</h2>
+        <div class="row">
+          <label for="dedupGroups">Groups</label>
+          <input id="dedupGroups" type="number" min="1" max="200" value="20" />
+          <label><input id="dedupDryRun" type="checkbox" checked /> Dry run only</label>
+          <button data-action="dedupPreview" type="button">Preview</button>
+          <button data-action="dedupApply" type="button">Apply</button>
+        </div>
+        <div class="row">
+          <label for="dedupBatchId">Undo Batch ID</label>
+          <input id="dedupBatchId" type="text" placeholder="auto-filled after apply" />
+          <button data-action="dedupUndo" type="button">Undo Batch</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Context Playlists</h2>
+        <div class="row">
+          <label for="contextName">Context</label>
+          <select id="contextName">
+            <option value="focus">Focus</option>
+            <option value="workout">Workout</option>
+            <option value="late-night">Late Night</option>
+            <option value="chill">Chill</option>
+          </select>
+          <button data-action="contextPlaylist" type="button">Generate</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Ops Monitoring</h2>
+        <div class="actions">
+          <button data-action="opsHealth" type="button">Health</button>
+          <button data-action="opsMetrics" type="button">Metrics</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Weekly Report</h2>
+        <div class="actions">
+          <button data-action="weeklyReport" type="button">Generate Weekly PDF</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Output</h2>
+        <div id="featureOutput" class="output"></div>
+      </section>
+    </main>
+
+    <script src="./app.js?v=20260310-3"></script>
+  </body>
+</html>
+
+
+
