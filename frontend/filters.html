@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MusicIntelligence - Filters</title>
+    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>Filters</h1>
+      <p>Explore top songs and tag-based slices.</p>
+      <nav class="topnav">
+        <a href="./index.html">Home</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a href="./songs.html">Song Explorer</a>
+        <a class="active" href="./filters.html">Filters</a>
+        <a href="./playlists.html">Playlists</a>
+        <a href="./features.html">Features</a>
+      </nav>
+      <p class="page-meta">API: <span id="apiBaseDisplay"></span></p>
+    </header>
+
+    <main class="page-grid">
+      <section class="card">
+        <h2>Filter Tools</h2>
+        <div class="row">
+          <label for="tag">Tag</label>
+          <input id="tag" type="text" placeholder="e.g. indie" />
+        </div>
+        <div class="actions">
+          <button data-action="topSongs" type="button">Top Songs</button>
+          <button data-action="songsByTag" type="button">Songs by Tag</button>
+          <button data-action="topByTag" type="button">Top by Tag</button>
+        </div>
+        <div id="filterOutput" class="output"></div>
+      </section>
+    </main>
+
+    <script src="./app.js?v=20260310-3"></script>
+  </body>
+</html>
+
+
+
+

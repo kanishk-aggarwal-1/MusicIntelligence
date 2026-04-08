@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MusicIntelligence - Playlists</title>
+    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+  </head>
+  <body>
+    <header class="hero">
+      <h1>Playlists</h1>
+      <p>Generate Spotify playlists with quality controls and explainability.</p>
+      <nav class="topnav">
+        <a href="./index.html">Home</a>
+        <a href="./dashboard.html">Dashboard</a>
+        <a href="./songs.html">Song Explorer</a>
+        <a href="./filters.html">Filters</a>
+        <a class="active" href="./playlists.html">Playlists</a>
+        <a href="./features.html">Features</a>
+      </nav>
+      <p class="page-meta">API: <span id="apiBaseDisplay"></span></p>
+    </header>
+
+    <main class="page-grid">
+      <section class="card">
+        <h2>Generate</h2>
+        <div class="row">
+          <label for="playlistMaxTracks">Max Tracks</label>
+          <input id="playlistMaxTracks" type="number" min="5" max="100" value="30" />
+        </div>
+        <div class="row">
+          <label for="playlistDiversity">Diversity (0-1)</label>
+          <input id="playlistDiversity" type="number" step="0.1" min="0" max="1" value="0.5" />
+        </div>
+        <div class="row">
+          <label for="playlistFamiliarity">Familiarity (0-1)</label>
+          <input id="playlistFamiliarity" type="number" step="0.1" min="0" max="1" value="0.5" />
+        </div>
+        <div class="row">
+          <label for="playlistMinKnownRatio">Min Known Track Ratio</label>
+          <input id="playlistMinKnownRatio" type="number" step="0.05" min="0" max="1" value="0.6" />
+        </div>
+        <div class="actions">
+          <button data-action="generate" type="button">Generate Playlist</button>
+        </div>
+        <div id="playlistOutput" class="output"></div>
+      </section>
+    </main>
+
+    <script src="./app.js?v=20260310-3"></script>
+  </body>
+</html>
+
+
+
