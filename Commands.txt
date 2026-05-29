@@ -1,0 +1,10 @@
+cd Desktop\MusicIntelligence
+
+psql -U postgres
+\c musicdb
+
+python -m uvicorn backend.app.main:app --reload
+
+python -m http.server 5500 --directory frontend
+
+http://127.0.0.1:5500

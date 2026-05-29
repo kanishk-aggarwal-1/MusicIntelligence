@@ -378,3 +378,127 @@ button:hover {
 .song-explorer-table td {
   white-space: nowrap;
 }
+
+.song-action-cell {
+  min-width: 210px;
+  white-space: normal;
+}
+
+.song-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.song-actions-filter-hint {
+  color: #9bc0da;
+  font-size: 0.72rem;
+}
+
+.job-progress {
+  width: 100%;
+  height: 10px;
+  background: #173248;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 8px 0 10px;
+  border: 1px solid #24415b;
+}
+
+.job-progress-bar {
+  height: 100%;
+  background: linear-gradient(120deg, #00a67a, #1f7bc5);
+}
+
+.playlist-summary-grid,
+.history-grid,
+.playlist-track-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.playlist-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 12px;
+}
+
+.playlist-summary-card,
+.history-card,
+.playlist-track-card {
+  background: #11283b;
+  border: 1px solid #1f3f59;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.playlist-track-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.playlist-track-title {
+  font-weight: 700;
+  color: #eff9ff;
+}
+
+.playlist-track-meta {
+  color: #9bc0da;
+  font-size: 0.75rem;
+}
+
+.playlist-track-score {
+  font-weight: 700;
+  color: #9de8cc;
+}
+
+.playlist-pill-row,
+.playlist-reasons,
+.playlist-components,
+.feedback-button-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.summary-pill,
+.reason-pill,
+.component-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: #173248;
+  color: #d8f2ff;
+  border: 1px solid #2b4f6d;
+}
+
+.component-pill strong {
+  color: #9de8cc;
+}
+
+.mini-action-btn {
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  border-radius: 999px;
+}
+
+.discovery-candidate-card {
+  border-color: #2b5d7d;
+}
+
+.raw-details {
+  margin-top: 12px;
+}
+
+.raw-details summary {
+  cursor: pointer;
+  color: #9de8cc;
+  font-weight: 600;
+  margin-bottom: 8px;
+}

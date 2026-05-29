@@ -1,7 +1,7 @@
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
-from datetime import datetime
 
 from ..database import Base
+from ..time_utils import utcnow_naive
 
 
 class ListeningGoal(Base):
@@ -14,4 +14,4 @@ class ListeningGoal(Base):
     target_value = Column(Integer, nullable=False)
     period = Column(String, nullable=False, default="weekly")
     active = Column(Boolean, default=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=utcnow_naive, index=True)

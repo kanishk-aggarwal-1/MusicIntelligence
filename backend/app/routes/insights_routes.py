@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -16,6 +16,7 @@ from ..models.listening_history import ListeningHistory
 from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.song_tag import SongTag
+from ..services.api_cache_service import clear_provider_cache
 from ..services.recommendation_service import build_discovery_feed
 from ..services.spotify_service import load_request_user_session
 
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/insights", tags=["Insights"])
 
 class FeedbackPayload(BaseModel):
     song_id: int
-    action: str  # like, dislike, skip
+    action: str
 
 
 class GoalPayload(BaseModel):
@@ -147,8 +148,20 @@ def add_feedback(payload: FeedbackPayload, request: Request, db: Session = Depen
     user_id = _require_user_id(db, request)
 
     action = payload.action.lower().strip()
-    if action not in {"like", "dislike", "skip"}:
-        raise HTTPException(status_code=400, detail="action must be one of like/dislike/skip")
+    allowed_actions = {
+        "like",
+        "dislike",
+        "skip",
+        "too_familiar",
+        "too_obscure",
+        "wrong_vibe",
+        "more_like_this",
+    }
+    if action not in allowed_actions:
+        raise HTTPException(
+            status_code=400,
+            detail="action must be one of like/dislike/skip/too_familiar/too_obscure/wrong_vibe/more_like_this",
+        )
 
     db.add(RecommendationFeedback(user_id=user_id, song_id=payload.song_id, action=action))
     db.commit()
@@ -296,6 +309,51 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
         .all()
     )
 
+    missing_tags = (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .outerjoin(SongTag, SongTag.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False), SongTag.id.is_(None))
+        .scalar()
+    ) or 0
+
+    missing_popularity = (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(
+            Song.is_deleted.is_(False),
+            (Song.listeners.is_(None) | (Song.listeners == 0)),
+            (Song.playcount.is_(None) | (Song.playcount == 0)),
+        )
+        .scalar()
+    ) or 0
+
+    error_rows = (
+        db.query(Song.enrichment_error, func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False), Song.enrichment_error.is_not(None))
+        .group_by(Song.enrichment_error)
+        .order_by(func.count(Song.id).desc())
+        .limit(10)
+        .all()
+    )
+
+    artist_quality_rows = (
+        db.query(
+            Artist.name,
+            func.count(Song.id).label("songs"),
+            func.sum(case((Song.genre.is_(None), 1), else_=0)).label("missing_genre"),
+            func.sum(case((Song.enrichment_status == "failed", 1), else_=0)).label("failed_count"),
+        )
+        .join(Song, Song.artist_id == Artist.id)
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False))
+        .group_by(Artist.name)
+        .order_by(func.sum(case((Song.enrichment_status == "failed", 1), else_=0)).desc(), func.count(Song.id).desc())
+        .limit(10)
+        .all()
+    )
+
     def pct(value):
         return round((value / total_songs) * 100, 2) if total_songs else 0
 
@@ -311,7 +369,31 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
             {"status": s or "unknown", "count": int(c)}
             for s, c in status_rows
         ],
+        "missing": {
+            "tags": int(missing_tags),
+            "listeners_or_playcount": int(missing_popularity),
+        },
+        "top_enrichment_errors": [
+            {"error": err, "count": int(count)}
+            for err, count in error_rows
+        ],
+        "artists_with_poor_metadata": [
+            {
+                "artist": artist_name,
+                "songs": int(songs),
+                "missing_genre": int(missing_genre or 0),
+                "failed_count": int(failed_count or 0),
+            }
+            for artist_name, songs, missing_genre, failed_count in artist_quality_rows
+        ],
     }
+
+
+@router.post("/cache/clear")
+def clear_cache(request: Request, provider: str = "lastfm", db: Session = Depends(get_db)):
+    _require_user_id(db, request)
+    cleared = clear_provider_cache(provider)
+    return {"message": "Cache cleared", "provider": provider, "cleared": cleared}
 
 
 @router.get("/dedup-preview")

@@ -12,8 +12,7 @@ This frontend is split into dedicated pages for easier testing.
 
 ## Run
 1. Start backend API:
-   - `cd backend`
-   - `uvicorn app.main:app --reload`
+   - from the project root: `python -m uvicorn backend.app.main:app --reload`
 2. Serve frontend (new terminal from repo root):
    - `python -m http.server 5500 --directory frontend`
 3. Open home page:

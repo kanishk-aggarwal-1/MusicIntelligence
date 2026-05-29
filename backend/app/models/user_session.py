@@ -1,7 +1,7 @@
-﻿from sqlalchemy import Column, DateTime, Integer, String, Text
-from datetime import datetime
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from ..database import Base
+from ..time_utils import utcnow_naive
 
 
 class UserSession(Base):
@@ -17,4 +17,4 @@ class UserSession(Base):
     token_expires_at = Column(DateTime, index=True)
     token_info_json = Column(Text)
 
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive, index=True)

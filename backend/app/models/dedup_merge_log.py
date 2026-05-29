@@ -1,7 +1,7 @@
-﻿from sqlalchemy import Column, DateTime, Integer, String, Text
-from datetime import datetime
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from ..database import Base
+from ..time_utils import utcnow_naive
 
 
 class DedupMergeLog(Base):
@@ -16,4 +16,4 @@ class DedupMergeLog(Base):
     original_title = Column(String, nullable=True)
     original_artist = Column(String, nullable=True)
     snapshot_json = Column(Text, nullable=True)
-    merged_at = Column(DateTime, default=datetime.utcnow, index=True)
+    merged_at = Column(DateTime, default=utcnow_naive, index=True)

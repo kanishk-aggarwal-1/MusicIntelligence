@@ -13,3 +13,4 @@ redis
 alembic
 cryptography
 pytest
+reportlab

@@ -289,6 +289,22 @@ def run_startup_migrations():
                     if "snapshot_json" not in cols:
                         conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN snapshot_json TEXT"))
 
+            if "jobs" in table_names:
+                cols = _column_type_map(inspector, "jobs")
+                if dialect == "postgresql":
+                    conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS result_json TEXT"))
+                else:
+                    if "result_json" not in cols:
+                        conn.execute(text("ALTER TABLE jobs ADD COLUMN result_json TEXT"))
+
+            if "generated_playlists" in table_names:
+                cols = _column_type_map(inspector, "generated_playlists")
+                if dialect == "postgresql":
+                    conn.execute(text("ALTER TABLE generated_playlists ADD COLUMN IF NOT EXISTS summary_json TEXT"))
+                else:
+                    if "summary_json" not in cols:
+                        conn.execute(text("ALTER TABLE generated_playlists ADD COLUMN summary_json TEXT"))
+
     except SQLAlchemyError:
         logger.exception("Startup migration failed")
         raise

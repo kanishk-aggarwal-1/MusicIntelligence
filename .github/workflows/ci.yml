@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: sqlite:///./ci_test.db
+      SPOTIFY_CLIENT_ID: test-client-id
+      SPOTIFY_CLIENT_SECRET: test-client-secret
+      SPOTIFY_REDIRECT_URI: http://127.0.0.1:8000/user/callback
+      LASTFM_API_KEY: test-lastfm-key
+      LASTFM_SHARED_SECRET: test-lastfm-secret
+      LASTFM_API_URL: http://ws.audioscrobbler.com/2.0/
+      SESSION_ENCRYPTION_KEY: ""
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Verify backend imports
+        run: python -c "import backend.app.main; print('backend import ok')"
+
+      - name: Run tests
+        run: python -m pytest -q

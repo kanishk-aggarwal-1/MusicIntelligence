@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models.user_session import UserSession
+from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow_naive
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def _rewrap_session_secrets_if_needed(db: Session, session_row: UserSession, tok
         changed = True
 
     if changed:
-        session_row.updated_at = datetime.utcnow()
+        session_row.updated_at = utcnow_naive()
         db.commit()
 
 
@@ -100,10 +101,10 @@ def get_spotify_client(access_token: str):
 def _parse_expiry(token_info: dict):
     expires_at = token_info.get("expires_at")
     if isinstance(expires_at, (int, float)):
-        return datetime.fromtimestamp(expires_at, tz=timezone.utc).replace(tzinfo=None)
+        return to_naive_utc(datetime.fromtimestamp(expires_at, tz=timezone.utc))
     expires_in = token_info.get("expires_in")
     if isinstance(expires_in, (int, float)):
-        return datetime.utcnow() + timedelta(seconds=int(expires_in))
+        return utcnow_naive() + timedelta(seconds=int(expires_in))
     return None
 
 
@@ -124,7 +125,7 @@ def save_user_session(db: Session, user_id: str, token: str = None, token_info: 
             existing.token_expires_at = token_expires_at
         if token_info:
             existing.token_info_json = _encrypt(json.dumps(token_info))
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = utcnow_naive()
     else:
         db.add(
             UserSession(
@@ -147,7 +148,7 @@ def _refresh_access_token_if_needed(db: Session, session_row: UserSession):
     refresh_token = _decrypt(session_row.refresh_token)
     expires_at = session_row.token_expires_at
 
-    still_valid = not expires_at or expires_at > (datetime.utcnow() + timedelta(seconds=45))
+    still_valid = not expires_at or expires_at > (utcnow_naive() + timedelta(seconds=45))
     if token and still_valid:
         return token
 
@@ -205,7 +206,9 @@ def load_request_user_session(db: Session, request: Request | None = None):
 
 
 def _played_at_to_ms(played_at: str):
-    dt = datetime.fromisoformat(played_at.replace("Z", "+00:00"))
+    dt = parse_utc_datetime(played_at)
+    if not dt:
+        raise ValueError(f"Invalid played_at timestamp: {played_at}")
     return int(dt.astimezone(timezone.utc).timestamp() * 1000)
 
 
@@ -293,10 +296,10 @@ def search_track(sp, title: str, artist: str):
     return resolve_track_id(sp, title, artist)
 
 
-def create_playlist(sp, user_id: str, track_ids):
+def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playlist"):
     playlist = sp.user_playlist_create(
         user=user_id,
-        name="AI Generated Playlist",
+        name=name,
         public=False,
     )
 
