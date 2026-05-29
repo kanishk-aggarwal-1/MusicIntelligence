@@ -9,15 +9,30 @@ const outputMap = {
   sync: document.getElementById("userFlowOutput"),
   backfill: document.getElementById("userFlowOutput"),
   generate: document.getElementById("playlistOutput") || document.getElementById("userFlowOutput"),
+  previewPlaylist: document.getElementById("playlistOutput") || document.getElementById("userFlowOutput"),
+  loadJobs: document.getElementById("jobsOutput") || document.getElementById("userFlowOutput"),
+  loadPlaylistHistory: document.getElementById("playlistHistoryOutput") || document.getElementById("playlistOutput"),
+  loadGeneratedPlaylist: document.getElementById("playlistHistoryOutput") || document.getElementById("playlistOutput"),
+  regenerateGeneratedPlaylist: document.getElementById("playlistHistoryOutput") || document.getElementById("playlistOutput"),
+  createFromGeneratedPlaylist: document.getElementById("playlistHistoryOutput") || document.getElementById("playlistOutput"),
   contextPlaylist: document.getElementById("playlistOutput") || featureOutput,
   dashboard: document.getElementById("dashboardCharts"),
   songs: document.getElementById("songsOutput"),
+  songDetail: document.getElementById("songDetailOutput") || document.getElementById("songsOutput"),
+  songRetryEnrichment: document.getElementById("songDetailOutput") || document.getElementById("songsOutput"),
+  songHide: document.getElementById("songDetailOutput") || document.getElementById("songsOutput"),
+  songRestore: document.getElementById("songDetailOutput") || document.getElementById("songsOutput"),
   topSongs: document.getElementById("filterOutput"),
   songsByTag: document.getElementById("filterOutput"),
   topByTag: document.getElementById("filterOutput"),
   tasteTimeline: featureOutput,
   discoveryFeed: featureOutput,
   dataQuality: featureOutput,
+  retryFailedMetadata: featureOutput,
+  retryPartialMetadata: featureOutput,
+  clearLastfmCache: featureOutput,
+  discoveryPreviewJob: featureOutput,
+  acceptDiscoveryCandidates: featureOutput,
   submitFeedback: featureOutput,
   feedbackSummary: featureOutput,
   createGoal: featureOutput,
@@ -32,18 +47,33 @@ const outputMap = {
 
 const loadingMessages = {
   login: "Waiting for Spotify authentication",
-  sync: "Syncing listening history",
-  backfill: "Backfilling metadata",
+  sync: "Queueing listening history sync",
+  backfill: "Queueing metadata backfill",
   generate: "Generating playlist",
+  previewPlaylist: "Building playlist preview",
+  loadJobs: "Loading recent jobs",
+  loadPlaylistHistory: "Loading saved playlist history",
+  loadGeneratedPlaylist: "Loading saved playlist detail",
+  regenerateGeneratedPlaylist: "Regenerating saved playlist preview",
+  createFromGeneratedPlaylist: "Creating Spotify playlist from saved preview",
   contextPlaylist: "Generating context playlist",
   dashboard: "Loading dashboard stats",
   songs: "Loading songs",
+  songDetail: "Loading song detail",
+  songRetryEnrichment: "Retrying song enrichment",
+  songHide: "Hiding song",
+  songRestore: "Restoring song",
   topSongs: "Loading top songs",
   songsByTag: "Loading songs by tag",
   topByTag: "Loading top songs by tag",
   tasteTimeline: "Loading taste timeline",
   discoveryFeed: "Loading discovery feed",
   dataQuality: "Checking data quality",
+  retryFailedMetadata: "Queueing failed-metadata retry",
+  retryPartialMetadata: "Queueing partial-metadata retry",
+  clearLastfmCache: "Clearing Last.fm cache",
+  discoveryPreviewJob: "Queueing discovery preview",
+  acceptDiscoveryCandidates: "Accepting discovery candidates",
   submitFeedback: "Saving feedback",
   feedbackSummary: "Loading feedback summary",
   createGoal: "Creating goal",
@@ -107,6 +137,27 @@ const FIELD_LABELS = {
   token_expires_at: "Token Expires At",
   job_id: "Job ID",
   status: "Status",
+  job_type: "Job Type",
+  progress_current: "Progress Done",
+  progress_total: "Progress Total",
+  created_at: "Created At",
+  started_at: "Started At",
+  finished_at: "Finished At",
+  generated_playlist_id: "Generated Playlist ID",
+  algorithm_version: "Algorithm Version",
+  candidate_pool_size: "Candidate Pool Size",
+  candidate_count: "Candidate Count",
+  candidate_id: "Candidate ID",
+  seed_artist: "Seed Artist",
+  listening_count: "Listening Count",
+  playlist_inclusion_count: "Playlist Inclusions",
+  tag_count: "Tag Count",
+  is_deleted: "Hidden",
+  context_type: "Context",
+  final_score: "Final Score",
+  score_breakdown: "Score Breakdown",
+  request_params: "Request Settings",
+  summary_json: "Summary",
 };
 
 const SECTION_LABELS = {
@@ -128,11 +179,24 @@ const SECTION_LABELS = {
   components: "Score Components",
   meta: "Request Metadata",
   result: "Result",
+  generated_playlist: "Generated Playlist",
+  request_params: "Request Settings",
+  summary: "Playlist Summary",
+  tracks: "Selected Tracks",
 };
 
 const BASE_KEY = "musicintel_api_base";
-const DEFAULT_BASE = "http://127.0.0.1:8000";
+const DEFAULT_BASE = window.MUSICINTEL_CONFIG?.apiBaseUrl || "http://127.0.0.1:8000";
 const USER_KEY = "musicintel_user_id";
+const GENERATED_PLAYLIST_KEY = "musicintel_generated_playlist_id";
+const FEEDBACK_CHOICES = [
+  { value: "like", label: "Like" },
+  { value: "more_like_this", label: "More Like This" },
+  { value: "too_familiar", label: "Too Familiar" },
+  { value: "too_obscure", label: "Too Obscure" },
+  { value: "wrong_vibe", label: "Wrong Vibe" },
+  { value: "dislike", label: "Dislike" },
+];
 
 function getBaseUrl() {
   if (apiBaseInput) {
@@ -156,6 +220,33 @@ function loadBaseUrl() {
     apiBaseDisplay.textContent = saved || DEFAULT_BASE;
   }
 }
+
+function getSelectedGeneratedPlaylistId() {
+  const input = document.getElementById("generatedPlaylistId");
+  return Number(input?.value || localStorage.getItem(GENERATED_PLAYLIST_KEY) || 0);
+}
+
+function setSelectedGeneratedPlaylistId(id) {
+  if (!id) return;
+  localStorage.setItem(GENERATED_PLAYLIST_KEY, String(id));
+  const input = document.getElementById("generatedPlaylistId");
+  if (input) {
+    input.value = String(id);
+  }
+}
+
+function getSelectedSongId() {
+  return Number(document.getElementById("selectedSongId")?.value || 0);
+}
+
+function setSelectedSongId(id) {
+  if (!id) return;
+  const input = document.getElementById("selectedSongId");
+  if (input) {
+    input.value = String(id);
+  }
+}
+
 function cleanupLegacyUi() {
   document.querySelectorAll(".card h2").forEach((heading) => {
     const text = (heading.textContent || "").trim();
@@ -192,7 +283,7 @@ function formatValue(key, value) {
     return "-";
   }
 
-  if (["last_listened_at", "played_at", "day", "week", "merged_at", "token_expires_at"].includes(key) || key.endsWith("_date") || key.endsWith("_time") || key.endsWith("_at")) {
+  if (["last_listened_at", "played_at", "day", "week", "merged_at", "token_expires_at", "created_at", "started_at", "finished_at"].includes(key) || key.endsWith("_date") || key.endsWith("_time") || key.endsWith("_at")) {
     const dt = new Date(value);
     if (!Number.isNaN(dt.getTime())) {
       return dt.toLocaleString();
@@ -239,12 +330,22 @@ function renderTable(rows) {
 
 function renderSongExplorerRows(rows, cols) {
   if (!rows.length) {
-    return `<tr><td colspan="${cols.length}" class="output-hint">No matching songs</td></tr>`;
+    return `<tr><td colspan="${cols.length + 1}" class="output-hint">No matching songs</td></tr>`;
   }
 
   return rows.map((row) => {
     const cells = cols.map((c) => `<td>${escapeHtml(formatValue(c, row[c]))}</td>`).join("");
-    return `<tr>${cells}</tr>`;
+    const actionButtons = `
+      <td class="song-action-cell">
+        <div class="song-row-actions">
+          <button type="button" class="mini-action-btn song-row-action-btn" data-song-id="${escapeHtml(row.id)}" data-song-row-action="select">Select</button>
+          <button type="button" class="mini-action-btn song-row-action-btn" data-song-id="${escapeHtml(row.id)}" data-song-row-action="detail">Detail</button>
+          <button type="button" class="mini-action-btn song-row-action-btn" data-song-id="${escapeHtml(row.id)}" data-song-row-action="retry">Retry</button>
+          <button type="button" class="mini-action-btn song-row-action-btn" data-song-id="${escapeHtml(row.id)}" data-song-row-action="${row.is_deleted ? "restore" : "hide"}">${row.is_deleted ? "Restore" : "Hide"}</button>
+        </div>
+      </td>
+    `;
+    return `<tr>${cells}${actionButtons}</tr>`;
   }).join("");
 }
 
@@ -356,7 +457,7 @@ function setSongExplorerOutput(el, rows) {
         ${escapeHtml(prettyLabel(c))}
       </button>
     </th>
-  `).join("");
+  `).join("") + `<th>Actions</th>`;
   const filterRow = songExplorerColumns.map((c) => {
     const config = getSongExplorerFilterConfig(c);
     if (config.useSelect) {
@@ -518,6 +619,267 @@ function setPlaylistOutput(el, payload) {
     </div>
     ${warnings.length ? `<div class="output-section"><div class="output-title">Warnings</div>${renderPayload(warnings.map((message) => ({ message })))}</div>` : ""}
     ${renderPayload(payload)}
+  `;
+}
+
+function setJobOutput(el, payload, title = "Job Status") {
+  if (!el) return;
+
+  if (Array.isArray(payload?.items)) {
+    const rows = payload.items.map((job) => ({
+      id: job.id,
+      job_type: job.job_type,
+      status: job.status,
+      progress: `${job.progress_current || 0}/${job.progress_total || 0}`,
+      message: job.message,
+      created_at: job.created_at,
+      finished_at: job.finished_at,
+    }));
+    el.innerHTML = `
+      <div class="output-title">${escapeHtml(title)}</div>
+      <div class="metric-inline">${rows.length} jobs shown</div>
+      ${renderPayload(rows)}
+    `;
+    return;
+  }
+
+  const current = Number(payload?.progress_current || 0);
+  const total = Number(payload?.progress_total || 0);
+  const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : null;
+
+  el.innerHTML = `
+    <div class="output-title">${escapeHtml(title)}</div>
+    <div class="metric-strip">
+      <div class="metric-card">
+        <div class="metric-label">Status</div>
+        <div class="metric-value">${escapeHtml(formatValue("status", payload?.status || "-"))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Progress</div>
+        <div class="metric-value">${percent === null ? `${current}/${total}` : `${percent}%`}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Job Type</div>
+        <div class="metric-value">${escapeHtml(formatValue("job_type", payload?.job_type || "-"))}</div>
+      </div>
+    </div>
+    <div class="job-progress">
+      <div class="job-progress-bar" style="width:${percent === null ? 0 : percent}%"></div>
+    </div>
+    ${payload?.message ? `<div class="metric-inline">${escapeHtml(String(payload.message))}</div>` : ""}
+    ${renderPayload(payload)}
+  `;
+}
+
+function renderFeedbackButtons(songId) {
+  if (!songId) return "";
+  const buttons = FEEDBACK_CHOICES.map((item) => `
+    <button
+      type="button"
+      class="mini-action-btn feedback-btn"
+      data-song-id="${escapeHtml(songId)}"
+      data-feedback-action="${escapeHtml(item.value)}"
+    >${escapeHtml(item.label)}</button>
+  `).join("");
+  return `<div class="feedback-button-row">${buttons}</div>`;
+}
+
+function setGeneratedPlaylistOutput(el, payload, title = "Generated Playlist") {
+  if (!el) return;
+
+  if (Array.isArray(payload?.items)) {
+    const cards = payload.items.map((item) => `
+      <div class="history-card">
+        <div class="playlist-track-head">
+          <div>
+            <div class="playlist-track-title">${escapeHtml(item.name || "Generated Playlist")}</div>
+            <div class="playlist-track-meta">ID ${escapeHtml(formatValue("generated_playlist_id", item.id))} | ${escapeHtml(formatValue("context_type", item.context_type || "general"))}</div>
+          </div>
+          <button type="button" class="mini-action-btn generated-select-btn" data-generated-playlist-id="${escapeHtml(item.id)}">Select</button>
+        </div>
+        <div class="playlist-pill-row">
+          <span class="summary-pill">Candidates: ${escapeHtml(formatValue("candidate_pool_size", item.candidate_pool_size || 0))}</span>
+          <span class="summary-pill">Algorithm: ${escapeHtml(item.algorithm_version || "-")}</span>
+          <span class="summary-pill">${item.spotify_playlist_id ? "Created on Spotify" : "Preview only"}</span>
+        </div>
+        <div class="metric-inline">${escapeHtml(formatValue("created_at", item.created_at))}</div>
+      </div>
+    `).join("");
+    el.innerHTML = `
+      <div class="output-title">${escapeHtml(title)}</div>
+      <div class="metric-inline">${payload.items.length} saved playlists</div>
+      <div class="history-grid">${cards || '<div class="output-hint">No saved playlists</div>'}</div>
+    `;
+    return;
+  }
+
+  const playlist = payload?.generated_playlist || payload;
+  const tracks = Array.isArray(playlist?.tracks) ? playlist.tracks : [];
+  const familiarRatio = Number(playlist?.summary?.familiar_ratio || 0);
+  const artistCount = Number(playlist?.summary?.artist_count || 0);
+  const dominantTags = Array.isArray(playlist?.summary?.dominant_tags) ? playlist.summary.dominant_tags : [];
+  const dominantGenres = Array.isArray(playlist?.summary?.dominant_genres) ? playlist.summary.dominant_genres : [];
+  const trackRows = tracks.map((track) => {
+    const components = track.score_breakdown || {};
+    const explanation = track.explanation || {};
+    const componentEntries = Object.entries(components)
+      .map(([key, value]) => `<div class="component-pill"><span>${escapeHtml(prettyLabel(key))}</span><strong>${escapeHtml(formatValue(key, value))}</strong></div>`)
+      .join("");
+    const reasons = Array.isArray(explanation.reasons) ? explanation.reasons : [];
+    return `
+      <div class="playlist-track-card">
+        <div class="playlist-track-head">
+          <div>
+            <div class="playlist-track-title">${escapeHtml(track.song?.title || "-")}</div>
+            <div class="playlist-track-meta">${escapeHtml(track.song?.artist || "-")} | Position ${escapeHtml(formatValue("position", track.position))}</div>
+          </div>
+          <div class="playlist-track-score">${escapeHtml(formatValue("final_score", track.final_score))}</div>
+        </div>
+        <div class="playlist-track-meta">Genre: ${escapeHtml(formatValue("genre", track.song?.genre))} | Metadata: ${escapeHtml(formatValue("enrichment_status", track.song?.enrichment_status))}</div>
+        ${reasons.length ? `<div class="playlist-reasons">${reasons.map((reason) => `<span class="reason-pill">${escapeHtml(String(reason))}</span>`).join("")}</div>` : ""}
+        ${componentEntries ? `<div class="playlist-components">${componentEntries}</div>` : ""}
+        ${renderFeedbackButtons(track.song_id)}
+      </div>
+    `;
+  }).join("") + `<th class="song-actions-filter-hint">Inline actions</th>`;
+
+  el.innerHTML = `
+    <div class="output-title">${escapeHtml(title)}</div>
+    <div class="metric-strip">
+      <div class="metric-card">
+        <div class="metric-label">Generated Playlist ID</div>
+        <div class="metric-value">${escapeHtml(formatValue("generated_playlist_id", playlist?.id || "-"))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Tracks</div>
+        <div class="metric-value">${tracks.length}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Familiar Ratio</div>
+        <div class="metric-value">${escapeHtml(formatValue("known_track_ratio", familiarRatio))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Artists</div>
+        <div class="metric-value">${artistCount}</div>
+      </div>
+    </div>
+    <div class="playlist-summary-grid">
+      <div class="playlist-summary-card">
+        <div class="metric-label">Name</div>
+        <div class="metric-inline">${escapeHtml(playlist?.name || "-")}</div>
+        <div class="metric-label">Algorithm</div>
+        <div class="metric-inline">${escapeHtml(playlist?.algorithm_version || "-")}</div>
+      </div>
+      <div class="playlist-summary-card">
+        <div class="metric-label">Dominant Tags</div>
+        <div class="playlist-pill-row">${dominantTags.length ? dominantTags.map((item) => `<span class="summary-pill">${escapeHtml(String(item))}</span>`).join("") : '<span class="summary-pill">None</span>'}</div>
+        <div class="metric-label">Dominant Genres</div>
+        <div class="playlist-pill-row">${dominantGenres.length ? dominantGenres.map((item) => `<span class="summary-pill">${escapeHtml(String(item))}</span>`).join("") : '<span class="summary-pill">None</span>'}</div>
+      </div>
+      <div class="playlist-summary-card">
+        <div class="metric-label">Diversity Summary</div>
+        <div class="metric-inline">${escapeHtml(playlist?.summary?.diversity_summary || "-")}</div>
+        <div class="metric-label">Context Fit</div>
+        <div class="metric-inline">${escapeHtml(formatValue("context_type", playlist?.summary?.context_fit || playlist?.context_type || "general"))}</div>
+      </div>
+    </div>
+    <div class="output-section">
+      <div class="output-title">Selected Tracks</div>
+      <div class="playlist-track-grid">${trackRows || '<div class="output-hint">No tracks saved</div>'}</div>
+    </div>
+    <details class="raw-details">
+      <summary>Raw payload</summary>
+      ${renderPayload(payload)}
+    </details>
+  `;
+}
+
+function setSongDetailOutput(el, payload, title = "Song Detail") {
+  if (!el) return;
+  const detail = payload?.song || payload;
+  const tags = Array.isArray(detail?.tags) ? detail.tags : [];
+  if (detail?.id) {
+    setSelectedSongId(detail.id);
+  }
+
+  el.innerHTML = `
+    <div class="output-title">${escapeHtml(title)}</div>
+    <div class="metric-strip">
+      <div class="metric-card">
+        <div class="metric-label">Song ID</div>
+        <div class="metric-value">${escapeHtml(formatValue("id", detail?.id || "-"))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Listening Count</div>
+        <div class="metric-value">${escapeHtml(formatValue("listening_count", detail?.listening_count || 0))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Playlist Inclusions</div>
+        <div class="metric-value">${escapeHtml(formatValue("playlist_inclusion_count", detail?.playlist_inclusion_count || 0))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Metadata Status</div>
+        <div class="metric-value">${escapeHtml(formatValue("enrichment_status", detail?.enrichment_status || "-"))}</div>
+      </div>
+    </div>
+    <div class="playlist-pill-row">${tags.length ? tags.map((tag) => `<span class="summary-pill">${escapeHtml(String(tag))}</span>`).join("") : '<span class="summary-pill">No tags</span>'}</div>
+    ${renderPayload(payload)}
+  `;
+}
+
+function setDiscoveryPreviewOutput(el, payload, title = "Discovery Preview") {
+  if (!el) return;
+
+  const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+  const seedArtists = Array.isArray(payload?.seed_artists) ? payload.seed_artists : [];
+  const candidateCards = candidates.map((candidate) => `
+    <div class="history-card discovery-candidate-card">
+      <div class="playlist-track-head">
+        <div>
+          <div class="playlist-track-title">${escapeHtml(candidate.title || "-")}</div>
+          <div class="playlist-track-meta">${escapeHtml(candidate.artist || "-")} | Seed: ${escapeHtml(candidate.seed_artist || "-")}</div>
+        </div>
+        <div class="playlist-track-score">#${escapeHtml(formatValue("candidate_id", candidate.candidate_id))}</div>
+      </div>
+      <div class="playlist-pill-row">
+        <span class="summary-pill">Source: ${escapeHtml(formatValue("discovery_source", candidate.discovery_source || "-"))}</span>
+        <span class="summary-pill">Confidence: ${escapeHtml(formatValue("discovery_confidence", candidate.discovery_confidence || 0))}</span>
+      </div>
+      <div class="feedback-button-row">
+        <button type="button" class="mini-action-btn discovery-candidate-btn" data-candidate-id="${escapeHtml(candidate.candidate_id)}" data-discovery-action="select">Add ID</button>
+        <button type="button" class="mini-action-btn discovery-candidate-btn" data-candidate-id="${escapeHtml(candidate.candidate_id)}" data-discovery-action="accept">Accept Now</button>
+      </div>
+    </div>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="output-title">${escapeHtml(title)}</div>
+    <div class="metric-strip">
+      <div class="metric-card">
+        <div class="metric-label">Seed Artists</div>
+        <div class="metric-value">${seedArtists.length || Number(payload?.seed_artist_count || 0)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Candidates</div>
+        <div class="metric-value">${escapeHtml(formatValue("candidate_count", payload?.candidate_count || candidates.length))}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Source</div>
+        <div class="metric-value">${escapeHtml(payload?.source || "lastfm")}</div>
+      </div>
+    </div>
+    <div class="playlist-summary-card">
+      <div class="metric-label">Seed Artists Used</div>
+      <div class="playlist-pill-row">${seedArtists.length ? seedArtists.map((artist) => `<span class="summary-pill">${escapeHtml(String(artist))}</span>`).join("") : '<span class="summary-pill">No seed list returned</span>'}</div>
+    </div>
+    <div class="output-section">
+      <div class="output-title">Discovery Candidates</div>
+      <div class="history-grid">${candidateCards || '<div class="output-hint">No candidates found</div>'}</div>
+    </div>
+    <details class="raw-details">
+      <summary>Raw payload</summary>
+      ${renderPayload(payload)}
+    </details>
   `;
 }
 
@@ -703,6 +1065,37 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function pollJobUntilDone(jobId, output, title = "Job Status") {
+  const terminalStates = new Set(["succeeded", "failed", "cancelled"]);
+
+  for (;;) {
+    const job = await callApi(`/jobs/${encodeURIComponent(jobId)}`);
+    setJobOutput(output, job, title);
+    if (terminalStates.has(job.status)) {
+      return job;
+    }
+    await sleep(1200);
+  }
+}
+
+async function submitQuickFeedback(songId, feedbackAction, output) {
+  const data = await callApi("/insights/feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      song_id: Number(songId),
+      action: feedbackAction,
+    }),
+  });
+
+  const targetOutput = output || featureOutput || outputMap.loadGeneratedPlaylist || outputMap.generate;
+  setOutput(targetOutput, "Feedback Saved", {
+    message: `Saved '${feedbackAction}' feedback for song ${songId}`,
+    song_id: songId,
+    action: feedbackAction,
+  });
+  return data;
+}
+
 async function loginWithPopup() {
   const popup = window.open(
     `${getBaseUrl()}/user/login`,
@@ -769,10 +1162,16 @@ async function handleAction(action) {
     }
 
     if (action === "sync") {
-      const data = await callApi("/user/sync-history", {
+      const job = await callApi("/user/sync-history/job", {
         method: "POST",
       });
-      setOutput(output, "Sync Result", data);
+      setJobOutput(output, job, "Sync Job");
+      const finalJob = await pollJobUntilDone(job.id, output, "Sync Job");
+      if (finalJob.status === "succeeded") {
+        setOutput(output, "Sync Result", finalJob.result || finalJob);
+      } else {
+        setJobOutput(output, finalJob, "Sync Job");
+      }
       return;
     }
 
@@ -788,8 +1187,46 @@ async function handleAction(action) {
         retry_partial: String(retryPartial),
         retry_failed: String(retryFailed),
       });
-      const data = await callApi(`/user/backfill-metadata?${params.toString()}`, { method: "POST" });
-      setBackfillOutput(output, data);
+      const job = await callApi(`/user/backfill-metadata/job?${params.toString()}`, { method: "POST" });
+      setJobOutput(output, job, "Backfill Job");
+      const finalJob = await pollJobUntilDone(job.id, output, "Backfill Job");
+      if (finalJob.status === "succeeded") {
+        setBackfillOutput(output, finalJob.result || finalJob);
+      } else {
+        setJobOutput(output, finalJob, "Backfill Job");
+      }
+      return;
+    }
+
+    if (action === "loadJobs") {
+      const data = await callApi("/jobs?limit=20");
+      setJobOutput(output, data, "Recent Jobs");
+      return;
+    }
+
+    if (action === "previewPlaylist") {
+      const maxTracks = Number(document.getElementById("playlistMaxTracks")?.value || 30);
+      const diversity = Number(document.getElementById("playlistDiversity")?.value || 0.5);
+      const familiarity = Number(document.getElementById("playlistFamiliarity")?.value || 0.5);
+      const minKnownRatio = Number(document.getElementById("playlistMinKnownRatio")?.value || 0.6);
+      const name = (document.getElementById("playlistName")?.value || "").trim();
+      const contextType = (document.getElementById("playlistContextType")?.value || "").trim();
+
+      const data = await callApi("/playlists/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          max_tracks: maxTracks,
+          diversity,
+          familiarity,
+          min_known_ratio: minKnownRatio,
+          name: name || null,
+          context_type: contextType || null,
+        }),
+      });
+      if (data?.generated_playlist?.id) {
+        setSelectedGeneratedPlaylistId(data.generated_playlist.id);
+      }
+      setGeneratedPlaylistOutput(output, data, "Playlist Preview");
       return;
     }
 
@@ -798,6 +1235,8 @@ async function handleAction(action) {
       const diversity = Number(document.getElementById("playlistDiversity")?.value || 0.5);
       const familiarity = Number(document.getElementById("playlistFamiliarity")?.value || 0.5);
       const minKnownRatio = Number(document.getElementById("playlistMinKnownRatio")?.value || 0.6);
+      const name = (document.getElementById("playlistName")?.value || "").trim();
+      const contextType = (document.getElementById("playlistContextType")?.value || "").trim();
 
       const data = await callApi("/playlists/generate", {
         method: "POST",
@@ -806,8 +1245,60 @@ async function handleAction(action) {
           diversity,
           familiarity,
           min_known_ratio: minKnownRatio,
+          name: name || null,
+          context_type: contextType || null,
         }),
       });
+      if (data?.generated_playlist_id) {
+        setSelectedGeneratedPlaylistId(data.generated_playlist_id);
+      }
+      setPlaylistOutput(output, data);
+      return;
+    }
+
+    if (action === "loadPlaylistHistory") {
+      const data = await callApi("/playlists/generated?limit=20");
+      setGeneratedPlaylistOutput(output, data, "Saved Playlist History");
+      return;
+    }
+
+    if (action === "loadGeneratedPlaylist") {
+      const generatedPlaylistId = getSelectedGeneratedPlaylistId();
+      if (!generatedPlaylistId) {
+        throw new Error("Enter or select a generated playlist ID first.");
+      }
+      const data = await callApi(`/playlists/generated/${encodeURIComponent(generatedPlaylistId)}`);
+      setSelectedGeneratedPlaylistId(data.id);
+      setGeneratedPlaylistOutput(output, data, "Saved Playlist Detail");
+      return;
+    }
+
+    if (action === "regenerateGeneratedPlaylist") {
+      const generatedPlaylistId = getSelectedGeneratedPlaylistId();
+      if (!generatedPlaylistId) {
+        throw new Error("Enter or select a generated playlist ID first.");
+      }
+      const data = await callApi(`/playlists/generated/${encodeURIComponent(generatedPlaylistId)}/regenerate`, {
+        method: "POST",
+      });
+      if (data?.generated_playlist?.id) {
+        setSelectedGeneratedPlaylistId(data.generated_playlist.id);
+      }
+      setGeneratedPlaylistOutput(output, data, "Regenerated Playlist Preview");
+      return;
+    }
+
+    if (action === "createFromGeneratedPlaylist") {
+      const generatedPlaylistId = getSelectedGeneratedPlaylistId();
+      if (!generatedPlaylistId) {
+        throw new Error("Enter or select a generated playlist ID first.");
+      }
+      const data = await callApi(`/playlists/generated/${encodeURIComponent(generatedPlaylistId)}/create`, {
+        method: "POST",
+      });
+      if (data?.generated_playlist?.id) {
+        setSelectedGeneratedPlaylistId(data.generated_playlist.id);
+      }
       setPlaylistOutput(output, data);
       return;
     }
@@ -832,16 +1323,84 @@ async function handleAction(action) {
     if (action === "songs") {
       const genreInput = document.getElementById("genre");
       const statusInput = document.getElementById("enrichmentStatus");
+      const quickFilterInput = document.getElementById("songQuickFilter");
+      const recentDaysInput = document.getElementById("recentlyPlayedDays");
       const genre = genreInput ? genreInput.value.trim() : "";
       const enrichmentStatus = statusInput ? statusInput.value.trim() : "";
+      const quickFilter = quickFilterInput ? quickFilterInput.value.trim() : "";
+      const recentDays = recentDaysInput ? Number(recentDaysInput.value || 30) : 30;
       const limitInput = document.getElementById("songLimit");
       const limit = limitInput ? Number(limitInput.value || 1000) : 1000;
       const query = new URLSearchParams();
       if (genre) query.set("genre", genre);
       if (enrichmentStatus) query.set("enrichment_status", enrichmentStatus);
+      if (quickFilter) query.set("quick_filter", quickFilter);
+      query.set("recently_played_days", String(recentDays));
       query.set("limit", String(limit));
       const data = await callApi(`/songs/?${query.toString()}`);
       setSongExplorerOutput(output, data);
+      return;
+    }
+
+    if (action === "songDetail") {
+      const songId = getSelectedSongId();
+      if (!songId) throw new Error("Enter or select a song ID first.");
+      const data = await callApi(`/songs/${encodeURIComponent(songId)}`);
+      setSongDetailOutput(output, data, "Song Detail");
+      return;
+    }
+
+    if (action === "songRetryEnrichment") {
+      const songId = getSelectedSongId();
+      if (!songId) throw new Error("Enter or select a song ID first.");
+      const data = await callApi(`/songs/${encodeURIComponent(songId)}/retry-enrichment`, { method: "POST" });
+      setSongDetailOutput(output, data, "Enrichment Retry Result");
+      return;
+    }
+
+    if (action === "songHide") {
+      const songId = getSelectedSongId();
+      if (!songId) throw new Error("Enter or select a song ID first.");
+      const data = await callApi(`/songs/${encodeURIComponent(songId)}/hide`, { method: "POST" });
+      setOutput(output, "Song Hidden", data);
+      if (outputMap.songs) {
+        const query = new URLSearchParams();
+        const genre = document.getElementById("genre")?.value.trim() || "";
+        const enrichmentStatus = document.getElementById("enrichmentStatus")?.value.trim() || "";
+        const quickFilter = document.getElementById("songQuickFilter")?.value.trim() || "";
+        const recentDays = Number(document.getElementById("recentlyPlayedDays")?.value || 30);
+        const limit = Number(document.getElementById("songLimit")?.value || 1000);
+        if (genre) query.set("genre", genre);
+        if (enrichmentStatus) query.set("enrichment_status", enrichmentStatus);
+        if (quickFilter) query.set("quick_filter", quickFilter);
+        query.set("recently_played_days", String(recentDays));
+        query.set("limit", String(limit));
+        const refreshed = await callApi(`/songs/?${query.toString()}`);
+        setSongExplorerOutput(outputMap.songs, refreshed);
+      }
+      return;
+    }
+
+    if (action === "songRestore") {
+      const songId = getSelectedSongId();
+      if (!songId) throw new Error("Enter or select a song ID first.");
+      const data = await callApi(`/songs/${encodeURIComponent(songId)}/restore`, { method: "POST" });
+      setOutput(output, "Song Restored", data);
+      if (outputMap.songs) {
+        const query = new URLSearchParams();
+        const genre = document.getElementById("genre")?.value.trim() || "";
+        const enrichmentStatus = document.getElementById("enrichmentStatus")?.value.trim() || "";
+        const quickFilter = document.getElementById("songQuickFilter")?.value.trim() || "";
+        const recentDays = Number(document.getElementById("recentlyPlayedDays")?.value || 30);
+        const limit = Number(document.getElementById("songLimit")?.value || 1000);
+        if (genre) query.set("genre", genre);
+        if (enrichmentStatus) query.set("enrichment_status", enrichmentStatus);
+        if (quickFilter) query.set("quick_filter", quickFilter);
+        query.set("recently_played_days", String(recentDays));
+        query.set("limit", String(limit));
+        const refreshed = await callApi(`/songs/?${query.toString()}`);
+        setSongExplorerOutput(outputMap.songs, refreshed);
+      }
       return;
     }
 
@@ -885,6 +1444,66 @@ async function handleAction(action) {
       return;
     }
 
+    if (action === "retryFailedMetadata" || action === "retryPartialMetadata") {
+      const retryFailed = action === "retryFailedMetadata";
+      const retryPartial = action === "retryPartialMetadata";
+      const params = new URLSearchParams({
+        limit: "500",
+        retry_partial: String(retryPartial),
+        retry_failed: String(retryFailed),
+      });
+      const job = await callApi(`/user/backfill-metadata/job?${params.toString()}`, { method: "POST" });
+      setJobOutput(output, job, retryFailed ? "Retry Failed Metadata Job" : "Retry Partial Metadata Job");
+      const finalJob = await pollJobUntilDone(job.id, output, retryFailed ? "Retry Failed Metadata Job" : "Retry Partial Metadata Job");
+      if (finalJob.status === "succeeded") {
+        setBackfillOutput(output, finalJob.result || finalJob);
+      } else {
+        setJobOutput(output, finalJob, "Metadata Retry Job");
+      }
+      return;
+    }
+
+    if (action === "clearLastfmCache") {
+      const data = await callApi("/insights/cache/clear?provider=lastfm", { method: "POST" });
+      setOutput(output, "Last.fm Cache Cleared", data);
+      return;
+    }
+
+    if (action === "discoveryPreviewJob") {
+      const seedLimit = Number(document.getElementById("discoverySeedLimit")?.value || 8);
+      const candidateLimit = Number(document.getElementById("discoveryCandidateLimit")?.value || 60);
+      const params = new URLSearchParams({
+        seed_limit: String(seedLimit),
+        max_candidates: String(candidateLimit),
+      });
+      const job = await callApi(`/discoveries/preview/job?${params.toString()}`, { method: "POST" });
+      const jobInput = document.getElementById("discoveryJobId");
+      if (jobInput) jobInput.value = job.id;
+      setJobOutput(output, job, "Discovery Preview Job");
+      const finalJob = await pollJobUntilDone(job.id, output, "Discovery Preview Job");
+      if (finalJob.status === "succeeded") {
+        setDiscoveryPreviewOutput(output, finalJob.result || finalJob, "Discovery Preview");
+      } else {
+        setJobOutput(output, finalJob, "Discovery Preview Job");
+      }
+      return;
+    }
+
+    if (action === "acceptDiscoveryCandidates") {
+      const jobId = (document.getElementById("discoveryJobId")?.value || "").trim();
+      if (!jobId) throw new Error("Run a discovery preview first.");
+      const candidateText = (document.getElementById("discoveryCandidateIds")?.value || "").trim();
+      const candidateIds = candidateText
+        ? candidateText.split(",").map((item) => Number(item.trim())).filter((value) => Number.isFinite(value) && value > 0)
+        : [];
+      const data = await callApi("/discoveries/accept", {
+        method: "POST",
+        body: JSON.stringify({ job_id: jobId, candidate_ids: candidateIds }),
+      });
+      setOutput(output, "Discovery Candidates Accepted", data);
+      return;
+    }
+
     if (action === "submitFeedback") {
       const songIdEl = document.getElementById("feedbackSongId");
       const actionEl = document.getElementById("feedbackAction");
@@ -895,11 +1514,7 @@ async function handleAction(action) {
         throw new Error("Enter a valid Song ID.");
       }
 
-      const data = await callApi("/insights/feedback", {
-        method: "POST",
-        body: JSON.stringify({ song_id: songId, action: feedbackAction }),
-      });
-      setOutput(output, "Feedback Saved", data);
+      await submitQuickFeedback(songId, feedbackAction, output);
       return;
     }
 
@@ -991,10 +1606,114 @@ if (saveBaseBtn) {
 }
 
 loadBaseUrl();
-    cleanupLegacyUi();
+setSelectedGeneratedPlaylistId(localStorage.getItem(GENERATED_PLAYLIST_KEY));
+cleanupLegacyUi();
 
 actionButtons.forEach((btn) => {
   btn.addEventListener("click", () => handleAction(btn.dataset.action));
+});
+
+document.addEventListener("click", async (event) => {
+  const target = event.target.closest(".feedback-btn, .generated-select-btn, .song-row-action-btn, .discovery-candidate-btn");
+  if (!target) return;
+
+  if (target.classList.contains("generated-select-btn")) {
+    const generatedPlaylistId = Number(target.dataset.generatedPlaylistId || 0);
+    if (generatedPlaylistId) {
+      setSelectedGeneratedPlaylistId(generatedPlaylistId);
+      const historyOutput = outputMap.loadPlaylistHistory;
+      if (historyOutput) {
+        setOutput(historyOutput, "Selection Updated", {
+          message: `Selected generated playlist ${generatedPlaylistId}`,
+          generated_playlist_id: generatedPlaylistId,
+        });
+      }
+    }
+    return;
+  }
+
+  if (target.classList.contains("song-row-action-btn")) {
+    const songId = Number(target.dataset.songId || 0);
+    const rowAction = target.dataset.songRowAction;
+    if (!songId || !rowAction) return;
+
+    setSelectedSongId(songId);
+
+    if (rowAction === "select") {
+      const detailOutput = outputMap.songDetail || outputMap.songs;
+      if (detailOutput) {
+        setOutput(detailOutput, "Song Selected", {
+          message: `Selected song ${songId}. Use the action panel or inline buttons to continue.`,
+          song_id: songId,
+        });
+      }
+      return;
+    }
+
+    const actionMap = {
+      detail: "songDetail",
+      retry: "songRetryEnrichment",
+      hide: "songHide",
+      restore: "songRestore",
+    };
+    const mappedAction = actionMap[rowAction];
+    if (mappedAction) {
+      await handleAction(mappedAction);
+    }
+    return;
+  }
+
+  if (target.classList.contains("discovery-candidate-btn")) {
+    const candidateId = Number(target.dataset.candidateId || 0);
+    const discoveryAction = target.dataset.discoveryAction;
+    if (!candidateId || !discoveryAction) return;
+
+    const candidateInput = document.getElementById("discoveryCandidateIds");
+    if (discoveryAction === "select") {
+      const existing = (candidateInput?.value || "")
+        .split(",")
+        .map((item) => Number(item.trim()))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (!existing.includes(candidateId)) {
+        existing.push(candidateId);
+      }
+      if (candidateInput) {
+        candidateInput.value = existing.join(", ");
+      }
+      return;
+    }
+
+    if (discoveryAction === "accept") {
+      const jobId = (document.getElementById("discoveryJobId")?.value || "").trim();
+      if (!jobId) {
+        const output = outputMap.discoveryPreviewJob || featureOutput;
+        setOutput(output, "Discovery Error", { message: "Run a discovery preview first." });
+        return;
+      }
+      if (candidateInput) {
+        candidateInput.value = String(candidateId);
+      }
+      await handleAction("acceptDiscoveryCandidates");
+      return;
+    }
+  }
+
+  const songId = Number(target.dataset.songId || 0);
+  const feedbackAction = target.dataset.feedbackAction;
+  if (!songId || !feedbackAction) return;
+
+  const historyOutput = outputMap.loadGeneratedPlaylist || outputMap.generate || featureOutput;
+  const originalText = target.textContent;
+  target.disabled = true;
+  target.textContent = "Saving...";
+  try {
+    await submitQuickFeedback(songId, feedbackAction, historyOutput);
+  } catch (error) {
+    setOutput(historyOutput, "Feedback Error", { message: String(error.message || error) });
+  } finally {
+    target.disabled = false;
+    target.textContent = originalText;
+  }
 });
 
 

@@ -1,8 +1,8 @@
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
-from datetime import datetime
 
 from ..database import Base
+from ..time_utils import utcnow_naive
 
 
 class ListeningHistory(Base):
@@ -18,6 +18,6 @@ class ListeningHistory(Base):
 
     song_id = Column(Integer, ForeignKey("songs.id"))
 
-    played_at = Column(DateTime, default=datetime.utcnow)
+    played_at = Column(DateTime, default=utcnow_naive)
 
     song = relationship("Song", back_populates="listening_history")

@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import String, cast, func
@@ -9,6 +9,7 @@ from ..models.artist import Artist
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..services.spotify_service import load_request_user_session
+from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -20,10 +21,8 @@ def _serialize_series(rows, label_key, value_key):
 def _parse_date(value):
     if not value:
         return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
+    parsed = parse_utc_datetime(value)
+    return to_naive_utc(parsed) if parsed else None
 
 
 @router.get("/stats")
@@ -41,7 +40,7 @@ def get_stats(
         raise HTTPException(status_code=401, detail="User not logged in")
 
     safe_days = max(1, min(days, 365))
-    end_dt = _parse_date(end_date) or datetime.utcnow()
+    end_dt = _parse_date(end_date) or to_naive_utc(utcnow())
     start_dt = _parse_date(start_date) or (end_dt - timedelta(days=safe_days))
 
     artist_join = cast(Song.artist_id, String) == cast(Artist.id, String)

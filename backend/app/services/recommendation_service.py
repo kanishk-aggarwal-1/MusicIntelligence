@@ -1,5 +1,5 @@
 from collections import Counter
-from datetime import datetime
+from datetime import timedelta
 from math import log, sqrt
 import random
 
@@ -13,6 +13,7 @@ from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.song_tag import SongTag
 from ..models.tag import Tag
+from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
 
 from .discovery_service import discover_songs_from_artist
 from .enrichment_service import enrich_song
@@ -20,16 +21,22 @@ from .spotify_service import load_user_session, resolve_track_id
 from . import spotify_service
 
 
+ALGORITHM_VERSION = "heuristic-v2"
+CONTEXT_HINTS = {
+    "focus": {"ambient", "instrumental", "classical", "lofi", "study", "piano", "minimal"},
+    "workout": {"hip hop", "edm", "dance", "rock", "energetic", "gym", "trap", "drum and bass"},
+    "late-night": {"chill", "soul", "jazz", "ambient", "electronic", "night", "downtempo", "rnb"},
+    "chill": {"chill", "acoustic", "indie", "relax", "ambient", "dream pop", "lofi"},
+}
+
+
 def _parse_played_at(value):
     if not value:
         return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
+    parsed = parse_utc_datetime(value)
+    if not parsed:
+        return None
+    return to_naive_utc(parsed)
 
 
 def _ensure_song_tags(db, song, tag_names):
@@ -357,7 +364,77 @@ def cosine_similarity(vec1, vec2):
     return score
 
 
-def _feedback_weight_map(db, user_id):
+def _tag_names(song):
+    return [st.tag.name for st in song.song_tags if st.tag and st.tag.name]
+
+
+def _norm_log(value, max_value):
+    if max_value <= 0 or value <= 0:
+        return 0.0
+    return min(1.0, log(value + 1) / log(max_value + 1))
+
+
+def _listening_stats(db, user_id):
+    song_rows = (
+        db.query(
+            ListeningHistory.song_id,
+            func.count(ListeningHistory.id).label("plays"),
+            func.max(ListeningHistory.played_at).label("last_played"),
+        )
+        .filter(ListeningHistory.user_id == user_id)
+        .group_by(ListeningHistory.song_id)
+        .all()
+    )
+    artist_rows = (
+        db.query(
+            Song.artist_id,
+            func.count(ListeningHistory.id).label("plays"),
+        )
+        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
+        .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
+        .group_by(Song.artist_id)
+        .all()
+    )
+
+    now = to_naive_utc(utcnow())
+    recent_cutoff = now - timedelta(days=14)
+    recent_song_rows = (
+        db.query(ListeningHistory.song_id, func.count(ListeningHistory.id))
+        .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= recent_cutoff)
+        .group_by(ListeningHistory.song_id)
+        .all()
+    )
+
+    song_play_counts = {song_id: int(plays or 0) for song_id, plays, _ in song_rows}
+    last_played_map = {song_id: last_played for song_id, _, last_played in song_rows}
+    artist_play_counts = {artist_id: int(plays or 0) for artist_id, plays in artist_rows if artist_id is not None}
+    recent_song_counts = {song_id: int(plays or 0) for song_id, plays in recent_song_rows}
+
+    return {
+        "song_play_counts": song_play_counts,
+        "artist_play_counts": artist_play_counts,
+        "recent_song_counts": recent_song_counts,
+        "last_played_map": last_played_map,
+        "max_song_plays": max(song_play_counts.values(), default=0),
+        "max_artist_plays": max(artist_play_counts.values(), default=0),
+        "now": now,
+    }
+
+
+def _context_match(song, context_type: str | None):
+    if not context_type:
+        return 0.0, "No explicit context selected."
+    hints = CONTEXT_HINTS.get(context_type.lower().strip()) or set()
+    haystack = {(song.genre or "").lower()}
+    haystack.update(name.lower() for name in _tag_names(song))
+    matched = sorted(hint for hint in hints if hint and any(hint in value or value in hint for value in haystack if value))
+    score = min(1.0, len(matched) / max(1, min(4, len(hints)))) if hints else 0.0
+    if matched:
+        return score, f"Context tags matched: {', '.join(matched[:3])}"
+    return 0.0, "No strong context-tag match."
+
+
+def _feedback_signal_map(db, user_id):
     rows = (
         db.query(RecommendationFeedback.song_id, RecommendationFeedback.action, func.count(RecommendationFeedback.id))
         .filter(RecommendationFeedback.user_id == user_id)
@@ -365,21 +442,97 @@ def _feedback_weight_map(db, user_id):
         .all()
     )
 
-    weight_map = {}
+    signal_map = {}
 
     for song_id, action, count in rows:
-        weight_map.setdefault(song_id, 0.0)
-        if action == "like":
-            weight_map[song_id] += 0.25 * count
-        elif action == "skip":
-            weight_map[song_id] -= 0.10 * count
-        elif action == "dislike":
-            weight_map[song_id] -= 0.35 * count
+        song_signals = signal_map.setdefault(song_id, Counter())
+        song_signals[action] += int(count or 0)
 
-    return weight_map
+    return signal_map
 
 
-def recommend_songs(db, user_id, return_details=False, min_known_ratio: float = 0.6, include_discovery_summary: bool = False, allow_discovery: bool = True, discovery_seed_limit: int | None = None, discovery_store_limit: int | None = None):
+def _feedback_adjustment(feedback_counts, *, context_type, familiarity_score, rarity_or_discovery_score, quality_confidence_score, context_match_score, recently_overplayed_penalty, similarity, known_spotify_score):
+    if not feedback_counts:
+        return 0.0, None
+
+    adjustment = 0.0
+    notes = []
+
+    like_count = int(feedback_counts.get("like", 0))
+    if like_count:
+        boost = min(0.35, 0.12 * like_count + quality_confidence_score * 0.05)
+        adjustment += boost
+        notes.append("reinforced by likes")
+
+    more_like_this_count = int(feedback_counts.get("more_like_this", 0))
+    if more_like_this_count:
+        boost = min(
+            0.45,
+            0.14 * more_like_this_count
+            + similarity * 0.07
+            + context_match_score * 0.05
+            + known_spotify_score * 0.03,
+        )
+        adjustment += boost
+        notes.append("aligned with your 'more like this' feedback")
+
+    skip_count = int(feedback_counts.get("skip", 0))
+    if skip_count:
+        penalty = min(0.18, 0.08 * skip_count)
+        adjustment -= penalty
+        notes.append("softened by skips")
+
+    dislike_count = int(feedback_counts.get("dislike", 0))
+    if dislike_count:
+        penalty = min(0.55, 0.22 * dislike_count)
+        adjustment -= penalty
+        notes.append("penalized by dislikes")
+
+    too_familiar_count = int(feedback_counts.get("too_familiar", 0))
+    if too_familiar_count:
+        penalty = min(
+            0.45,
+            0.16 * too_familiar_count * (0.7 + familiarity_score + recently_overplayed_penalty),
+        )
+        adjustment -= penalty
+        notes.append("dialed back because similar picks felt too familiar")
+
+    too_obscure_count = int(feedback_counts.get("too_obscure", 0))
+    if too_obscure_count:
+        penalty = min(
+            0.45,
+            0.16 * too_obscure_count * (0.7 + rarity_or_discovery_score + (1 - known_spotify_score) * 0.5),
+        )
+        adjustment -= penalty
+        notes.append("dialed back because similar picks felt too obscure")
+
+    wrong_vibe_count = int(feedback_counts.get("wrong_vibe", 0))
+    if wrong_vibe_count:
+        penalty = min(
+            0.5,
+            0.18 * wrong_vibe_count * (1.2 if context_type else 0.9),
+        )
+        adjustment -= penalty
+        notes.append("penalized because the vibe feedback was negative")
+
+    adjustment = max(-1.0, min(1.0, adjustment))
+    if not notes:
+        return adjustment, None
+    return adjustment, "; ".join(notes)
+
+
+def recommend_songs(
+    db,
+    user_id,
+    return_details=False,
+    min_known_ratio: float = 0.6,
+    include_discovery_summary: bool = False,
+    allow_discovery: bool = True,
+    discovery_seed_limit: int | None = None,
+    discovery_store_limit: int | None = None,
+    context_type: str | None = None,
+    limit: int = 30,
+):
 
     print(f"recommend_songs.start user_id={user_id} include_discovery_summary={include_discovery_summary}")
     discovery_summary = {
@@ -404,49 +557,122 @@ def recommend_songs(db, user_id, return_details=False, min_known_ratio: float = 
 
     profile = build_user_profile(db, user_id)
     user_vector = build_user_vector(profile)
-    feedback_map = _feedback_weight_map(db, user_id)
+    feedback_map = _feedback_signal_map(db, user_id)
+    listening_stats = _listening_stats(db, user_id)
 
-    songs = db.query(Song).filter(Song.is_deleted.is_(False)).all()
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+    songs = (
+        db.query(Song)
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False))
+        .all()
+    )
 
     scored = []
 
     for song in songs:
-
         if not song.song_tags:
             continue
 
         song_vector = build_song_vector(song)
-
         similarity = cosine_similarity(user_vector, song_vector)
         popularity = song.popularity_score or 0
-        feedback_boost = feedback_map.get(song.id, 0.0)
+        feedback_counts = feedback_map.get(song.id, Counter())
+        song_play_count = listening_stats["song_play_counts"].get(song.id, 0)
+        artist_play_count = listening_stats["artist_play_counts"].get(song.artist_id, 0)
+        recent_song_count = listening_stats["recent_song_counts"].get(song.id, 0)
+        last_played = listening_stats["last_played_map"].get(song.id)
 
-        similarity_component = similarity * 0.65
-        popularity_component = popularity * 0.25
-        feedback_component = feedback_boost * 0.10
+        context_match_score, context_reason = _context_match(song, context_type)
+        familiarity_score = _norm_log(song_play_count, listening_stats["max_song_plays"])
+        diversity_score = 1 - _norm_log(artist_play_count, listening_stats["max_artist_plays"])
 
-        score = similarity_component + popularity_component + feedback_component
+        if last_played:
+            days_since_last = max(0, (listening_stats["now"] - last_played).days)
+            freshness_score = min(1.0, days_since_last / 30)
+        else:
+            days_since_last = None
+            freshness_score = 1.0
+
+        rarity_or_discovery_score = max(0.0, min(1.0, (1 - familiarity_score) * 0.7 + (1 if song.discovery_source and song.discovery_source != "history_sync" else 0) * 0.3))
+        quality_confidence_score = min(
+            1.0,
+            (
+                (1.0 if song.spotify_id else 0.0)
+                + (0.6 if song.enrichment_status == "complete" else 0.3 if song.enrichment_status == "partial" else 0.0)
+                + min(1.0, popularity / 5.0)
+            ) / 2.6,
+        )
+        repetition_penalty = min(1.0, recent_song_count / 5)
+        recently_overplayed_penalty = min(1.0, familiarity_score * 0.7 + _norm_log(recent_song_count, 10) * 0.3)
+        feedback_boost, feedback_reason = _feedback_adjustment(
+            feedback_counts,
+            context_type=context_type,
+            familiarity_score=familiarity_score,
+            rarity_or_discovery_score=rarity_or_discovery_score,
+            quality_confidence_score=quality_confidence_score,
+            context_match_score=context_match_score,
+            recently_overplayed_penalty=recently_overplayed_penalty,
+            similarity=similarity,
+            known_spotify_score=1.0 if song.spotify_id else 0.0,
+        )
+
+        components = {
+            "context_match_score": round(context_match_score, 4),
+            "familiarity_score": round(familiarity_score, 4),
+            "diversity_score": round(diversity_score, 4),
+            "freshness_score": round(freshness_score, 4),
+            "rarity_or_discovery_score": round(rarity_or_discovery_score, 4),
+            "quality_confidence_score": round(quality_confidence_score, 4),
+            "feedback_score": round(max(-1.0, min(1.0, feedback_boost)), 4),
+            "feedback_events": int(sum(feedback_counts.values())),
+            "repetition_penalty": round(repetition_penalty, 4),
+            "recently_overplayed_penalty": round(recently_overplayed_penalty, 4),
+            "tag_similarity_score": round(similarity, 4),
+            "known_spotify_score": 1.0 if song.spotify_id else 0.0,
+        }
+
+        score = (
+            similarity * 0.26
+            + context_match_score * 0.18
+            + familiarity_score * 0.12
+            + diversity_score * 0.10
+            + freshness_score * 0.09
+            + rarity_or_discovery_score * 0.07
+            + quality_confidence_score * 0.08
+            + (1.0 if song.spotify_id else 0.0) * 0.05
+            + feedback_boost * 0.10
+            - repetition_penalty * 0.10
+            - recently_overplayed_penalty * 0.05
+        )
 
         reasons = [
-            f"Tag similarity: {similarity:.2f}",
-            f"Popularity signal: {popularity:.2f}",
-            f"Data source: {song.discovery_source or 'unknown'}",
+            f"Tag similarity {similarity:.2f}",
+            context_reason,
+            f"Familiarity {familiarity_score:.2f} / diversity {diversity_score:.2f}",
+            f"Freshness {freshness_score:.2f}" + (f" ({days_since_last} days since last play)" if days_since_last is not None else ""),
+            f"Quality confidence {quality_confidence_score:.2f}",
         ]
 
-        if feedback_boost > 0:
+        if song.spotify_id:
+            reasons.append("Already Spotify-resolvable")
+        if feedback_reason:
+            reasons.append(feedback_reason.capitalize())
+        elif feedback_boost > 0:
             reasons.append("Boosted by your positive feedback")
         elif feedback_boost < 0:
-            reasons.append("Lowered by your skip/dislike feedback")
+            reasons.append("Lowered by your previous feedback")
 
-        scored.append((score, song, reasons, {
-            "similarity_component": round(similarity_component, 4),
-            "popularity_component": round(popularity_component, 4),
-            "feedback_component": round(feedback_component, 4),
-        }))
+        scored.append((score, song, reasons, components))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    top = scored[:30]
+    top = scored[: max(1, min(limit, 100))]
 
     if return_details:
         items = [
@@ -455,21 +681,23 @@ def recommend_songs(db, user_id, return_details=False, min_known_ratio: float = 
                 "score": score,
                 "reasons": reasons,
                 "components": components,
+                "algorithm_version": ALGORITHM_VERSION,
+                "tag_names": _tag_names(s),
             }
             for score, s, reasons, components in top
         ]
         if include_discovery_summary:
-            return {"items": items, "discovery_summary": discovery_summary}
+            return {"items": items, "discovery_summary": discovery_summary, "algorithm_version": ALGORITHM_VERSION}
         return items
 
     songs_only = [s for _, s, _, _ in top]
     if include_discovery_summary:
-        return {"items": songs_only, "discovery_summary": discovery_summary}
+        return {"items": songs_only, "discovery_summary": discovery_summary, "algorithm_version": ALGORITHM_VERSION}
     return songs_only
 
 
 def build_discovery_feed(db, user_id, limit=20):
-    details = recommend_songs(db, user_id, return_details=True)
+    details = recommend_songs(db, user_id, return_details=True, allow_discovery=False, limit=limit)
 
     feed = []
     for item in details[:limit]:
@@ -513,7 +741,7 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
         selected = weighted_artists
     else:
         limit = max(1, min(int(seed_limit), total_artists)) if total_artists else 0
-        bucket_seed = datetime.utcnow().strftime("%Y%m%d%H")
+        bucket_seed = utcnow().strftime("%Y%m%d%H")
         rng = random.Random(bucket_seed)
         pool = weighted_artists[:]
         selected = []

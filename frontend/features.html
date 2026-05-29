@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MusicIntelligence - Features Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+    <link rel="stylesheet" href="./styles.css?v=20260513-1" />
   </head>
   <body>
     <header class="hero">
@@ -44,6 +44,29 @@
         <h2>Data Quality</h2>
         <div class="actions">
           <button data-action="dataQuality" type="button">Check Coverage</button>
+          <button data-action="retryFailedMetadata" type="button">Retry Failed</button>
+          <button data-action="retryPartialMetadata" type="button">Retry Partial</button>
+          <button data-action="clearLastfmCache" type="button">Clear Last.fm Cache</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Discovery Preview</h2>
+        <div class="row">
+          <label for="discoverySeedLimit">Seed Artists</label>
+          <input id="discoverySeedLimit" type="number" min="1" max="30" value="8" />
+          <label for="discoveryCandidateLimit">Candidates</label>
+          <input id="discoveryCandidateLimit" type="number" min="1" max="200" value="60" />
+          <button data-action="discoveryPreviewJob" type="button">Run Discovery Preview</button>
+        </div>
+        <div class="row">
+          <label for="discoveryJobId">Discovery Job ID</label>
+          <input id="discoveryJobId" type="text" placeholder="auto-filled after preview" />
+        </div>
+        <div class="row">
+          <label for="discoveryCandidateIds">Candidate IDs</label>
+          <input id="discoveryCandidateIds" type="text" placeholder="e.g. 1,2,5 or leave blank for all" />
+          <button data-action="acceptDiscoveryCandidates" type="button">Accept Selected</button>
         </div>
       </section>
 
@@ -57,6 +80,10 @@
             <option value="like">Like</option>
             <option value="skip">Skip</option>
             <option value="dislike">Dislike</option>
+            <option value="too_familiar">Too Familiar</option>
+            <option value="too_obscure">Too Obscure</option>
+            <option value="wrong_vibe">Wrong Vibe</option>
+            <option value="more_like_this">More Like This</option>
           </select>
           <button data-action="submitFeedback" type="button">Submit</button>
         </div>
@@ -134,9 +161,13 @@
       </section>
     </main>
 
-    <script src="./app.js?v=20260310-3"></script>
+    <script src="./config.js?v=20260529-1"></script>
+    <script src="./app.js?v=20260513-1"></script>
   </body>
 </html>
+
+
+
 
 
 

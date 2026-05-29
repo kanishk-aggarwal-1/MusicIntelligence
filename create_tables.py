@@ -2,7 +2,11 @@
 
 # Import each model module so SQLAlchemy registers all tables/relationships.
 from backend.app.models.artist import Artist
+from backend.app.models.api_cache import ApiCache
 from backend.app.models.dedup_merge_log import DedupMergeLog
+from backend.app.models.generated_playlist import GeneratedPlaylist
+from backend.app.models.generated_playlist_track import GeneratedPlaylistTrack
+from backend.app.models.job import Job
 from backend.app.models.listening_goal import ListeningGoal
 from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.recommendation_feedback import RecommendationFeedback

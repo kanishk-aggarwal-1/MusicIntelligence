@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MusicIntelligence - Playlists</title>
-    <link rel="stylesheet" href="./styles.css?v=20260310-3" />
+    <link rel="stylesheet" href="./styles.css?v=20260513-1" />
   </head>
   <body>
     <header class="hero">
@@ -23,7 +23,21 @@
 
     <main class="page-grid">
       <section class="card">
-        <h2>Generate</h2>
+        <h2>Preview and Generate</h2>
+        <div class="row">
+          <label for="playlistName">Playlist Name</label>
+          <input id="playlistName" type="text" placeholder="MusicIntelligence Mix" />
+        </div>
+        <div class="row">
+          <label for="playlistContextType">Context</label>
+          <select id="playlistContextType">
+            <option value="">General</option>
+            <option value="focus">Focus</option>
+            <option value="workout">Workout</option>
+            <option value="late-night">Late-night</option>
+            <option value="chill">Chill</option>
+          </select>
+        </div>
         <div class="row">
           <label for="playlistMaxTracks">Max Tracks</label>
           <input id="playlistMaxTracks" type="number" min="5" max="100" value="30" />
@@ -41,15 +55,35 @@
           <input id="playlistMinKnownRatio" type="number" step="0.05" min="0" max="1" value="0.6" />
         </div>
         <div class="actions">
+          <button data-action="previewPlaylist" type="button">Preview Playlist</button>
           <button data-action="generate" type="button">Generate Playlist</button>
         </div>
         <div id="playlistOutput" class="output"></div>
       </section>
+
+      <section class="card">
+        <h2>Saved Playlist History</h2>
+        <div class="actions">
+          <button data-action="loadPlaylistHistory" type="button">Load History</button>
+        </div>
+        <div class="row">
+          <label for="generatedPlaylistId">Generated Playlist ID</label>
+          <input id="generatedPlaylistId" type="number" min="1" placeholder="Preview or history item ID" />
+        </div>
+        <div class="actions">
+          <button data-action="loadGeneratedPlaylist" type="button">Load Selected</button>
+          <button data-action="regenerateGeneratedPlaylist" type="button">Regenerate Preview</button>
+          <button data-action="createFromGeneratedPlaylist" type="button">Create on Spotify</button>
+        </div>
+        <div id="playlistHistoryOutput" class="output"></div>
+      </section>
     </main>
 
-    <script src="./app.js?v=20260310-3"></script>
+    <script src="./config.js?v=20260529-1"></script>
+    <script src="./app.js?v=20260513-1"></script>
   </body>
 </html>
+
 
 
 

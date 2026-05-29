@@ -1,7 +1,7 @@
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
-from datetime import datetime
 
 from ..database import Base
+from ..time_utils import utcnow_naive
 
 
 class RecommendationFeedback(Base):
@@ -12,4 +12,4 @@ class RecommendationFeedback(Base):
     user_id = Column(String, nullable=False, index=True)
     song_id = Column(Integer, ForeignKey("songs.id"), nullable=False, index=True)
     action = Column(String, nullable=False, index=True)  # like, dislike, skip
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=utcnow_naive, index=True)

@@ -101,6 +101,10 @@ Run:
 python -m pytest -q
 ```
 
+## Deployment
+
+See `docs/DEPLOYMENT.md` for the Render backend and Vercel frontend deployment path.
+
 ## Notes
 
 - Spotify recent history only returns the most recent 50 plays per request.
