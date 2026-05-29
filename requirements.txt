@@ -14,3 +14,4 @@ alembic
 cryptography
 pytest
 reportlab
+httpx2
