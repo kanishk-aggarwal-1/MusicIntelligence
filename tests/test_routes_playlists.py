@@ -15,7 +15,12 @@ from backend.app.services.generated_playlist_service import (
     create_playlist_preview_record,
     serialize_generated_playlist,
 )
-from backend.app.routes.playlist_routes import _apply_quality_controls, _cap_artist_repetition, _dedupe_keep_order
+from backend.app.routes.playlist_routes import (
+    _apply_quality_controls,
+    _cap_artist_repetition,
+    _dedupe_keep_order,
+    _deprioritize_recent_playlist_repeats,
+)
 
 
 def _session(user_id: str):
@@ -184,6 +189,10 @@ def test_playlist_preview_creates_record(client_factory, db_session):
         headers={"X-User-Id": "u1"},
     )
     assert resp.status_code == 200
+    data = resp.json()
+    assert data["quality_controls"]["artist_cap"] == 2
+    assert data["quality_controls"]["recent_repeat_guard_active"] is False
+    assert data["quality_controls"]["notes"]
     assert db_session.query(GeneratedPlaylist).count() == before + 1
 
 
@@ -248,6 +257,36 @@ def test_cap_artist_repetition_prefers_alternatives_when_available():
     artists = [item["song"].artist.name for item in result[:3]]
 
     assert artists == ["A", "B", "C"]
+
+
+def test_deprioritize_recent_playlist_repeats_when_fresh_tracks_are_available():
+    artist = Artist(name="Repeat Artist")
+    repeated = Song(id=1, title="Repeated", artist=artist, spotify_id="r1", is_deleted=False)
+    fresh_1 = Song(id=2, title="Fresh 1", artist=artist, spotify_id="f1", is_deleted=False)
+    fresh_2 = Song(id=3, title="Fresh 2", artist=artist, spotify_id="f2", is_deleted=False)
+    details = [
+        {"song": repeated, "score": 0.99},
+        {"song": fresh_1, "score": 0.8},
+        {"song": fresh_2, "score": 0.7},
+    ]
+
+    result = _deprioritize_recent_playlist_repeats(details, {1}, max_tracks=2)
+
+    assert [item["song"].id for item in result[:2]] == [2, 3]
+
+
+def test_deprioritize_recent_playlist_repeats_keeps_order_when_needed():
+    artist = Artist(name="Repeat Artist")
+    repeated = Song(id=1, title="Repeated", artist=artist, spotify_id="r1", is_deleted=False)
+    fresh = Song(id=2, title="Fresh", artist=artist, spotify_id="f1", is_deleted=False)
+    details = [
+        {"song": repeated, "score": 0.99},
+        {"song": fresh, "score": 0.8},
+    ]
+
+    result = _deprioritize_recent_playlist_repeats(details, {1}, max_tracks=2)
+
+    assert result == details
 
 
 # ── serialize_generated_playlist ────────────────────────────────────────────

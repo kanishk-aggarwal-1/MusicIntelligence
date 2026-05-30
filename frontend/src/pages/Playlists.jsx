@@ -20,6 +20,34 @@ const QUICK_FEEDBACK = [
   { action: 'never_show', icon: Ban, tip: 'Never show' },
 ]
 
+function QualityNotes({ preview }) {
+  const controls = preview?.quality_controls
+  const notes = controls?.notes || []
+  const warnings = preview?.warnings || []
+  if (!notes.length && !warnings.length) return null
+
+  return (
+    <div className="px-5 py-3 border-b border-zinc-800 bg-zinc-950/40 space-y-2">
+      {notes.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {notes.map(note => (
+            <span key={note} className="px-2.5 py-1 rounded-md bg-zinc-800 text-zinc-300 text-xs">
+              {note}
+            </span>
+          ))}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="space-y-1">
+          {warnings.map(warning => (
+            <p key={warning} className="text-xs text-yellow-300">{warning}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TrackRow({ track, index }) {
   const { play, isPlaying } = usePlayer()
   const song = track.song
@@ -304,6 +332,8 @@ export default function Playlists() {
                   )}
                 </div>
               </div>
+
+              <QualityNotes preview={preview} />
 
               <div className="p-2 space-y-0.5">
                 {tracks.map((track, i) => (
