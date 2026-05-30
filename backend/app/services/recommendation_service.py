@@ -20,11 +20,13 @@ from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
 
 from .discovery_service import discover_songs_from_artist
 from .enrichment_service import enrich_song
+from .ml_recommendation_service import ALGORITHM_VERSION as ML_ALGORITHM_VERSION
+from .ml_recommendation_service import knn_recommend
 from .spotify_service import load_user_session, resolve_track_id
 from . import spotify_service
 
 
-ALGORITHM_VERSION = "heuristic-v2"
+ALGORITHM_VERSION = "tfidf-knn-v1"
 CONTEXT_HINTS = {
     "focus": {"ambient", "instrumental", "classical", "lofi", "study", "piano", "minimal"},
     "workout": {"hip hop", "edm", "dance", "rock", "energetic", "gym", "trap", "drum and bass"},
@@ -582,154 +584,78 @@ def recommend_songs(
         if include_discovery_summary and discovery_summary is not None:
             discovery_summary.update(store_summary)
 
-    profile = build_user_profile(db, user_id)
-    user_vector = build_user_vector(profile)
     feedback_map = _feedback_signal_map(db, user_id)
-    listening_stats = _listening_stats(db, user_id)
-
-    user_song_ids = (
-        db.query(ListeningHistory.song_id)
-        .filter(ListeningHistory.user_id == user_id)
-        .distinct()
-        .subquery()
-    )
-    songs = (
-        db.query(Song)
-        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
-        .filter(Song.is_deleted.is_(False))
-        .all()
-    )
-
-    # Hard-exclude songs the user never wants to see again, or has disliked repeatedly.
     excluded_song_ids = {
         song_id
         for song_id, counts in feedback_map.items()
         if counts.get("never_show", 0) >= 1 or counts.get("dislike", 0) >= 2
     }
 
-    scored = []
+    ml_results = knn_recommend(
+        db,
+        user_id,
+        limit=limit,
+        context_type=context_type,
+        excluded_song_ids=excluded_song_ids,
+    )
 
-    for song in songs:
-        if song.id in excluded_song_ids:
-            continue
-        if not song.song_tags:
-            continue
+    if not return_details:
+        songs_only = [r["song"] for r in ml_results]
+        if include_discovery_summary:
+            return {"items": songs_only, "discovery_summary": discovery_summary, "algorithm_version": ML_ALGORITHM_VERSION}
+        return songs_only
 
-        song_vector = build_song_vector(song)
-        similarity = cosine_similarity(user_vector, song_vector)
-        popularity = song.popularity_score or 0
+    items = []
+    for r in ml_results:
+        song = r["song"]
+        score = r["score"]
+        familiarity_score = r["familiarity_score"]
+        play_count = r["play_count"]
+
         feedback_counts = feedback_map.get(song.id, Counter())
-        song_play_count = listening_stats["song_play_counts"].get(song.id, 0)
-        artist_play_count = listening_stats["artist_play_counts"].get(song.artist_id, 0)
-        recent_song_count = listening_stats["recent_song_counts"].get(song.id, 0)
-        last_played = listening_stats["last_played_map"].get(song.id)
-
-        context_match_score, context_reason = _context_match(song, context_type)
-        familiarity_score = _norm_log(song_play_count, listening_stats["max_song_plays"])
-        diversity_score = 1 - _norm_log(artist_play_count, listening_stats["max_artist_plays"])
-
-        if last_played:
-            days_since_last = max(0, (listening_stats["now"] - last_played).days)
-            freshness_score = min(1.0, days_since_last / 30)
-        else:
-            days_since_last = None
-            freshness_score = 1.0
-
-        rarity_or_discovery_score = max(0.0, min(1.0, (1 - familiarity_score) * 0.7 + (1 if song.discovery_source and song.discovery_source != "history_sync" else 0) * 0.3))
-        quality_confidence_score = min(
-            1.0,
-            (
-                (1.0 if song.spotify_id else 0.0)
-                + (0.6 if song.enrichment_status == "complete" else 0.3 if song.enrichment_status == "partial" else 0.0)
-                + min(1.0, popularity / 5.0)
-            ) / 2.6,
-        )
-        repetition_penalty = min(1.0, recent_song_count / 5)
-        recently_overplayed_penalty = min(1.0, familiarity_score * 0.7 + _norm_log(recent_song_count, 10) * 0.3)
         feedback_boost, feedback_reason = _feedback_adjustment(
             feedback_counts,
             context_type=context_type,
             familiarity_score=familiarity_score,
-            rarity_or_discovery_score=rarity_or_discovery_score,
-            quality_confidence_score=quality_confidence_score,
-            context_match_score=context_match_score,
-            recently_overplayed_penalty=recently_overplayed_penalty,
-            similarity=similarity,
+            rarity_or_discovery_score=0.0,
+            quality_confidence_score=1.0 if song.spotify_id else 0.5,
+            context_match_score=0.0,
+            recently_overplayed_penalty=0.0,
+            similarity=r["tfidf_similarity"],
             known_spotify_score=1.0 if song.spotify_id else 0.0,
         )
+        final_score = max(0.0, min(1.0, score + feedback_boost * 0.20))
+
+        reasons = [f"TF-IDF similarity {r['tfidf_similarity']:.2f}"]
+        if r["co_occurrence_boost"] > 0:
+            reasons.append(f"Often heard in the same session (+{r['co_occurrence_boost']:.2f})")
+        reasons.append(f"Played {play_count} time{'s' if play_count != 1 else ''}")
+        if feedback_reason:
+            reasons.append(feedback_reason.capitalize())
 
         components = {
-            "context_match_score": round(context_match_score, 4),
-            "familiarity_score": round(familiarity_score, 4),
-            "diversity_score": round(diversity_score, 4),
-            "freshness_score": round(freshness_score, 4),
-            "rarity_or_discovery_score": round(rarity_or_discovery_score, 4),
-            "quality_confidence_score": round(quality_confidence_score, 4),
-            "feedback_score": round(max(-1.0, min(1.0, feedback_boost)), 4),
+            "tfidf_similarity": r["tfidf_similarity"],
+            "co_occurrence_boost": r["co_occurrence_boost"],
+            "familiarity_score": familiarity_score,
+            "feedback_score": round(feedback_boost, 4),
             "feedback_events": int(sum(feedback_counts.values())),
-            "repetition_penalty": round(repetition_penalty, 4),
-            "recently_overplayed_penalty": round(recently_overplayed_penalty, 4),
-            "tag_similarity_score": round(similarity, 4),
             "known_spotify_score": 1.0 if song.spotify_id else 0.0,
         }
 
-        score = (
-            similarity * 0.26
-            + context_match_score * 0.18
-            + familiarity_score * 0.12
-            + diversity_score * 0.10
-            + freshness_score * 0.09
-            + rarity_or_discovery_score * 0.07
-            + quality_confidence_score * 0.08
-            + (1.0 if song.spotify_id else 0.0) * 0.05
-            + feedback_boost * 0.20
-            - repetition_penalty * 0.10
-            - recently_overplayed_penalty * 0.05
-        )
+        items.append({
+            "song": song,
+            "score": final_score,
+            "reasons": reasons,
+            "components": components,
+            "algorithm_version": ML_ALGORITHM_VERSION,
+            "tag_names": r["tags"],
+        })
 
-        reasons = [
-            f"Tag similarity {similarity:.2f}",
-            context_reason,
-            f"Familiarity {familiarity_score:.2f} / diversity {diversity_score:.2f}",
-            f"Freshness {freshness_score:.2f}" + (f" ({days_since_last} days since last play)" if days_since_last is not None else ""),
-            f"Quality confidence {quality_confidence_score:.2f}",
-        ]
+    items.sort(key=lambda x: x["score"], reverse=True)
 
-        if song.spotify_id:
-            reasons.append("Already Spotify-resolvable")
-        if feedback_reason:
-            reasons.append(feedback_reason.capitalize())
-        elif feedback_boost > 0:
-            reasons.append("Boosted by your positive feedback")
-        elif feedback_boost < 0:
-            reasons.append("Lowered by your previous feedback")
-
-        scored.append((score, song, reasons, components))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    top = scored[: max(1, min(limit, 100))]
-
-    if return_details:
-        items = [
-            {
-                "song": s,
-                "score": score,
-                "reasons": reasons,
-                "components": components,
-                "algorithm_version": ALGORITHM_VERSION,
-                "tag_names": _tag_names(s),
-            }
-            for score, s, reasons, components in top
-        ]
-        if include_discovery_summary:
-            return {"items": items, "discovery_summary": discovery_summary, "algorithm_version": ALGORITHM_VERSION}
-        return items
-
-    songs_only = [s for _, s, _, _ in top]
     if include_discovery_summary:
-        return {"items": songs_only, "discovery_summary": discovery_summary, "algorithm_version": ALGORITHM_VERSION}
-    return songs_only
+        return {"items": items, "discovery_summary": discovery_summary, "algorithm_version": ML_ALGORITHM_VERSION}
+    return items
 
 
 def build_discovery_feed(db, user_id, limit=20):
