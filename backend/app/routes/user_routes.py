@@ -1,13 +1,18 @@
 import json
+import threading
 from functools import partial
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 import spotipy
 
 from ..database import get_db
 from ..config import settings
+from ..models.job import Job
+from ..models.listening_history import ListeningHistory
+from ..models.song import Song
 from ..models.user_session import UserSession
 from ..services.job_service import create_job, run_job, serialize_job
 from ..services.spotify_service import (
@@ -77,6 +82,58 @@ def session_status(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/sync-status")
+def sync_status(request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+    total_songs = (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False))
+        .scalar()
+    ) or 0
+    pending_count = (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False), Song.enrichment_status == "pending")
+        .scalar()
+    ) or 0
+
+    last_sync_job = (
+        db.query(func.max(Job.finished_at))
+        .filter(Job.user_id == user_id, Job.job_type == "sync_history", Job.status == "succeeded")
+        .scalar()
+    )
+    last_import_job = (
+        db.query(func.max(Job.finished_at))
+        .filter(Job.user_id == user_id, Job.job_type == "import_history", Job.status == "succeeded")
+        .scalar()
+    )
+    last_enriched = (
+        db.query(func.max(Job.finished_at))
+        .filter(Job.user_id == user_id, Job.job_type == "backfill_metadata", Job.status == "succeeded")
+        .scalar()
+    )
+
+    last_synced = max([dt for dt in (last_sync_job, last_import_job) if dt], default=None)
+
+    return {
+        "last_synced_at": last_synced.isoformat() if last_synced else None,
+        "last_enriched_at": last_enriched.isoformat() if last_enriched else None,
+        "pending_enrichment_count": int(pending_count),
+        "total_songs": int(total_songs),
+    }
+
+
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
     requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
@@ -117,6 +174,42 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
     }
 
 
+def _pending_enrichment_count(db: Session, user_id: str):
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+    return (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False), Song.enrichment_status == "pending")
+        .scalar()
+    ) or 0
+
+
+def _queue_enrichment_job(db: Session, *, user_id: str, limit: int = 200):
+    pending_count = int(_pending_enrichment_count(db, user_id))
+    if pending_count <= 0:
+        return None
+
+    job = create_job(
+        db,
+        user_id=user_id,
+        job_type="backfill_metadata",
+        message="Queued tag and genre enrichment",
+        progress_total=min(limit, pending_count),
+    )
+    thread = threading.Thread(
+        target=run_job,
+        args=(job.id, partial(_run_backfill_job, user_id=user_id, limit=limit, retry_partial=False, retry_failed=False)),
+        daemon=True,
+    )
+    thread.start()
+    return job
+
+
 def _run_sync_history_job(db: Session, progress, *, user_id: str):
     session = load_user_session(db, user_id=user_id)
     token = session.get("token")
@@ -131,11 +224,14 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
     sync_result = sync_listening_history(db, user_id, tracks)
 
     progress.update(current=2, message="Finalizing sync")
+    enrichment_job = _queue_enrichment_job(db, user_id=user_id, limit=200)
     return {
         "message": "History sync completed",
         "fetched_items": len(tracks),
         "progress_current": 3,
         "progress_total": 3,
+        "enrichment_queued": bool(enrichment_job),
+        "enrichment_job_id": enrichment_job.id if enrichment_job else None,
         **sync_result,
     }
 

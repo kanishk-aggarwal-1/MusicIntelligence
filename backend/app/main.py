@@ -25,9 +25,7 @@ from .routes import dashboard_routes
 from .routes import insights_routes
 from .routes import job_routes
 from .routes import discovery_routes
-from .routes import reports_routes
 from .routes import ops_routes
-from .routes import filter_routes
 
 app = FastAPI(title="Music Recommendation API")
 install_error_handlers(app)
@@ -53,8 +51,6 @@ app.include_router(dashboard_routes.router)
 app.include_router(insights_routes.router)
 app.include_router(job_routes.router)
 app.include_router(discovery_routes.router)
-app.include_router(reports_routes.router)
-app.include_router(filter_routes.router)
 app.include_router(ops_routes.router)
 
 
