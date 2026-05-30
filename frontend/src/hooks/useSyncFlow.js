@@ -11,6 +11,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
   const [enrichmentJob, setEnrichmentJob] = useState(null)
   const [syncStatus, setSyncStatus] = useState(null)
   const timersRef = useRef({})
+  const failuresRef = useRef({})
 
   const refreshSyncStatus = useCallback(async () => {
     try {
@@ -33,9 +34,11 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
   const startPolling = useCallback((kind, jobId) => {
     const setter = kind === 'enrichment' ? setEnrichmentJob : setSyncJob
     clearTimer(kind)
+    failuresRef.current[kind] = 0
     timersRef.current[kind] = setInterval(async () => {
       try {
         const job = await api.get(`/jobs/${jobId}`)
+        failuresRef.current[kind] = 0
         setter(job)
         if (!isDone(job)) return
 
@@ -64,6 +67,9 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
         setTimeout(() => setter(null), 4000)
       } catch (e) {
         console.error(e)
+        failuresRef.current[kind] = (failuresRef.current[kind] || 0) + 1
+        if (failuresRef.current[kind] < 3) return
+        setter(prev => prev ? { ...prev, status: 'failed', error: e.message, message: 'Lost connection while checking job status' } : prev)
         clearTimer(kind)
       }
     }, 1500)

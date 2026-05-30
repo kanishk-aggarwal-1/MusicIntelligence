@@ -16,7 +16,7 @@ from ..models.job import Job
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..models.user_session import UserSession
-from ..services.job_service import create_job, run_job, serialize_job
+from ..services.job_service import create_job, get_active_job, run_job, serialize_job
 from ..services.spotify_service import (
     SESSION_COOKIE_NAME,
     create_session_cookie_value,
@@ -262,6 +262,10 @@ def _pending_enrichment_count(db: Session, user_id: str):
 
 
 def _queue_enrichment_job(db: Session, *, user_id: str, limit: int = 200):
+    existing = get_active_job(db, user_id=user_id, job_type="backfill_metadata")
+    if existing:
+        return existing
+
     pending_count = int(_pending_enrichment_count(db, user_id))
     if pending_count <= 0:
         return None
@@ -314,6 +318,10 @@ def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Se
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+
+    existing = get_active_job(db, user_id=user_id, job_type="sync_history")
+    if existing:
+        return serialize_job(existing)
 
     job = create_job(db, user_id=user_id, job_type="sync_history", message="Queued recent-history sync", progress_total=3)
     background_tasks.add_task(run_job, job.id, partial(_run_sync_history_job, user_id=user_id))
@@ -488,6 +496,10 @@ def backfill_metadata_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+
+    existing = get_active_job(db, user_id=user_id, job_type="backfill_metadata")
+    if existing:
+        return serialize_job(existing)
 
     job = create_job(
         db,
