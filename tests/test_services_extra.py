@@ -1,5 +1,5 @@
 """Additional service-level tests targeting uncovered paths."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from backend.app.models.api_cache import ApiCache
 from backend.app.models.artist import Artist
@@ -11,6 +11,7 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.services import api_cache_service, job_service, recommendation_service
+from backend.app.time_utils import utcnow_naive
 from backend.app.services.api_cache_service import (
     clear_provider_cache,
     get_cached_response,
@@ -158,6 +159,22 @@ def test_get_active_job_returns_latest_queued_or_running(db_session):
 
     assert result.id == running.id
     assert result.id not in {old.id, other_user.id}
+
+
+def test_get_active_job_marks_stale_jobs_failed(db_session):
+    fresh = create_job(db_session, user_id="u1", job_type="sync_history")
+    stale = create_job(db_session, user_id="u1", job_type="sync_history")
+    stale.status = "running"
+    stale.started_at = utcnow_naive() - timedelta(hours=3)
+    db_session.commit()
+
+    result = get_active_job(db_session, user_id="u1", job_type="sync_history")
+    db_session.refresh(stale)
+
+    assert result.id == fresh.id
+    assert stale.status == "failed"
+    assert stale.finished_at is not None
+    assert "stale" in stale.error
 
 
 # ── recommendation_service: build_discovery_feed ─────────────────────────────
