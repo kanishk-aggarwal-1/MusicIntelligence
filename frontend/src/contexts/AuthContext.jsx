@@ -48,8 +48,15 @@ export function AuthProvider({ children }) {
       }
 
       const onMessage = (event) => {
-        if (event.source !== popup || event.data?.type !== 'musicintel:login-success') return
-        completeLogin().catch(err => finish(reject, err))
+        if (event.source !== popup) return
+        if (event.data?.type === 'musicintel:login-error') {
+          popup.close()
+          finish(reject, new Error(event.data?.message || 'Spotify login failed.'))
+          return
+        }
+        if (event.data?.type === 'musicintel:login-success') {
+          completeLogin().catch(err => finish(reject, err))
+        }
       }
 
       window.addEventListener('message', onMessage)

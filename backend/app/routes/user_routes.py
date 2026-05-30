@@ -1,6 +1,8 @@
 import json
+import logging
 import threading
 from functools import partial
+from html import escape
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -30,6 +32,7 @@ from ..services.spotify_service import (
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
 
 router = APIRouter(prefix="/user", tags=["User"])
+logger = logging.getLogger(__name__)
 
 
 def _allowed_frontend_origin(origin: str | None):
@@ -50,50 +53,93 @@ def _frontend_message_origin(origin: str | None = None):
     return origins[0] if origins else "*"
 
 
+def _login_popup_response(*, success: bool, message: str, frontend_origin: str, status_code: int = 200):
+    event_type = "musicintel:login-success" if success else "musicintel:login-error"
+    safe_message = escape(message)
+    payload = json.dumps({"type": event_type, "message": message})
+    target_origin = json.dumps(frontend_origin)
+    close_script = "window.close();" if success else ""
+    return HTMLResponse(
+        f"""
+    <html>
+      <head><title>Spotify Login</title></head>
+      <body style="font-family: sans-serif; padding: 16px;">
+        <p>{safe_message}</p>
+        <script>
+          if (window.opener) {{
+            window.opener.postMessage({payload}, {target_origin});
+            {close_script}
+          }}
+        </script>
+      </body>
+    </html>
+    """,
+        status_code=status_code,
+    )
+
+
 @router.get("/login")
 def login(request: Request):
     sp_oauth = get_spotify_oauth()
     frontend_origin = _allowed_frontend_origin(request.query_params.get("frontend_origin"))
     auth_url = sp_oauth.get_authorize_url(state=frontend_origin)
+    logger.info("spotify.login.start frontend_origin=%s", frontend_origin)
     return RedirectResponse(auth_url)
 
 
 @router.get("/callback", response_class=HTMLResponse)
 def callback(request: Request, db: Session = Depends(get_db)):
     sp_oauth = get_spotify_oauth()
+    frontend_origin = _frontend_message_origin(request.query_params.get("state"))
     error = request.query_params.get("error")
     if error:
-        raise HTTPException(status_code=400, detail=f"Spotify login failed: {error}")
+        logger.warning("spotify.callback.denied error=%s", error)
+        return _login_popup_response(
+            success=False,
+            message=f"Spotify login failed: {error}",
+            frontend_origin=frontend_origin,
+            status_code=400,
+        )
 
     code = request.query_params.get("code")
     if not code:
-        raise HTTPException(status_code=400, detail="Missing Spotify authorization code")
+        logger.warning("spotify.callback.missing_code")
+        return _login_popup_response(
+            success=False,
+            message="Missing Spotify authorization code.",
+            frontend_origin=frontend_origin,
+            status_code=400,
+        )
 
-    token_info = sp_oauth.get_access_token(code, check_cache=False)
-    if not token_info or "access_token" not in token_info:
-        raise HTTPException(status_code=400, detail="Failed to exchange Spotify authorization code")
+    try:
+        token_info = sp_oauth.get_access_token(code, check_cache=False)
+        if not token_info or "access_token" not in token_info:
+            logger.warning("spotify.callback.exchange_empty")
+            return _login_popup_response(
+                success=False,
+                message="Failed to exchange Spotify authorization code.",
+                frontend_origin=frontend_origin,
+                status_code=400,
+            )
 
-    access_token = token_info["access_token"]
-    sp = spotipy.Spotify(auth=access_token)
-    user = sp.current_user()
-    save_user_session(db, user["id"], token_info=token_info)
-    frontend_origin = _frontend_message_origin(request.query_params.get("state"))
+        access_token = token_info["access_token"]
+        sp = spotipy.Spotify(auth=access_token)
+        user = sp.current_user()
+        save_user_session(db, user["id"], token_info=token_info)
+    except Exception:
+        logger.exception("spotify.callback.failed")
+        return _login_popup_response(
+            success=False,
+            message="Spotify login failed while creating your session. Check Render environment variables and Spotify redirect settings.",
+            frontend_origin=frontend_origin,
+            status_code=500,
+        )
 
-    response = HTMLResponse(
-        f"""
-    <html>
-      <head><title>Login Complete</title></head>
-      <body style=\"font-family: sans-serif; padding: 16px;\">
-        <p>Login successful. You can close this window.</p>
-        <script>
-          if (window.opener) {{
-            window.opener.postMessage({{"type":"musicintel:login-success"}}, {json.dumps(frontend_origin)});
-            window.close();
-          }}
-        </script>
-      </body>
-    </html>
-    """
+    logger.info("spotify.callback.success user_id=%s frontend_origin=%s", user["id"], frontend_origin)
+    response = _login_popup_response(
+        success=True,
+        message="Login successful. You can close this window.",
+        frontend_origin=frontend_origin,
     )
     response.set_cookie(value=create_session_cookie_value(user["id"]), **get_session_cookie_options())
     return response
