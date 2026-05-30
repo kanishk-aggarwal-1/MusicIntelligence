@@ -1,5 +1,7 @@
 import json
+import logging
 import uuid
+from datetime import timedelta
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
@@ -8,6 +10,9 @@ from ..database import SessionLocal
 from ..models.job import Job
 from ..services.metrics_service import record_job
 from ..time_utils import utcnow_naive
+
+logger = logging.getLogger(__name__)
+ACTIVE_JOB_MAX_AGE = timedelta(hours=2)
 
 
 class JobProgress:
@@ -71,8 +76,13 @@ def get_job(db: Session, *, job_id: str, user_id: str | None = None) -> Job | No
     return query.first()
 
 
+def _job_age_anchor(job: Job):
+    return job.started_at or job.created_at
+
+
 def get_active_job(db: Session, *, user_id: str, job_type: str) -> Job | None:
-    return (
+    now = utcnow_naive()
+    active_jobs = (
         db.query(Job)
         .filter(
             Job.user_id == user_id,
@@ -80,8 +90,24 @@ def get_active_job(db: Session, *, user_id: str, job_type: str) -> Job | None:
             Job.status.in_(("queued", "running")),
         )
         .order_by(Job.created_at.desc())
-        .first()
+        .all()
     )
+
+    for job in active_jobs:
+        anchor = _job_age_anchor(job)
+        if anchor and now - anchor > ACTIVE_JOB_MAX_AGE:
+            job.status = "failed"
+            job.error = "Job marked stale after exceeding active job timeout"
+            job.finished_at = now
+            job.message = "Job timed out before completing"
+            db.add(job)
+            db.commit()
+            logger.warning("job.marked_stale job_id=%s user_id=%s job_type=%s", job.id, user_id, job_type)
+            record_job("failed")
+            continue
+        return job
+
+    return None
 
 
 def list_jobs(db: Session, *, user_id: str, limit: int = 50) -> list[Job]:
@@ -156,6 +182,7 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
         db.rollback()
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
+            logger.exception("job.failed job_id=%s user_id=%s job_type=%s", job.id, job.user_id, job.job_type)
             job.status = "failed"
             job.error = str(exc)
             job.finished_at = utcnow_naive()
