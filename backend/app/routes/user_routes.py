@@ -32,15 +32,29 @@ from ..services.recommendation_service import backfill_missing_metadata, sync_li
 router = APIRouter(prefix="/user", tags=["User"])
 
 
-def _frontend_message_origin():
+def _allowed_frontend_origin(origin: str | None):
+    cleaned = (origin or "").strip().rstrip("/")
+    if cleaned and cleaned in settings.BACKEND_CORS_ORIGINS:
+        return cleaned
+    return None
+
+
+def _frontend_message_origin(origin: str | None = None):
+    if allowed := _allowed_frontend_origin(origin):
+        return allowed
+    # In development fall back to "*" so localhost vs 127.0.0.1 hostname
+    # differences don't silently block the postMessage.
+    if settings.APP_ENV != "production":
+        return "*"
     origins = settings.BACKEND_CORS_ORIGINS or []
     return origins[0] if origins else "*"
 
 
 @router.get("/login")
-def login():
+def login(request: Request):
     sp_oauth = get_spotify_oauth()
-    auth_url = sp_oauth.get_authorize_url()
+    frontend_origin = _allowed_frontend_origin(request.query_params.get("frontend_origin"))
+    auth_url = sp_oauth.get_authorize_url(state=frontend_origin)
     return RedirectResponse(auth_url)
 
 
@@ -63,7 +77,7 @@ def callback(request: Request, db: Session = Depends(get_db)):
     sp = spotipy.Spotify(auth=access_token)
     user = sp.current_user()
     save_user_session(db, user["id"], token_info=token_info)
-    frontend_origin = _frontend_message_origin()
+    frontend_origin = _frontend_message_origin(request.query_params.get("state"))
 
     response = HTMLResponse(
         f"""

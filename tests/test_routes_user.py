@@ -27,3 +27,17 @@ def test_sync_status_uses_job_finished_time(client_factory, db_session):
 
     assert resp.status_code == 200
     assert resp.json()["last_synced_at"] == "2026-05-30T12:00:00"
+
+
+def test_frontend_message_origin_uses_allowed_state(monkeypatch):
+    monkeypatch.setattr(
+        user_routes.settings,
+        "BACKEND_CORS_ORIGINS",
+        ["http://127.0.0.1:5173", "https://music-intelligence-eight.vercel.app"],
+    )
+
+    assert (
+        user_routes._frontend_message_origin("https://music-intelligence-eight.vercel.app")
+        == "https://music-intelligence-eight.vercel.app"
+    )
+    assert user_routes._frontend_message_origin("https://evil.example") == "http://127.0.0.1:5173"

@@ -41,4 +41,5 @@ export const api = {
   postForm: (path, formData) =>
     request(path, { method: 'POST', body: formData }),
   baseUrl: BASE_URL,
+  configured: Boolean(BASE_URL),
 }
