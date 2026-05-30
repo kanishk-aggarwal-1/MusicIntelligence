@@ -17,6 +17,7 @@ from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..models.user_session import UserSession
 from ..services.job_service import create_job, get_active_job, run_job, serialize_job
+from ..services.rate_limit_service import enforce_rate_limit
 from ..services.spotify_service import (
     SESSION_COOKIE_NAME,
     create_session_cookie_value,
@@ -234,6 +235,7 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
 
     if not token or not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    enforce_rate_limit(request, namespace="sync_history", user_id=user_id, limit=10, window_seconds=60)
 
     sp = spotipy.Spotify(auth=token)
     tracks = fetch_recent_tracks(sp, max_tracks=50)
@@ -318,6 +320,7 @@ def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Se
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    enforce_rate_limit(request, namespace="sync_history_job", user_id=user_id, limit=10, window_seconds=60)
 
     existing = get_active_job(db, user_id=user_id, job_type="sync_history")
     if existing:
@@ -340,6 +343,7 @@ def backfill_metadata(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    enforce_rate_limit(request, namespace="backfill_metadata", user_id=user_id, limit=5, window_seconds=60)
 
     result = backfill_missing_metadata(
         db,
@@ -452,6 +456,7 @@ async def import_history_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    enforce_rate_limit(request, namespace="import_history_job", user_id=user_id, limit=3, window_seconds=600)
 
     if file.content_type not in ("application/json", "text/plain", "application/octet-stream"):
         raise HTTPException(status_code=400, detail="Expected a JSON file")
@@ -496,6 +501,7 @@ def backfill_metadata_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    enforce_rate_limit(request, namespace="backfill_metadata_job", user_id=user_id, limit=5, window_seconds=60)
 
     existing = get_active_job(db, user_id=user_id, job_type="backfill_metadata")
     if existing:

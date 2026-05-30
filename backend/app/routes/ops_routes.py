@@ -1,7 +1,7 @@
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -11,16 +11,27 @@ from ..services.metrics_service import get_metrics_snapshot
 from ..services.artist_enrichment_service import enrich_artist_genres
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
 from ..services.spotify_service import fetch_recent_tracks, get_spotify_client, load_user_session
+from ..time_utils import utcnow
 
 router = APIRouter(prefix="/ops", tags=["Operations"])
 logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
-def health():
+def health(db: Session = Depends(get_db)):
+    database = {"status": "ok"}
+    status = "ok"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as exc:
+        logger.exception("health.database_failed")
+        database = {"status": "error", "message": type(exc).__name__}
+        status = "degraded"
+
     return {
-        "status": "ok",
-        "time_utc": datetime.utcnow().isoformat(),
+        "status": status,
+        "time_utc": utcnow().isoformat(),
+        "database": database,
     }
 
 

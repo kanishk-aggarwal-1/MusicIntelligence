@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 from datetime import timedelta
 from typing import Any, Callable
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models.job import Job
-from ..services.metrics_service import record_job
+from ..services.metrics_service import record_job, record_job_failure, record_timing
 from ..time_utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ def create_job(db: Session, *, user_id: str, job_type: str, message: str = "Queu
     db.add(job)
     db.commit()
     db.refresh(job)
-    record_job("queued")
+    record_job("queued", job_type)
     return job
 
 
@@ -103,7 +104,8 @@ def get_active_job(db: Session, *, user_id: str, job_type: str) -> Job | None:
             db.add(job)
             db.commit()
             logger.warning("job.marked_stale job_id=%s user_id=%s job_type=%s", job.id, user_id, job_type)
-            record_job("failed")
+            record_job("failed", job_type)
+            record_job_failure(job_type, "stale_timeout")
             continue
         return job
 
@@ -133,16 +135,19 @@ def cancel_job(db: Session, *, job_id: str, user_id: str) -> Job | None:
     db.add(job)
     db.commit()
     db.refresh(job)
-    record_job("cancelled")
+    record_job("cancelled", job.job_type)
     return job
 
 
 def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any] | None]):
     db = SessionLocal()
+    started_perf = time.perf_counter()
+    metric_job_type = "unknown"
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             return
+        metric_job_type = job.job_type
         if job.status == "cancelled":
             return
 
@@ -152,7 +157,7 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
         db.add(job)
         db.commit()
         db.refresh(job)
-        record_job("running")
+        record_job("running", job.job_type)
 
         progress = JobProgress(db, job)
         result = handler(db, progress) or {}
@@ -163,7 +168,7 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
                 job.finished_at = utcnow_naive()
             db.add(job)
             db.commit()
-            record_job("cancelled")
+            record_job("cancelled", job.job_type)
             return
 
         job.status = "succeeded"
@@ -177,17 +182,20 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
             job.result_json = json.dumps(result)
         db.add(job)
         db.commit()
-        record_job("succeeded")
+        record_job("succeeded", job.job_type)
     except Exception as exc:
         db.rollback()
         job = db.query(Job).filter(Job.id == job_id).first()
         if job:
+            metric_job_type = job.job_type
             logger.exception("job.failed job_id=%s user_id=%s job_type=%s", job.id, job.user_id, job.job_type)
             job.status = "failed"
             job.error = str(exc)
             job.finished_at = utcnow_naive()
             db.add(job)
             db.commit()
-        record_job("failed")
+        record_job("failed", metric_job_type)
+        record_job_failure(metric_job_type, type(exc).__name__)
     finally:
+        record_timing(f"job.{metric_job_type}", time.perf_counter() - started_perf)
         db.close()
