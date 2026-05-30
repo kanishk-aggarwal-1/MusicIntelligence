@@ -1,0 +1,273 @@
+"""Tests for /playlists routes — generated history, detail, playlist service."""
+from datetime import datetime
+
+from backend.app.models.artist import Artist
+from backend.app.models.generated_playlist import GeneratedPlaylist
+from backend.app.models.listening_history import ListeningHistory
+from backend.app.models.song import Song
+from backend.app.models.song_tag import SongTag
+from backend.app.models.tag import Tag
+from backend.app.models.user_session import UserSession
+from backend.app.routes import playlist_routes
+from backend.app.services import generated_playlist_service
+from backend.app.services.generated_playlist_service import (
+    build_playlist_name,
+    create_playlist_preview_record,
+    serialize_generated_playlist,
+)
+from backend.app.routes.playlist_routes import _apply_quality_controls, _dedupe_keep_order
+
+
+def _session(user_id: str):
+    return UserSession(user_id=user_id, token="tok", token_info_json="{}")
+
+
+def _artist(db, name: str) -> Artist:
+    a = db.query(Artist).filter_by(name=name).first()
+    if not a:
+        a = Artist(name=name)
+        db.add(a)
+        db.flush()
+    return a
+
+
+def _song(db, *, artist_name: str, title: str, spotify_id: str | None = None,
+          genre: str | None = None) -> Song:
+    artist = _artist(db, artist_name)
+    s = Song(
+        title=title,
+        artist_id=artist.id,
+        spotify_id=spotify_id,
+        genre=genre,
+        enrichment_status="complete",
+        is_deleted=False,
+    )
+    db.add(s)
+    db.flush()
+    return s
+
+
+def _tag_song(db, song: Song, tag_name: str) -> None:
+    t = db.query(Tag).filter_by(name=tag_name).first()
+    if not t:
+        t = Tag(name=tag_name)
+        db.add(t)
+        db.flush()
+    db.add(SongTag(song_id=song.id, tag_id=t.id))
+
+
+def _playlist_record(db, user_id: str, song: Song, name: str = "Test Playlist") -> GeneratedPlaylist:
+    artist = db.query(Artist).filter_by(id=song.artist_id).first()
+    item = {
+        "song": song,
+        "score": 0.9,
+        "components": {"base_score": 0.9},
+        "reasons": ["played often"],
+        "tag_names": [],
+    }
+    item["song"].artist = artist
+    return create_playlist_preview_record(
+        db,
+        user_id=user_id,
+        name=name,
+        context_type=None,
+        request_params={"max_tracks": 1},
+        candidate_pool_size=5,
+        items=[item],
+    )
+
+
+# ── GET /playlists/generated ─────────────────────────────────────────────────
+
+def test_generated_history_empty(client_factory, db_session):
+    db_session.add(_session("u1"))
+    db_session.commit()
+
+    client = client_factory(playlist_routes.router)
+    resp = client.get("/playlists/generated", headers={"X-User-Id": "u1"})
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_generated_history_requires_auth(client_factory, db_session):
+    client = client_factory(playlist_routes.router)
+    resp = client.get("/playlists/generated")
+    assert resp.status_code == 401
+
+
+def test_generated_history_returns_playlists(client_factory, db_session):
+    db_session.add(_session("u1"))
+    s = _song(db_session, artist_name="Hist Artist", title="Hist Track", spotify_id="h1")
+    _playlist_record(db_session, "u1", s, name="My Playlist")
+    db_session.commit()
+
+    client = client_factory(playlist_routes.router)
+    resp = client.get("/playlists/generated", headers={"X-User-Id": "u1"})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["name"] == "My Playlist"
+    assert "tracks" not in items[0]
+
+
+# ── GET /playlists/generated/{id} ────────────────────────────────────────────
+
+def test_generated_detail_not_found(client_factory, db_session):
+    db_session.add(_session("u1"))
+    db_session.commit()
+
+    client = client_factory(playlist_routes.router)
+    resp = client.get("/playlists/generated/99999", headers={"X-User-Id": "u1"})
+    assert resp.status_code == 404
+
+
+def test_generated_detail_returns_tracks(client_factory, db_session):
+    db_session.add(_session("u1"))
+    s = _song(db_session, artist_name="Detail Artist", title="Detail Track", spotify_id="d1", genre="chill")
+    record = _playlist_record(db_session, "u1", s, name="Detail Playlist")
+    db_session.commit()
+
+    client = client_factory(playlist_routes.router)
+    resp = client.get(f"/playlists/generated/{record.id}", headers={"X-User-Id": "u1"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "Detail Playlist"
+    assert len(data["tracks"]) == 1
+    assert data["tracks"][0]["song"]["title"] == "Detail Track"
+
+
+def test_generated_detail_scoped_to_user(client_factory, db_session):
+    db_session.add_all([_session("u1"), _session("u2")])
+    s = _song(db_session, artist_name="Scoped Artist", title="Scoped Track")
+    record = _playlist_record(db_session, "u2", s)
+    db_session.commit()
+
+    client = client_factory(playlist_routes.router)
+    resp = client.get(f"/playlists/generated/{record.id}", headers={"X-User-Id": "u1"})
+    assert resp.status_code == 404
+
+
+# ── POST /playlists/preview ───────────────────────────────────────────────────
+
+def test_playlist_preview_no_history_returns_empty(client_factory, db_session):
+    db_session.add(_session("u1"))
+    db_session.commit()
+
+    client = client_factory(playlist_routes.router)
+    resp = client.post(
+        "/playlists/preview",
+        json={"max_tracks": 5},
+        headers={"X-User-Id": "u1"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["generated_playlist"]["tracks"] == []
+
+
+def test_playlist_preview_creates_record(client_factory, db_session):
+    db_session.add(_session("u1"))
+    s1 = _song(db_session, artist_name="A", title="S1", spotify_id="s1", genre="indie")
+    s2 = _song(db_session, artist_name="B", title="S2", spotify_id="s2", genre="rock")
+    _tag_song(db_session, s1, "indie")
+    _tag_song(db_session, s2, "rock")
+    db_session.add_all([
+        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+    ])
+    db_session.commit()
+
+    before = db_session.query(GeneratedPlaylist).count()
+    client = client_factory(playlist_routes.router)
+    resp = client.post(
+        "/playlists/preview",
+        json={"max_tracks": 10, "diversity": 0.5, "familiarity": 0.5},
+        headers={"X-User-Id": "u1"},
+    )
+    assert resp.status_code == 200
+    assert db_session.query(GeneratedPlaylist).count() == before + 1
+
+
+# ── Utility helpers ───────────────────────────────────────────────────────────
+
+def test_dedupe_keep_order_removes_nones_and_dupes():
+    result = _dedupe_keep_order(["a", None, "b", "a", "c", None])
+    assert result == ["a", "b", "c"]
+
+
+def test_apply_quality_controls_empty_list():
+    assert _apply_quality_controls([], 0.5, 0.5) == []
+
+
+def test_apply_quality_controls_diversity_interleaves_artists():
+    artist_a = Artist(name="A")
+    artist_b = Artist(name="B")
+    song_a1 = Song(title="A1", artist=artist_a, spotify_id="a1", is_deleted=False)
+    song_a2 = Song(title="A2", artist=artist_a, spotify_id="a2", is_deleted=False)
+    song_b1 = Song(title="B1", artist=artist_b, spotify_id="b1", is_deleted=False)
+
+    details = [
+        {"song": song_a1, "score": 0.9},
+        {"song": song_a2, "score": 0.85},
+        {"song": song_b1, "score": 0.8},
+    ]
+    result = _apply_quality_controls(details, diversity=0.8, familiarity=0.3)
+    artists = [d["song"].artist.name for d in result]
+    # With diversity=0.8, artist A should not appear twice consecutively
+    for i in range(len(artists) - 1):
+        assert not (artists[i] == "A" and artists[i + 1] == "A"), \
+            f"Artist A appears consecutively at positions {i} and {i+1}"
+
+
+def test_apply_quality_controls_familiarity_sorts_by_spotify_id():
+    artist = Artist(name="C")
+    known = Song(title="Known", artist=artist, spotify_id="sp1", is_deleted=False)
+    unknown = Song(title="Unknown", artist=artist, spotify_id=None, is_deleted=False)
+
+    details = [
+        {"song": unknown, "score": 0.99},
+        {"song": known, "score": 0.5},
+    ]
+    result = _apply_quality_controls(details, diversity=0.3, familiarity=0.9)
+    # High familiarity means known tracks should come first
+    assert result[0]["song"].spotify_id is not None
+
+
+# ── serialize_generated_playlist ────────────────────────────────────────────
+
+def test_serialize_without_tracks_omits_tracks_key(db_session):
+    db_session.add(_session("u1"))
+    s = _song(db_session, artist_name="Ser Artist", title="Ser Track", spotify_id="sr1")
+    record = _playlist_record(db_session, "u1", s)
+    db_session.commit()
+
+    payload = serialize_generated_playlist(record, include_tracks=False)
+    assert "tracks" not in payload
+    assert payload["name"] == "Test Playlist"
+
+
+def test_serialize_with_tracks_includes_song_fields(db_session):
+    db_session.add(_session("u1"))
+    s = _song(db_session, artist_name="SerT Artist", title="SerT Track", spotify_id="srt1", genre="jazz")
+    record = _playlist_record(db_session, "u1", s)
+    db_session.commit()
+
+    payload = serialize_generated_playlist(record, include_tracks=True)
+    assert len(payload["tracks"]) == 1
+    track = payload["tracks"][0]
+    assert track["song"]["title"] == "SerT Track"
+    assert track["song"]["genre"] == "jazz"
+
+
+def test_build_playlist_name_uses_genre_and_context(db_session):
+    s = _song(db_session, artist_name="Name Artist", title="Name Track", genre="indie")
+    item = {
+        "song": s,
+        "score": 0.9,
+        "components": {"familiarity_score": 0.8},
+        "reasons": [],
+        "tag_names": [],
+    }
+
+    name = build_playlist_name([item], context_type="focus")
+
+    assert name.startswith("Indie Focus Mix - ")
