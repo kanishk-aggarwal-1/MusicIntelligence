@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, engine as _db_engine
 from ..models.artist import Artist
 from ..models.dedup_merge_log import DedupMergeLog
 from ..models.listening_goal import ListeningGoal
@@ -21,6 +21,12 @@ from ..services.recommendation_service import build_discovery_feed
 from ..services.spotify_service import load_request_user_session
 
 router = APIRouter(prefix="/insights", tags=["Insights"])
+
+
+def _month_trunc(col):
+    if _db_engine.dialect.name == "postgresql":
+        return func.date_trunc("month", col)
+    return func.strftime("%Y-%m-01", col)
 
 
 class FeedbackPayload(BaseModel):
@@ -92,29 +98,29 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
 
     artist_rows = (
         db.query(
-            func.date_trunc("month", ListeningHistory.played_at).label("month"),
+            _month_trunc(ListeningHistory.played_at).label("month"),
             Artist.name,
             func.count(ListeningHistory.id).label("plays"),
         )
         .join(Song, Song.id == ListeningHistory.song_id)
         .join(Artist, Artist.id == Song.artist_id)
         .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
-        .group_by(func.date_trunc("month", ListeningHistory.played_at), Artist.name)
-        .order_by(func.date_trunc("month", ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
+        .group_by(_month_trunc(ListeningHistory.played_at), Artist.name)
+        .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
         .limit(safe_months * 5)
         .all()
     )
 
     genre_rows = (
         db.query(
-            func.date_trunc("month", ListeningHistory.played_at).label("month"),
+            _month_trunc(ListeningHistory.played_at).label("month"),
             Song.genre,
             func.count(ListeningHistory.id).label("plays"),
         )
         .join(Song, Song.id == ListeningHistory.song_id)
         .filter(ListeningHistory.user_id == user_id, Song.genre.is_not(None), Song.is_deleted.is_(False))
-        .group_by(func.date_trunc("month", ListeningHistory.played_at), Song.genre)
-        .order_by(func.date_trunc("month", ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
+        .group_by(_month_trunc(ListeningHistory.played_at), Song.genre)
+        .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
         .limit(safe_months * 5)
         .all()
     )
@@ -156,11 +162,12 @@ def add_feedback(payload: FeedbackPayload, request: Request, db: Session = Depen
         "too_obscure",
         "wrong_vibe",
         "more_like_this",
+        "never_show",
     }
     if action not in allowed_actions:
         raise HTTPException(
             status_code=400,
-            detail="action must be one of like/dislike/skip/too_familiar/too_obscure/wrong_vibe/more_like_this",
+            detail="action must be one of like/dislike/skip/too_familiar/too_obscure/wrong_vibe/more_like_this/never_show",
         )
 
     db.add(RecommendationFeedback(user_id=user_id, song_id=payload.song_id, action=action))
@@ -211,7 +218,7 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
     )
 
     now = datetime.utcnow()
-    week_start = now - timedelta(days=now.weekday())
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
     total_events = (
         db.query(func.count(ListeningHistory.id))
@@ -426,10 +433,21 @@ def dedup_apply(request: Request, limit_groups: int = 20, dry_run: bool = False,
         for duplicate in songs[1:]:
             dup_id = duplicate["song_id"]
 
-            history_row_ids = [
-                row[0]
-                for row in db.query(ListeningHistory.id).filter(ListeningHistory.song_id == dup_id).all()
-            ]
+            # Identify dup rows that would collide with keep_id's existing (user_id, played_at)
+            keep_pairs = {
+                (r.user_id, r.played_at)
+                for r in db.query(ListeningHistory.user_id, ListeningHistory.played_at)
+                .filter(ListeningHistory.song_id == keep_id)
+                .all()
+            }
+            dup_rows = db.query(ListeningHistory).filter(ListeningHistory.song_id == dup_id).all()
+            conflict_ids = {r.id for r in dup_rows if (r.user_id, r.played_at) in keep_pairs}
+            history_row_ids = [r.id for r in dup_rows if r.id not in conflict_ids]
+
+            if conflict_ids:
+                db.query(ListeningHistory).filter(ListeningHistory.id.in_(conflict_ids)).delete(synchronize_session=False)
+                db.flush()
+
             tag_rows = db.query(SongTag.tag_id, SongTag.weight, SongTag.popularity, SongTag.spotify_id).filter(SongTag.song_id == dup_id).all()
 
             snapshot = {

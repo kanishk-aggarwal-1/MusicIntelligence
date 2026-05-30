@@ -11,6 +11,8 @@ def _to_int(value, default=0):
 def enrich_song(song):
 
     title = song.title
+    if not song.artist:
+        return {"genre": None, "tags": [], "listeners": 0, "playcount": 0, "_errors": ["no artist"]}
     artist = song.artist.name
 
     genre = None

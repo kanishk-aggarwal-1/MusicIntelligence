@@ -275,7 +275,8 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     )
 
     serialized = serialize_generated_playlist(record, include_tracks=True)
-    warnings = _build_playlist_warnings(selected, requested_tracks, created_track_count=0)
+    resolved_count = sum(1 for item in selected if item["song"].spotify_id)
+    warnings = _build_playlist_warnings(selected, requested_tracks, created_track_count=resolved_count)
 
     return {
         "message": "Playlist preview generated",

@@ -57,6 +57,9 @@ def get_songs(
     safe_limit = max(1, min(limit, 5000))
     safe_days = max(1, min(recently_played_days, 365))
 
+    if quick_filter and quick_filter not in QUICK_FILTERS:
+        raise HTTPException(status_code=400, detail=f"Unknown quick_filter '{quick_filter}'")
+
     last_listen_subq = (
         db.query(
             ListeningHistory.song_id.label("song_id"),
@@ -105,9 +108,6 @@ def get_songs(
 
     filtered = []
     for s, last_listened_at, listening_count, playlist_inclusion_count in rows:
-        if quick_filter and quick_filter not in QUICK_FILTERS:
-            raise HTTPException(status_code=400, detail=f"Unknown quick_filter '{quick_filter}'")
-
         tag_count = len(s.song_tags or [])
         popularity_value = s.popularity_score or 0
         playlist_count = int(playlist_inclusion_count or 0)
@@ -122,13 +122,6 @@ def get_songs(
             continue
         if quick_filter == "high_popularity" and popularity_value < 3:
             continue
-        if quick_filter == "recently_played":
-            if not last_listened_at:
-                continue
-            delta_days = (func.current_timestamp() if False else None)
-            # compare in Python because SQLite + Postgres behavior differs and dataset is user-scoped
-            if (func is None):
-                pass
         if quick_filter == "never_used_in_playlist" and playlist_count > 0:
             continue
         if quick_filter == "hidden" and not s.is_deleted:
