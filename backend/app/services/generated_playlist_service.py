@@ -115,6 +115,7 @@ def create_playlist_preview_record(
     for position, item in enumerate(items, start=1):
         explanation = {
             "reasons": item.get("reasons", []),
+            "debug_reasons": item.get("debug_reasons", []),
             "artist": item["song"].artist.name if item["song"].artist else None,
             "known_spotify": bool(item["song"].spotify_id),
             "context_type": context_type,
