@@ -32,6 +32,21 @@ def run_startup_migrations():
         table_names = set(inspector.get_table_names())
 
         with engine.begin() as conn:
+            if "artists" in table_names:
+                cols = _column_type_map(inspector, "artists")
+                if dialect == "postgresql":
+                    conn.execute(text("ALTER TABLE artists ADD COLUMN IF NOT EXISTS spotify_id VARCHAR"))
+                    conn.execute(text("ALTER TABLE artists ADD COLUMN IF NOT EXISTS genres TEXT"))
+                    conn.execute(text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_artists_spotify_id "
+                        "ON artists (spotify_id) WHERE spotify_id IS NOT NULL"
+                    ))
+                else:
+                    if "spotify_id" not in cols:
+                        conn.execute(text("ALTER TABLE artists ADD COLUMN spotify_id VARCHAR"))
+                    if "genres" not in cols:
+                        conn.execute(text("ALTER TABLE artists ADD COLUMN genres TEXT"))
+
             if "songs" in table_names:
                 cols = _column_type_map(inspector, "songs")
 
@@ -218,6 +233,16 @@ def run_startup_migrations():
                         conn.execute(text("ALTER TABLE song_tags ADD COLUMN spotify_id VARCHAR"))
 
             if "listening_history" in table_names:
+                lh_cols = _column_type_map(inspector, "listening_history")
+                if dialect == "postgresql":
+                    conn.execute(text("ALTER TABLE listening_history DROP COLUMN IF EXISTS ms_played"))
+                    conn.execute(text("ALTER TABLE listening_history DROP COLUMN IF EXISTS skipped"))
+                else:
+                    if "ms_played" in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history DROP COLUMN ms_played"))
+                    if "skipped" in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history DROP COLUMN skipped"))
+
                 if dialect == "postgresql":
                     conn.execute(
                         text(

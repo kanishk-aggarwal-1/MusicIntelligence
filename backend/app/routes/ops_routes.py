@@ -8,6 +8,7 @@ from ..config import settings
 from ..database import get_db
 from ..models.user_session import UserSession
 from ..services.metrics_service import get_metrics_snapshot
+from ..services.artist_enrichment_service import enrich_artist_genres
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
 from ..services.spotify_service import fetch_recent_tracks, get_spotify_client, load_user_session
 
@@ -62,6 +63,8 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
             new_songs = sync_result.get("new_songs", 0)
             if new_songs > 0:
                 backfill_missing_metadata(db, user_id=user_id, max_songs=new_songs + 10)
+
+            enrich_artist_genres(db, sp, batch_size=50)
 
             synced += 1
             logger.info(
