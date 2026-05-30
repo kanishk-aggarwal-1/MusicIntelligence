@@ -168,6 +168,7 @@ def sync_listening_history(db, user_id, tracks):
         title = item.get("title")
         artist_name = item.get("artist")
         spotify_id = item.get("spotify_id")
+        artist_spotify_id = item.get("artist_spotify_id")
 
         if not title or not artist_name:
             continue
@@ -175,9 +176,11 @@ def sync_listening_history(db, user_id, tracks):
         artist = db.query(Artist).filter(Artist.name == artist_name).first()
 
         if not artist:
-            artist = Artist(name=artist_name)
+            artist = Artist(name=artist_name, spotify_id=artist_spotify_id)
             db.add(artist)
             db.flush()
+        elif artist_spotify_id and not artist.spotify_id:
+            artist.spotify_id = artist_spotify_id
 
         song = None
 
@@ -254,7 +257,7 @@ def sync_listening_history(db, user_id, tracks):
                 history = ListeningHistory(
                     user_id=user_id,
                     song_id=song.id,
-                    played_at=played_at
+                    played_at=played_at,
                 )
                 db.add(history)
                 pending_history_keys.add(history_key)

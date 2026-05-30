@@ -1,6 +1,7 @@
+import json
 from functools import partial
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 import spotipy
@@ -206,6 +207,104 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
         "progress_total": max(1, int(result.get("scanned") or limit or 1)),
         **result,
     }
+
+
+def _parse_extended_history(data: list) -> list:
+    """Convert Spotify extended streaming history entries into sync-compatible track dicts."""
+    tracks = []
+    for entry in data:
+        # Skip podcast episodes and entries with no track name
+        if entry.get("episode_name") or not entry.get("master_metadata_track_name"):
+            continue
+
+        ms_played = entry.get("ms_played") or 0
+
+        # Ignore plays shorter than 30 seconds — accidental starts, previews
+        if ms_played < 30_000:
+            continue
+
+        reason_end = (entry.get("reason_end") or "").lower()
+        skipped = reason_end in ("fwdbtn", "endplay")
+
+        spotify_uri = entry.get("spotify_track_uri") or ""
+        spotify_id = spotify_uri.split(":")[-1] if spotify_uri.startswith("spotify:track:") else None
+
+        tracks.append({
+            "title": entry.get("master_metadata_track_name"),
+            "artist": entry.get("master_metadata_album_artist_name"),
+            "spotify_id": spotify_id,
+            "played_at": entry.get("ts"),
+            "ms_played": ms_played,
+            "skipped": skipped,
+        })
+    return tracks
+
+
+def _run_import_history_job(db, progress, *, user_id: str, data: list):
+    progress.update(total=3, current=0, message="Parsing tracks from Spotify history file")
+    tracks = _parse_extended_history(data)
+
+    progress.update(current=1, message=f"Importing {len(tracks):,} tracks into library")
+    result = sync_listening_history(db, user_id, tracks, enrich_inline=False)
+
+    progress.update(current=2, message="Backfilling Last.fm metadata for new songs")
+    new_songs = result.get("new_songs", 0)
+    if new_songs > 0:
+        backfill_missing_metadata(db, user_id=user_id, max_songs=new_songs + 50)
+
+    return {
+        "message": "Import complete",
+        "entries_in_file": len(data),
+        "valid_tracks": len(tracks),
+        **result,
+    }
+
+
+@router.post("/import-history/job")
+async def import_history_job(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db=Depends(get_db),
+):
+    """Upload a Spotify Extended Streaming History JSON file to bulk-import listening history.
+
+    Download your data at: https://www.spotify.com/account/privacy/
+    Upload any of the StreamingHistory_music_*.json files.
+    """
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    if file.content_type not in ("application/json", "text/plain", "application/octet-stream"):
+        raise HTTPException(status_code=400, detail="Expected a JSON file")
+
+    content = await file.read()
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+
+    try:
+        data = json.loads(content)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not parse JSON file")
+
+    if not isinstance(data, list):
+        raise HTTPException(status_code=400, detail="Expected a JSON array of history entries")
+
+    job = create_job(
+        db,
+        user_id=user_id,
+        job_type="import_history",
+        message=f"Queued import of {len(data):,} history entries",
+        progress_total=3,
+    )
+    background_tasks.add_task(
+        run_job,
+        job.id,
+        partial(_run_import_history_job, user_id=user_id, data=data),
+    )
+    return serialize_job(job)
 
 
 @router.post("/backfill-metadata/job")

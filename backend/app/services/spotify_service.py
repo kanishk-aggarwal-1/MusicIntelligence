@@ -152,7 +152,6 @@ def get_spotify_oauth():
         client_secret=settings.SPOTIFY_CLIENT_SECRET,
         redirect_uri=settings.SPOTIFY_REDIRECT_URI,
         scope=SCOPES,
-        show_dialog=True,
     )
 
 
@@ -298,12 +297,15 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
             if not spotify_id and isinstance(uri, str) and uri.startswith("spotify:track:"):
                 spotify_id = uri.split(":")[-1]
 
+            first_artist = (track.get("artists") or [{}])[0]
             tracks.append(
                 {
                     "title": track.get("name"),
-                    "artist": (track.get("artists") or [{}])[0].get("name"),
+                    "artist": first_artist.get("name"),
+                    "artist_spotify_id": first_artist.get("id"),
                     "spotify_id": spotify_id,
                     "played_at": item.get("played_at"),
+                    "duration_ms": track.get("duration_ms"),
                 }
             )
 
