@@ -22,30 +22,60 @@ export function AuthProvider({ children }) {
       'spotify_login',
       'width=520,height=740'
     )
-    if (!popup) throw new Error('Popup blocked — allow popups for this site and try again.')
+    if (!popup) throw new Error('Popup blocked. Allow popups for this site and try again.')
 
     return new Promise((resolve, reject) => {
       const start = Date.now()
+      let settled = false
+
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        clearInterval(timer)
+        window.removeEventListener('message', onMessage)
+        callback(value)
+      }
+
+      const completeLogin = async () => {
+        const s = await api.get('/user/session')
+        if (!s.logged_in) {
+          throw new Error('Login completed, but the session cookie was not found.')
+        }
+        popup.close()
+        setUser(s)
+        finish(resolve, s)
+      }
+
+      const onMessage = (event) => {
+        if (event.source !== popup || event.data?.type !== 'musicintel:login-success') return
+        completeLogin().catch(err => finish(reject, err))
+      }
+
+      window.addEventListener('message', onMessage)
+
       const timer = setInterval(async () => {
         try {
           if (Date.now() - start > 120_000) {
-            clearInterval(timer)
             popup.close()
-            return reject(new Error('Login timed out.'))
+            return finish(reject, new Error('Login timed out.'))
           }
+
           if (popup.closed) {
-            clearInterval(timer)
             const s = await api.get('/user/session')
-            if (s.logged_in) { setUser(s); resolve(s) }
-            else reject(new Error('Login window closed before authentication completed.'))
+            if (s.logged_in) {
+              setUser(s)
+              finish(resolve, s)
+            } else {
+              finish(reject, new Error('Login window closed before authentication completed.'))
+            }
             return
           }
+
           const s = await api.get('/user/session')
           if (s.logged_in) {
-            clearInterval(timer)
             popup.close()
             setUser(s)
-            resolve(s)
+            finish(resolve, s)
           }
         } catch {}
       }, 1000)

@@ -32,6 +32,11 @@ from ..services.recommendation_service import backfill_missing_metadata, sync_li
 router = APIRouter(prefix="/user", tags=["User"])
 
 
+def _frontend_message_origin():
+    origins = settings.BACKEND_CORS_ORIGINS or []
+    return origins[0] if origins else "*"
+
+
 @router.get("/login")
 def login():
     sp_oauth = get_spotify_oauth()
@@ -58,13 +63,20 @@ def callback(request: Request, db: Session = Depends(get_db)):
     sp = spotipy.Spotify(auth=access_token)
     user = sp.current_user()
     save_user_session(db, user["id"], token_info=token_info)
+    frontend_origin = _frontend_message_origin()
 
     response = HTMLResponse(
-        """
+        f"""
     <html>
       <head><title>Login Complete</title></head>
       <body style=\"font-family: sans-serif; padding: 16px;\">
         <p>Login successful. You can close this window.</p>
+        <script>
+          if (window.opener) {{
+            window.opener.postMessage({{"type":"musicintel:login-success"}}, {json.dumps(frontend_origin)});
+            window.close();
+          }}
+        </script>
       </body>
     </html>
     """
