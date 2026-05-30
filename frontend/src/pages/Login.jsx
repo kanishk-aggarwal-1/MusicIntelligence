@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
 
 export default function Login() {
-  const { login } = useAuth()
+  const { login, serverWarming } = useAuth()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -53,6 +53,13 @@ export default function Login() {
           )}
           {loading ? 'Opening Spotify...' : 'Connect with Spotify'}
         </button>
+
+        {serverWarming && !configError && (
+          <div className="flex items-center gap-2 justify-center text-zinc-400 text-sm bg-zinc-900 rounded-lg px-4 py-2.5 border border-zinc-800">
+            <Spinner size="sm" />
+            Server is warming up — this takes about 30 seconds on first load.
+          </div>
+        )}
 
         {configError && (
           <p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-2.5">

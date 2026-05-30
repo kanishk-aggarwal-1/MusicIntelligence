@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Music, Pause, Play, SkipForward, Target, CheckCircle, X } from 'lucide-react'
+import { Music, Pause, Play, SkipForward, Target, CheckCircle, X, RefreshCw, Sparkles, Heart } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { usePlayer } from '../contexts/PlayerContext'
 import Spinner from '../components/ui/Spinner'
@@ -13,6 +14,44 @@ function Section({ title, description, children }) {
         {description && <p className="text-zinc-400 text-sm mt-1">{description}</p>}
       </div>
       {children}
+    </div>
+  )
+}
+
+const SETUP_STEPS = [
+  { icon: RefreshCw,  label: 'Sync your history',   desc: 'Go to Dashboard and click Sync Now.',     path: '/dashboard' },
+  { icon: Sparkles,   label: 'Enrich your library',  desc: 'Go to Tools → Run Backfill to fetch tags.', path: '/features' },
+  { icon: Heart,      label: 'Come back here',        desc: 'Recommendations appear once enrichment finishes.', path: null },
+]
+
+function DiscoveryEmptyState() {
+  const navigate = useNavigate()
+  return (
+    <div className="space-y-4">
+      <p className="text-zinc-400 text-sm">
+        Recommendations need your listening history and enriched tags. Complete these steps:
+      </p>
+      <ol className="space-y-3">
+        {SETUP_STEPS.map(({ icon: Icon, label, desc, path }, i) => (
+          <li key={i} className="flex items-start gap-3">
+            <div className="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center shrink-0 mt-0.5">
+              <span className="text-xs text-zinc-400 font-semibold">{i + 1}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white text-sm font-medium">{label}</p>
+              <p className="text-zinc-500 text-xs mt-0.5">{desc}</p>
+            </div>
+            {path && (
+              <button
+                onClick={() => navigate(path)}
+                className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              >
+                <Icon className="w-3 h-3" /> Go
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }
@@ -37,11 +76,7 @@ function DiscoveryFeed() {
   }, [])
 
   if (loading) return <div className="flex justify-center py-6"><Spinner /></div>
-  if (!items.length) return (
-    <p className="text-zinc-500 text-sm">
-      Sync your library and run enrichment to generate personalised recommendations.
-    </p>
-  )
+  if (!items.length) return <DiscoveryEmptyState />
 
   return (
     <div className="space-y-1">

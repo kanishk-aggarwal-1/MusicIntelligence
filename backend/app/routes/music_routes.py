@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
+from sqlalchemy import func, nullslast
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
@@ -46,10 +46,24 @@ def _top_tag_name(song: Song):
     return tags[0].tag.name
 
 
+VALID_SORTS = {"recent", "plays", "popularity", "alpha"}
+
+
+def _sort_col(sort: str, last_listen_subq):
+    if sort == "plays":
+        return last_listen_subq.c.listening_count.desc()
+    if sort == "popularity":
+        return nullslast(Song.popularity_score.desc())
+    if sort == "alpha":
+        return Song.title.asc()
+    return last_listen_subq.c.last_listened_at.desc()   # "recent" default
+
+
 @router.get("/")
 def get_songs(
     request: Request,
     q: str | None = None,
+    sort: str = "recent",
     genre: str | None = None,
     limit: int = 500,
     offset: int = 0,
@@ -107,11 +121,13 @@ def get_songs(
     if enrichment_status:
         query = query.filter(Song.enrichment_status == enrichment_status)
 
+    safe_sort = sort if sort in VALID_SORTS else "recent"
+
     # Push ORDER BY + LIMIT into SQL only for the simple case.
     # When quick_filter or q is set we need Python-side filtering first.
     if not quick_filter and not q:
         query = query.order_by(
-            last_listen_subq.c.last_listened_at.desc(),
+            _sort_col(safe_sort, last_listen_subq),
             Song.title,
         ).limit(safe_limit).offset(safe_offset)
 
@@ -191,7 +207,14 @@ def get_songs(
 
     if quick_filter or q:
         # Python-filtered results: sort and paginate here
-        filtered.sort(key=lambda row: (row["last_listened_at"] is None, row["last_listened_at"] or "", row["title"]), reverse=True)
+        if safe_sort == "plays":
+            filtered.sort(key=lambda r: (-(r["listening_count"] or 0), r["title"]))
+        elif safe_sort == "popularity":
+            filtered.sort(key=lambda r: (-(r["popularity_score"] or 0), r["title"]))
+        elif safe_sort == "alpha":
+            filtered.sort(key=lambda r: (r["title"] or "").lower())
+        else:
+            filtered.sort(key=lambda r: (r["last_listened_at"] is None, r["last_listened_at"] or "", r["title"]), reverse=True)
         return filtered[safe_offset:safe_offset + safe_limit]
 
     # Common path: SQL already applied ORDER BY + LIMIT + OFFSET

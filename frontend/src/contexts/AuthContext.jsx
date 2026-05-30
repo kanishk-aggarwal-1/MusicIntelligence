@@ -6,12 +6,20 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [serverWarming, setServerWarming] = useState(false)
 
   useEffect(() => {
+    // If the first call takes more than 5 s the Render instance is cold-starting.
+    const warmTimer = setTimeout(() => setServerWarming(true), 5000)
     api.get('/user/session')
       .then(d => setUser(d.logged_in ? d : null))
       .catch(() => setUser(null))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        clearTimeout(warmTimer)
+        setServerWarming(false)
+        setLoading(false)
+      })
+    return () => clearTimeout(warmTimer)
   }, [])
 
   async function login() {
@@ -96,7 +104,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, serverWarming, login, logout }}>
       {children}
     </AuthContext.Provider>
   )

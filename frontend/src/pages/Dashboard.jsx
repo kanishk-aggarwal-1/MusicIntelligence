@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Music2, Users, Disc, TrendingUp, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
@@ -112,6 +112,8 @@ export default function Dashboard() {
   )
   if (error) return <div className="p-8 text-red-400">{error}</div>
 
+  const trend = useMemo(() => computeTrend(timeline), [timeline])
+
   const topArtists = (stats?.top_artists || []).map(a => ({
     ...a,
     artist_name: a.artist_name || a.artist,
@@ -191,10 +193,8 @@ export default function Dashboard() {
         <StatCard icon={Music2} label="Artists" value={topArtists.length} />
       </div>
 
-      {computeTrend(timeline) && (
-        <p className="text-zinc-400 text-sm italic border-l-2 border-brand/40 pl-3">
-          {computeTrend(timeline)}
-        </p>
+      {trend && (
+        <p className="text-zinc-400 text-sm italic border-l-2 border-brand/40 pl-3">{trend}</p>
       )}
 
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Spinner /></div>}>

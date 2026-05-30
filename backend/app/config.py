@@ -1,4 +1,4 @@
-﻿from dotenv import load_dotenv
+from dotenv import load_dotenv
 import os
 from cryptography.fernet import Fernet
 
@@ -39,6 +39,7 @@ class Settings:
 
     # Secret expected in X-Cron-Secret header for /ops/sync-all.
     CRON_SECRET = os.getenv("CRON_SECRET")
+
 
     _default_local_origins = [
         "http://127.0.0.1:5173",

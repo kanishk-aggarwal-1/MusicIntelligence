@@ -13,6 +13,7 @@ const PAGE_TITLES = {
   '/for-you':   'For You',
   '/playlists': 'Playlists',
   '/features':  'Tools',
+  '/settings':  'Settings',
 }
 
 export default function Layout({ children }) {
