@@ -171,6 +171,8 @@ def sync_listening_history(db, user_id, tracks):
         artist_name = item.get("artist")
         spotify_id = item.get("spotify_id")
         artist_spotify_id = item.get("artist_spotify_id")
+        image_url = item.get("image_url")
+        preview_url = item.get("preview_url")
 
         if not title or not artist_name:
             continue
@@ -201,6 +203,8 @@ def sync_listening_history(db, user_id, tracks):
                 title=title,
                 artist_id=artist.id,
                 spotify_id=spotify_id,
+                image_url=image_url,
+                preview_url=preview_url,
                 discovery_source="history_sync",
                 discovery_confidence=1.0,
                 enrichment_status="pending",
@@ -217,6 +221,10 @@ def sync_listening_history(db, user_id, tracks):
 
         if spotify_id and not song.spotify_id:
             song.spotify_id = spotify_id
+        if image_url:
+            song.image_url = image_url
+        if preview_url:
+            song.preview_url = preview_url
 
         if _needs_enrichment(song):
             data = enrich_song(song)
