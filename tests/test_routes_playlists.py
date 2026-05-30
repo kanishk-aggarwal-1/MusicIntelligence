@@ -15,7 +15,7 @@ from backend.app.services.generated_playlist_service import (
     create_playlist_preview_record,
     serialize_generated_playlist,
 )
-from backend.app.routes.playlist_routes import _apply_quality_controls, _dedupe_keep_order
+from backend.app.routes.playlist_routes import _apply_quality_controls, _cap_artist_repetition, _dedupe_keep_order
 
 
 def _session(user_id: str):
@@ -230,6 +230,24 @@ def test_apply_quality_controls_familiarity_sorts_by_spotify_id():
     result = _apply_quality_controls(details, diversity=0.3, familiarity=0.9)
     # High familiarity means known tracks should come first
     assert result[0]["song"].spotify_id is not None
+
+
+def test_cap_artist_repetition_prefers_alternatives_when_available():
+    artist_a = Artist(name="A")
+    artist_b = Artist(name="B")
+    artist_c = Artist(name="C")
+    details = [
+        {"song": Song(title="A1", artist=artist_a, spotify_id="a1", is_deleted=False), "score": 0.99},
+        {"song": Song(title="A2", artist=artist_a, spotify_id="a2", is_deleted=False), "score": 0.98},
+        {"song": Song(title="A3", artist=artist_a, spotify_id="a3", is_deleted=False), "score": 0.97},
+        {"song": Song(title="B1", artist=artist_b, spotify_id="b1", is_deleted=False), "score": 0.8},
+        {"song": Song(title="C1", artist=artist_c, spotify_id="c1", is_deleted=False), "score": 0.7},
+    ]
+
+    result = _cap_artist_repetition(details, max_tracks=3, diversity=0.8)
+    artists = [item["song"].artist.name for item in result[:3]]
+
+    assert artists == ["A", "B", "C"]
 
 
 # ── serialize_generated_playlist ────────────────────────────────────────────
