@@ -87,6 +87,13 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
     }
   }
 
+  async function startEnrichment({ retryPartial = true, retryFailed = true, limit = 500 } = {}) {
+    const job = await api.post(`/user/backfill-metadata/job?limit=${limit}&retry_partial=${retryPartial}&retry_failed=${retryFailed}`)
+    setEnrichmentJob(job)
+    startPolling('enrichment', job.id)
+    return job
+  }
+
   useEffect(() => {
     refreshSyncStatus()
     return () => {
@@ -101,6 +108,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
     enrichmentJob,
     syncStatus,
     startSync,
+    startEnrichment,
     refreshSyncStatus,
   }
 }

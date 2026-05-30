@@ -31,10 +31,12 @@ function statusText(status) {
   return 'Up to date'
 }
 
-function JobToast({ job, label }) {
+function JobToast({ job, label, onRetry }) {
   if (!job) return null
+  const failed = job.status === 'failed'
+  const detail = failed ? (job.error || job.message || 'Job failed') : job.message
   return (
-    <div className="mx-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-xs space-y-1.5">
+    <div className={`mx-1 px-3 py-2 rounded-lg border text-xs space-y-1.5 ${failed ? 'bg-red-950/30 border-red-900/60' : 'bg-zinc-800 border-zinc-700'}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-zinc-300 truncate">{label || job.job_type?.replace(/_/g, ' ')}</span>
         {job.status === 'succeeded' && <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />}
@@ -48,7 +50,16 @@ function JobToast({ job, label }) {
           />
         </div>
       )}
-      <p className="text-zinc-500 truncate">{job.message}</p>
+      <p className={failed ? 'text-red-300 line-clamp-2' : 'text-zinc-500 truncate'}>{detail}</p>
+      {failed && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="text-red-200 hover:text-white underline underline-offset-2"
+        >
+          Retry
+        </button>
+      )}
     </div>
   )
 }
@@ -56,11 +67,19 @@ function JobToast({ job, label }) {
 export default function Sidebar({ onNavigate }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const { syncing, syncJob, enrichmentJob, syncStatus, startSync } = useSyncFlow()
+  const { syncing, syncJob, enrichmentJob, syncStatus, startSync, startEnrichment } = useSyncFlow()
 
   async function handleSync() {
     try {
       await startSync()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  async function handleEnrichmentRetry() {
+    try {
+      await startEnrichment()
     } catch (e) {
       console.error(e)
     }
@@ -117,8 +136,8 @@ export default function Sidebar({ onNavigate }) {
         </button>
 
         <div className="space-y-2">
-          <JobToast job={syncJob} label="Syncing history" />
-          <JobToast job={enrichmentJob} label="Enriching tags" />
+          <JobToast job={syncJob} label="Syncing history" onRetry={handleSync} />
+          <JobToast job={enrichmentJob} label="Enriching tags" onRetry={handleEnrichmentRetry} />
         </div>
 
         {user && (
