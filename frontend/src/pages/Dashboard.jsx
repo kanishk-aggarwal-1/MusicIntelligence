@@ -2,7 +2,45 @@ import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Music2, Users, Disc, TrendingUp, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
+import { SkeletonCard, SkeletonChartCard } from '../components/ui/Skeleton'
 import { useSyncFlow } from '../hooks/useSyncFlow'
+
+/** Derive a one-sentence trend from the taste-timeline payload. */
+function computeTrend(timeline) {
+  const rows = timeline?.monthly_top_genres || []
+  const months = [...new Set(rows.map(r => r.month))].sort()
+  if (months.length < 2) return null
+
+  const cur = months[months.length - 1]
+  const prev = months[months.length - 2]
+
+  const tally = (m) => {
+    const t = {}; let total = 0
+    for (const r of rows) {
+      if (r.month !== m) continue
+      t[r.genre] = (t[r.genre] || 0) + r.plays
+      total += r.plays
+    }
+    return { t, total }
+  }
+
+  const { t: curT, total: curTotal } = tally(cur)
+  const { t: prevT, total: prevTotal } = tally(prev)
+  if (!curTotal || !prevTotal) return null
+
+  const [topGenre] = Object.entries(curT).sort((a, b) => b[1] - a[1])
+  if (!topGenre) return null
+
+  const [genre] = topGenre
+  const curPct  = (curT[genre]  || 0) / curTotal
+  const prevPct = (prevT[genre] || 0) / prevTotal
+  const diff = curPct - prevPct
+
+  if (Math.abs(diff) < 0.05) return `Your listening is steady — ${genre} leads this month.`
+  const dir = diff > 0 ? 'more' : 'less'
+  const change = Math.round(Math.abs(diff) * 100)
+  return `You've been listening to ${dir} ${genre} this month (${diff > 0 ? '+' : '-'}${change}% of plays).`
+}
 
 const DashboardCharts = lazy(() => import('../components/dashboard/DashboardCharts'))
 
@@ -41,7 +79,7 @@ export default function Dashboard() {
       .finally(() => setLoading(false))
   }, [days])
 
-  const { syncing, syncJob, enrichmentJob, startSync } = useSyncFlow({
+  const { syncing, syncJob, enrichmentJob, syncError, startSync } = useSyncFlow({
     onSyncFinished: (job) => {
       const result = job.result || {}
       if (result.enrichment_queued) setEnriching(true)
@@ -53,13 +91,23 @@ export default function Dashboard() {
     },
   })
 
+  async function handleSync() {
+    try { await startSync() } catch { /* error shown via syncError */ }
+  }
+
   useEffect(() => {
     loadData()
   }, [loadData])
 
   if (loading) return (
-    <div className="flex items-center justify-center h-96">
-      <Spinner size="lg" />
+    <div className="p-4 md:p-8 space-y-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[...Array(4)].map((_, i) => <SkeletonCard key={i} />)}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <SkeletonChartCard className="lg:col-span-2" />
+        <SkeletonChartCard />
+      </div>
     </div>
   )
   if (error) return <div className="p-8 text-red-400">{error}</div>
@@ -98,15 +146,20 @@ export default function Dashboard() {
               <span>{enrichmentJob?.message || 'Enriching tags and genres...'}</span>
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={startSync}
-              disabled={syncing}
-              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-brand text-black text-sm font-semibold hover:bg-green-400 disabled:opacity-60"
-            >
-              {syncing || syncJob ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
-              {syncing || syncJob ? 'Syncing...' : 'Sync Now'}
-            </button>
+            <>
+              {syncError && (
+                <p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-3 py-2">{syncError}</p>
+              )}
+              <button
+                type="button"
+                onClick={handleSync}
+                disabled={syncing}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-brand text-black text-sm font-semibold hover:bg-green-400 disabled:opacity-60"
+              >
+                {syncing || syncJob ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
+                {syncing || syncJob ? 'Syncing...' : 'Sync Now'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -137,6 +190,12 @@ export default function Dashboard() {
         <StatCard icon={Disc} label="Top genre" value={topGenre} />
         <StatCard icon={Music2} label="Artists" value={topArtists.length} />
       </div>
+
+      {computeTrend(timeline) && (
+        <p className="text-zinc-400 text-sm italic border-l-2 border-brand/40 pl-3">
+          {computeTrend(timeline)}
+        </p>
+      )}
 
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Spinner /></div>}>
         <DashboardCharts

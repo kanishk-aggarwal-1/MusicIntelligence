@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Music2, ListMusic, Sparkles, Tag, LogOut, RefreshCw, CheckCircle, XCircle } from 'lucide-react'
+import { LayoutDashboard, Music2, ListMusic, Tag, Heart, Wrench, LogOut, RefreshCw, CheckCircle, XCircle, Search } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSyncFlow } from '../../hooks/useSyncFlow'
 
@@ -7,9 +7,16 @@ const links = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/songs',     icon: Music2,          label: 'Songs'     },
   { to: '/browse',    icon: Tag,             label: 'Browse'    },
+  { to: '/for-you',   icon: Heart,           label: 'For You'   },
   { to: '/playlists', icon: ListMusic,        label: 'Playlists' },
-  { to: '/features',  icon: Sparkles,         label: 'Features'  },
+  { to: '/features',  icon: Wrench,           label: 'Tools'     },
 ]
+
+function formatUserId(id) {
+  if (!id) return ''
+  // Strip spotify:user: prefix if present, replace underscores/dashes, capitalise
+  return id.replace(/^spotify:user:/i, '').replace(/[_-]/g, ' ')
+}
 
 function formatAgo(value) {
   if (!value) return null
@@ -91,8 +98,28 @@ export default function Sidebar({ onNavigate }) {
       <div className="px-5 py-5 border-b border-zinc-800">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-full bg-brand flex items-center justify-center text-black text-sm">♪</div>
-          <span className="font-semibold text-white">MusicIntel</span>
+          <div className="min-w-0">
+            <span className="font-semibold text-white">MusicIntel</span>
+            {syncStatus?.total_songs > 0 && (
+              <p className="text-zinc-600 text-xs leading-tight">
+                {syncStatus.total_songs.toLocaleString()} songs
+              </p>
+            )}
+          </div>
         </div>
+      </div>
+
+      {/* Search trigger */}
+      <div className="px-3 py-2 border-b border-zinc-800">
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 text-zinc-500 text-sm hover:text-zinc-300 transition-colors text-left"
+        >
+          <Search className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1">Search</span>
+          <kbd className="font-mono text-xs bg-zinc-700 px-1.5 py-0.5 rounded">⌘K</kbd>
+        </button>
       </div>
 
       {/* Nav */}
@@ -142,7 +169,9 @@ export default function Sidebar({ onNavigate }) {
 
         {user && (
           <div className="px-3 py-2">
-            <p className="text-xs text-zinc-500 truncate">{user.user_id}</p>
+            <p className="text-xs text-zinc-500 truncate capitalize" title={user.user_id}>
+              {formatUserId(user.user_id)}
+            </p>
           </div>
         )}
 
