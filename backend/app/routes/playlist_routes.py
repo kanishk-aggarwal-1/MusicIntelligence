@@ -138,6 +138,48 @@ def _enforce_known_ratio(details, max_tracks: int, min_known_ratio: float):
     return reordered
 
 
+def _artist_name(item):
+    song = item.get("song") if isinstance(item, dict) else None
+    artist = song.artist if song else None
+    return (artist.name if artist else "unknown").strip().lower()
+
+
+def _cap_artist_repetition(details, max_tracks: int, diversity: float):
+    if not details or max_tracks <= 0:
+        return details
+
+    if diversity >= 0.75:
+        max_per_artist = 1
+    elif diversity >= 0.45:
+        max_per_artist = 2
+    else:
+        max_per_artist = 3
+
+    selected = []
+    deferred = []
+    artist_counts = {}
+
+    for item in details:
+        artist = _artist_name(item)
+        if artist_counts.get(artist, 0) < max_per_artist:
+            selected.append(item)
+            artist_counts[artist] = artist_counts.get(artist, 0) + 1
+        else:
+            deferred.append(item)
+        if len(selected) >= max_tracks:
+            break
+
+    if len(selected) < max_tracks:
+        for item in deferred:
+            selected.append(item)
+            if len(selected) >= max_tracks:
+                break
+
+    selected_ids = {id(item) for item in selected}
+    selected.extend(item for item in details if id(item) not in selected_ids)
+    return selected
+
+
 def _build_playlist_warnings(details, max_tracks, created_track_count=0, spotify_rate_limited=False):
     warnings = []
     if not details:
@@ -248,6 +290,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     details = recommendation_result["items"]
     details = _apply_quality_controls(details, payload.diversity, payload.familiarity)
     details = _enforce_known_ratio(details, requested_tracks, payload.min_known_ratio)
+    details = _cap_artist_repetition(details, requested_tracks, payload.diversity)
     selected = details[:requested_tracks]
 
     request_params = {
