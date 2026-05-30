@@ -215,7 +215,7 @@ def _refresh_access_token_if_needed(db: Session, session_row: UserSession):
         return token
 
     if not refresh_token:
-        return token
+        return None
 
     try:
         sp_oauth = get_spotify_oauth()
@@ -227,7 +227,7 @@ def _refresh_access_token_if_needed(db: Session, session_row: UserSession):
     except Exception:
         logger.exception("Failed to refresh Spotify token for user %s", session_row.user_id)
 
-    return token
+    return None
 
 
 def _serialize_session(session_row: UserSession | None, token: str | None):
