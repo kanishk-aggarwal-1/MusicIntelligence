@@ -50,7 +50,11 @@ def install_error_handlers(app):
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if settings.APP_ENV == "production":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        record_request(request.method, request.url.path, response.status_code, elapsed)
+        # Use the route template ("/songs/{song_id}") not the rendered path
+        # ("/songs/123") to keep per-route metric cardinality bounded.
+        route = request.scope.get("route")
+        route_path = route.path if route is not None else request.url.path
+        record_request(request.method, route_path, response.status_code, elapsed)
         logger.info(
             "request_completed method=%s path=%s status=%s duration_ms=%s request_id=%s",
             request.method,
