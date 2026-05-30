@@ -30,10 +30,18 @@ from .routes import ops_routes
 app = FastAPI(title="Music Recommendation API")
 install_error_handlers(app)
 
-# Local development CORS configuration for frontend testing.
+# In development allow any localhost/127.0.0.1 port so Vite port-increment
+# and hostname differences (localhost vs 127.0.0.1) never cause CORS 400s.
+_dev_origin_regex = (
+    r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+    if settings.APP_ENV != "production"
+    else None
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=_dev_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

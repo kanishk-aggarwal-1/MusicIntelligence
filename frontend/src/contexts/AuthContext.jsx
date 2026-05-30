@@ -17,8 +17,9 @@ export function AuthProvider({ children }) {
   async function login() {
     try { await api.post('/user/logout') } catch {}
 
+    const frontendOrigin = encodeURIComponent(window.location.origin)
     const popup = window.open(
-      `${api.baseUrl}/user/login`,
+      `${api.baseUrl}/user/login?frontend_origin=${frontendOrigin}`,
       'spotify_login',
       'width=520,height=740'
     )
