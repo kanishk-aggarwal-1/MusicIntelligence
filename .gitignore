@@ -33,6 +33,7 @@ Thumbs.db
 .vscode/
 
 # Project-specific runtime artifacts
+.cache
 backend/.cache
 backend/app/**/__pycache__/
 scripts/__pycache__/
