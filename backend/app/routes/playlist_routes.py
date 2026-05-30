@@ -231,6 +231,29 @@ def _playlist_quality_notes(*, diversity: float, recent_song_ids: set[int]):
     return notes
 
 
+def _playlist_preview_summary(serialized_playlist: dict, quality_notes: list[str]):
+    summary = serialized_playlist.get("summary") or {}
+    tags = summary.get("dominant_tags") or []
+    genres = summary.get("dominant_genres") or []
+    artist_count = summary.get("artist_count") or 0
+
+    parts = []
+    if genres:
+        parts.append(f"Built around {', '.join(genres[:2])}")
+    elif tags:
+        parts.append(f"Built around {', '.join(tags[:2])}")
+    else:
+        parts.append("Built from your current taste profile")
+
+    if artist_count:
+        parts.append(f"{artist_count} artists for variety")
+
+    if quality_notes:
+        parts.append("with guardrails for freshness and balance")
+
+    return " - ".join(parts) + "."
+
+
 def _build_playlist_warnings(details, max_tracks, created_track_count=0, spotify_rate_limited=False):
     warnings = []
     if not details:
@@ -370,12 +393,14 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     serialized = serialize_generated_playlist(record, include_tracks=True)
     resolved_count = sum(1 for item in selected if item["song"].spotify_id)
     warnings = _build_playlist_warnings(selected, requested_tracks, created_track_count=resolved_count)
+    quality_notes = _playlist_quality_notes(diversity=payload.diversity, recent_song_ids=recent_song_ids)
 
     return {
         "message": "Playlist preview generated",
         "generated_playlist": serialized,
         "recommendation_candidates": len(details),
         "warnings": warnings,
+        "preview_summary": _playlist_preview_summary(serialized, quality_notes),
         "elapsed_seconds": round(time.perf_counter() - started, 2),
         "quality_controls": {
             "min_known_ratio": payload.min_known_ratio,
@@ -384,7 +409,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
             "max_tracks": requested_tracks,
             "artist_cap": _artist_cap_for_diversity(payload.diversity),
             "recent_repeat_guard_active": bool(recent_song_ids),
-            "notes": _playlist_quality_notes(diversity=payload.diversity, recent_song_ids=recent_song_ids),
+            "notes": quality_notes,
         },
     }
 

@@ -580,6 +580,45 @@ def _feedback_adjustment(feedback_counts, *, context_type, familiarity_score, ra
     return adjustment, "; ".join(notes)
 
 
+def _human_reasons(song, *, tag_names, play_count, context_type, components, feedback_reason=None):
+    reasons = []
+    artist_name = song.artist.name if song.artist else None
+    tags = [tag for tag in (tag_names or []) if tag]
+
+    if play_count >= 5 and artist_name:
+        reasons.append(f"because you often play {artist_name}")
+    elif play_count > 0:
+        reasons.append("because it already fits your listening history")
+
+    if tags:
+        reasons.append(f"matches your {tags[0]} taste")
+    elif song.genre:
+        reasons.append(f"matches your {song.genre} listening")
+
+    if context_type:
+        context_label = context_type.replace("-", " ")
+        reasons.append(f"fits a {context_label} session")
+
+    if components.get("co_occurrence_boost", 0) > 0:
+        reasons.append("often appears near songs you replay")
+
+    if feedback_reason:
+        reasons.append("adjusted using your feedback")
+
+    if not reasons:
+        reasons.append("recommended from your overall taste profile")
+
+    deduped = []
+    seen = set()
+    for reason in reasons:
+        key = reason.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(reason)
+    return deduped[:4]
+
+
 def recommend_songs(
     db,
     user_id,
@@ -660,12 +699,12 @@ def recommend_songs(
         )
         final_score = max(0.0, min(1.0, score + feedback_boost * 0.20))
 
-        reasons = [f"TF-IDF similarity {r['tfidf_similarity']:.2f}"]
+        debug_reasons = [f"TF-IDF similarity {r['tfidf_similarity']:.2f}"]
         if r["co_occurrence_boost"] > 0:
-            reasons.append(f"Often heard in the same session (+{r['co_occurrence_boost']:.2f})")
-        reasons.append(f"Played {play_count} time{'s' if play_count != 1 else ''}")
+            debug_reasons.append(f"Often heard in the same session (+{r['co_occurrence_boost']:.2f})")
+        debug_reasons.append(f"Played {play_count} time{'s' if play_count != 1 else ''}")
         if feedback_reason:
-            reasons.append(feedback_reason.capitalize())
+            debug_reasons.append(feedback_reason.capitalize())
 
         components = {
             "tfidf_similarity": r["tfidf_similarity"],
@@ -675,11 +714,20 @@ def recommend_songs(
             "feedback_events": int(sum(feedback_counts.values())),
             "known_spotify_score": 1.0 if song.spotify_id else 0.0,
         }
+        reasons = _human_reasons(
+            song,
+            tag_names=r["tags"],
+            play_count=play_count,
+            context_type=context_type,
+            components=components,
+            feedback_reason=feedback_reason,
+        )
 
         items.append({
             "song": song,
             "score": final_score,
             "reasons": reasons,
+            "debug_reasons": debug_reasons,
             "components": components,
             "algorithm_version": ML_ALGORITHM_VERSION,
             "tag_names": r["tags"],
@@ -706,6 +754,7 @@ def build_discovery_feed(db, user_id, limit=20):
                 "spotify_id": song.spotify_id,
                 "score": round(item["score"], 4),
                 "reasons": item["reasons"],
+                "debug_reasons": item.get("debug_reasons", []),
                 "components": item["components"],
                 "discovery_source": song.discovery_source,
                 "discovery_confidence": song.discovery_confidence,

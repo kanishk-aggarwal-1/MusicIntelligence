@@ -24,10 +24,14 @@ function QualityNotes({ preview }) {
   const controls = preview?.quality_controls
   const notes = controls?.notes || []
   const warnings = preview?.warnings || []
-  if (!notes.length && !warnings.length) return null
+  const summary = preview?.preview_summary
+  if (!summary && !notes.length && !warnings.length) return null
 
   return (
     <div className="px-5 py-3 border-b border-zinc-800 bg-zinc-950/40 space-y-2">
+      {summary && (
+        <p className="text-sm text-zinc-300">{summary}</p>
+      )}
       {notes.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {notes.map(note => (

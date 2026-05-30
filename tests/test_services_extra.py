@@ -31,6 +31,7 @@ from backend.app.services.recommendation_service import (
     build_song_vector,
     build_user_profile,
     discover_new_songs,
+    _human_reasons,
     recommend_songs,
     sync_listening_history,
 )
@@ -217,6 +218,43 @@ def test_recommend_songs_with_context_type(db_session):
 
     result = recommend_songs(db_session, "u1", context_type="focus", allow_discovery=False, limit=5)
     assert isinstance(result, list)
+
+
+def test_human_reasons_translate_scoring_to_product_copy(db_session):
+    artist = _artist(db_session, "Reason Artist")
+    song = Song(title="Reason Song", artist_id=artist.id, artist=artist, genre="indie", is_deleted=False)
+
+    reasons = _human_reasons(
+        song,
+        tag_names=["dream pop", "indie"],
+        play_count=8,
+        context_type="late-night",
+        components={"co_occurrence_boost": 0.2},
+        feedback_reason="boosted by feedback",
+    )
+
+    assert "because you often play Reason Artist" in reasons
+    assert "matches your dream pop taste" in reasons
+    assert "fits a late night session" in reasons
+    assert not any("TF-IDF" in reason for reason in reasons)
+
+
+def test_recommend_songs_returns_human_and_debug_reasons(db_session):
+    db_session.add(_session("u1"))
+    s1 = _song_with_tag(db_session, artist_name="Reason Feed A", title="Reason Feed S1", tag_name="indie", spotify_id="rf1")
+    s2 = _song_with_tag(db_session, artist_name="Reason Feed B", title="Reason Feed S2", tag_name="rock", spotify_id="rf2")
+    db_session.add_all([
+        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+    ])
+    db_session.commit()
+
+    result = recommend_songs(db_session, "u1", return_details=True, allow_discovery=False, limit=5)
+
+    assert result
+    assert result[0]["reasons"]
+    assert result[0]["debug_reasons"]
+    assert not result[0]["reasons"][0].startswith("TF-IDF")
 
 
 def test_discover_new_songs_ignores_lastfm_artist_failures(monkeypatch, db_session):

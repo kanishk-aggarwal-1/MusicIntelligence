@@ -193,6 +193,8 @@ def test_playlist_preview_creates_record(client_factory, db_session):
     assert data["quality_controls"]["artist_cap"] == 2
     assert data["quality_controls"]["recent_repeat_guard_active"] is False
     assert data["quality_controls"]["notes"]
+    assert data["preview_summary"]
+    assert "artists for variety" in data["preview_summary"]
     assert db_session.query(GeneratedPlaylist).count() == before + 1
 
 
