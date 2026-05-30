@@ -8,7 +8,7 @@ from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..time_utils import utcnow_naive
 
-ALGORITHM_VERSION = "heuristic-v2"
+from .ml_recommendation_service import ALGORITHM_VERSION
 
 
 def _loads(text: str | None):
