@@ -43,6 +43,8 @@ Generate `SESSION_ENCRYPTION_KEY` locally:
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+In production, the backend refuses to start if this key is missing or invalid.
+
 After the backend URL exists, update the Spotify Developer Dashboard redirect URI to match:
 
 ```text

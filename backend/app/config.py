@@ -1,5 +1,6 @@
 ﻿from dotenv import load_dotenv
 import os
+from cryptography.fernet import Fernet
 
 load_dotenv()
 
@@ -49,6 +50,12 @@ class Settings:
             raise ValueError("BACKEND_CORS_ORIGINS must not contain '*' in production")
         if BACKEND_CORS_ORIGINS == _default_local_origins:
             raise ValueError("BACKEND_CORS_ORIGINS must be set explicitly in production")
+        if not SESSION_ENCRYPTION_KEY:
+            raise ValueError("SESSION_ENCRYPTION_KEY must be set in production")
+        try:
+            Fernet(SESSION_ENCRYPTION_KEY.encode("utf-8"))
+        except Exception as exc:
+            raise ValueError("SESSION_ENCRYPTION_KEY must be a valid Fernet key in production") from exc
 
 
 settings = Settings()

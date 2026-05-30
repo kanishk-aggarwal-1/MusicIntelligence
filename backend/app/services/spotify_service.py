@@ -1,5 +1,8 @@
 import json
 import logging
+import base64
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 
 import spotipy
@@ -13,6 +16,9 @@ from ..models.user_session import UserSession
 from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow_naive
 
 logger = logging.getLogger(__name__)
+
+SESSION_COOKIE_NAME = "musicintel_session"
+SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 
 SCOPES = (
     "user-read-recently-played "
@@ -29,7 +35,9 @@ def _get_cipher():
     try:
         return Fernet(key.encode("utf-8"))
     except Exception:
-        logger.warning("SESSION_ENCRYPTION_KEY is invalid; using plaintext token storage")
+        if settings.APP_ENV == "production":
+            raise
+        logger.warning("SESSION_ENCRYPTION_KEY is invalid; using plaintext token storage in development")
         return None
 
 
@@ -60,6 +68,59 @@ def _cipher_configured():
 
 def _looks_fernet_token(value: str | None):
     return bool(value and value.startswith("gAAAA"))
+
+
+def _session_signing_key():
+    key = (settings.SESSION_ENCRYPTION_KEY or "").strip()
+    if key:
+        return key.encode("utf-8")
+    if settings.APP_ENV == "production":
+        raise RuntimeError("SESSION_ENCRYPTION_KEY is required for signed sessions in production")
+    return b"musicintelligence-development-session-key"
+
+
+def _b64url_encode(value: bytes):
+    return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(value: str):
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("utf-8"))
+
+
+def create_session_cookie_value(user_id: str):
+    issued_at = str(int(utcnow_naive().timestamp()))
+    payload = _b64url_encode(json.dumps({"user_id": user_id, "iat": issued_at}, separators=(",", ":")).encode("utf-8"))
+    signature = hmac.new(_session_signing_key(), payload.encode("utf-8"), hashlib.sha256).digest()
+    return f"{payload}.{_b64url_encode(signature)}"
+
+
+def read_session_cookie_value(cookie_value: str | None):
+    if not cookie_value or "." not in cookie_value:
+        return None
+    payload, signature = cookie_value.split(".", 1)
+    expected = _b64url_encode(hmac.new(_session_signing_key(), payload.encode("utf-8"), hashlib.sha256).digest())
+    if not hmac.compare_digest(signature, expected):
+        return None
+    try:
+        data = json.loads(_b64url_decode(payload).decode("utf-8"))
+    except Exception:
+        return None
+    issued_at = int(data.get("iat") or 0)
+    if issued_at <= 0 or utcnow_naive().timestamp() - issued_at > SESSION_COOKIE_MAX_AGE:
+        return None
+    return data.get("user_id")
+
+
+def get_session_cookie_options():
+    secure = settings.APP_ENV == "production"
+    return {
+        "key": SESSION_COOKIE_NAME,
+        "httponly": True,
+        "secure": secure,
+        "samesite": "none" if secure else "lax",
+        "max_age": SESSION_COOKIE_MAX_AGE,
+    }
 
 
 def _rewrap_session_secrets_if_needed(db: Session, session_row: UserSession, token: str | None, refresh_token: str | None):
@@ -202,7 +263,9 @@ def load_latest_user_session(db: Session):
 def load_request_user_session(db: Session, request: Request | None = None):
     requested_user_id = None
     if request is not None:
-        requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
+        requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
+        if not requested_user_id and settings.APP_ENV != "production":
+            requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
     return load_user_session(db, user_id=requested_user_id)
 
 
