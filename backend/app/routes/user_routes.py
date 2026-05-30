@@ -235,7 +235,8 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
 
     if not token or not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    enforce_rate_limit(request, namespace="sync_history", user_id=user_id, limit=10, window_seconds=60)
+    # Shared namespace with sync_history_job so both paths count against the same budget.
+    enforce_rate_limit(request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60)
 
     sp = spotipy.Spotify(auth=token)
     tracks = fetch_recent_tracks(sp, max_tracks=50)
@@ -320,11 +321,14 @@ def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Se
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    enforce_rate_limit(request, namespace="sync_history_job", user_id=user_id, limit=10, window_seconds=60)
 
+    # Check for a running job first — returning it is free and must not burn tokens.
     existing = get_active_job(db, user_id=user_id, job_type="sync_history")
     if existing:
         return serialize_job(existing)
+
+    # Shared namespace with /sync-history so the two paths share one budget.
+    enforce_rate_limit(request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60)
 
     job = create_job(db, user_id=user_id, job_type="sync_history", message="Queued recent-history sync", progress_total=3)
     background_tasks.add_task(run_job, job.id, partial(_run_sync_history_job, user_id=user_id))
@@ -343,7 +347,7 @@ def backfill_metadata(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    enforce_rate_limit(request, namespace="backfill_metadata", user_id=user_id, limit=5, window_seconds=60)
+    enforce_rate_limit(request, namespace="backfill", user_id=user_id, limit=5, window_seconds=60)
 
     result = backfill_missing_metadata(
         db,
@@ -501,11 +505,14 @@ def backfill_metadata_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    enforce_rate_limit(request, namespace="backfill_metadata_job", user_id=user_id, limit=5, window_seconds=60)
 
+    # Return existing job without consuming a rate-limit token.
     existing = get_active_job(db, user_id=user_id, job_type="backfill_metadata")
     if existing:
         return serialize_job(existing)
+
+    # Shared namespace with /backfill-metadata so both paths share one budget.
+    enforce_rate_limit(request, namespace="backfill", user_id=user_id, limit=5, window_seconds=60)
 
     job = create_job(
         db,

@@ -30,6 +30,8 @@ def record_job_failure(job_type: str, error_type: str):
 
 
 def record_request(method: str, path: str, status_code: int, elapsed_seconds: float):
+    # `path` should be the route *template* (e.g. "/songs/{song_id}"), not the
+    # rendered path ("/songs/123"), to keep cardinality bounded.
     route_key = f"{method.upper()} {path}"
     METRICS["requests"][route_key] += 1
     METRICS["request_statuses"][str(status_code)] += 1

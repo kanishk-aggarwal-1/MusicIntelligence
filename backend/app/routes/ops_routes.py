@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -28,15 +29,21 @@ def health(db: Session = Depends(get_db)):
         database = {"status": "error", "message": type(exc).__name__}
         status = "degraded"
 
-    return {
+    body = {
         "status": status,
         "time_utc": utcnow().isoformat(),
         "database": database,
     }
+    http_status = 503 if status != "ok" else 200
+    return JSONResponse(content=body, status_code=http_status)
 
 
 @router.get("/metrics")
-def metrics():
+def metrics(request: Request):
+    """Internal metrics endpoint — requires the same X-Cron-Secret used by the sync cron job."""
+    expected = settings.CRON_SECRET or ""
+    if not expected or request.headers.get("X-Cron-Secret", "") != expected:
+        raise HTTPException(status_code=401, detail="Missing or invalid cron secret")
     return get_metrics_snapshot()
 
 

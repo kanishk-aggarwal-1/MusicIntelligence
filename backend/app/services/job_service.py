@@ -197,5 +197,8 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
         record_job("failed", metric_job_type)
         record_job_failure(metric_job_type, type(exc).__name__)
     finally:
-        record_timing(f"job.{metric_job_type}", time.perf_counter() - started_perf)
+        # Only record timing for real job types; skip the "unknown" sentinel
+        # that means the job_id wasn't found in the DB (no work was done).
+        if metric_job_type != "unknown":
+            record_timing(f"job.{metric_job_type}", time.perf_counter() - started_perf)
         db.close()
