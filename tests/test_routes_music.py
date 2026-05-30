@@ -7,6 +7,7 @@ from backend.app.models.song import Song
 from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
+from backend.app.models.user_song_pref import UserSongPref
 from backend.app.routes import music_routes
 from backend.app.services import enrichment_service
 from backend.app.services.recommendation_service import _apply_enrichment
@@ -153,10 +154,12 @@ def test_songs_list_quick_filter_missing_tags(client_factory, db_session):
 
 def test_songs_list_quick_filter_hidden(client_factory, db_session):
     db_session.add(_session("u1"))
-    visible = _song(db_session, artist_name="Va", title="Visible", is_deleted=False)
-    hidden = _song(db_session, artist_name="Ha", title="Hidden", is_deleted=True)
+    visible = _song(db_session, artist_name="Va", title="Visible")
+    hidden  = _song(db_session, artist_name="Ha", title="Hidden")
     _history(db_session, "u1", visible)
     _history(db_session, "u1", hidden)
+    # Mark hidden via UserSongPref (per-user, not global Song.is_deleted)
+    db_session.add(UserSongPref(user_id="u1", song_id=hidden.id, is_hidden=True))
     db_session.commit()
 
     client = client_factory(music_routes.router)
@@ -169,10 +172,11 @@ def test_songs_list_quick_filter_hidden(client_factory, db_session):
 
 def test_songs_list_quick_filter_active(client_factory, db_session):
     db_session.add(_session("u1"))
-    active = _song(db_session, artist_name="Aa", title="Active Song", is_deleted=False)
-    hidden = _song(db_session, artist_name="Ha", title="Hidden Song", is_deleted=True)
+    active = _song(db_session, artist_name="Aa", title="Active Song")
+    hidden = _song(db_session, artist_name="Ha", title="Hidden Song")
     _history(db_session, "u1", active)
     _history(db_session, "u1", hidden)
+    db_session.add(UserSongPref(user_id="u1", song_id=hidden.id, is_hidden=True))
     db_session.commit()
 
     client = client_factory(music_routes.router)

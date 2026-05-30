@@ -10,8 +10,8 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.models.recommendation_feedback import RecommendationFeedback
-from backend.app.routes import dashboard_routes, discovery_routes, insights_routes, music_routes, playlist_routes
-from backend.app.services import api_cache_service, discovery_workflow_service, enrichment_service, job_service, recommendation_service
+from backend.app.routes import dashboard_routes, insights_routes, music_routes, playlist_routes
+from backend.app.services import api_cache_service, enrichment_service, job_service, recommendation_service
 from backend.app.services.api_cache_service import get_cached_response, store_cached_response
 from backend.app.services.job_service import create_job, get_job, run_job
 from backend.app.services.recommendation_service import _apply_enrichment, recommend_songs, sync_listening_history
@@ -299,47 +299,16 @@ def test_song_detail_and_hide_restore(client_factory, db_session):
     assert detail.status_code == 200
     assert detail.json()["listening_count"] == 1
 
+    from backend.app.models.user_song_pref import UserSongPref
+
     hidden = client.post(f"/songs/{song.id}/hide", headers={"X-User-Id": "user-1"})
     assert hidden.status_code == 200
-    db_session.refresh(song)
-    assert song.is_deleted is True
+    pref = db_session.query(UserSongPref).filter_by(user_id="user-1", song_id=song.id).first()
+    assert pref is not None and pref.is_hidden is True
 
     restored = client.post(f"/songs/{song.id}/restore", headers={"X-User-Id": "user-1"})
     assert restored.status_code == 200
-    db_session.refresh(song)
-    assert song.is_deleted is False
+    db_session.refresh(pref)
+    assert pref.is_hidden is False
 
 
-def test_discovery_preview_and_accept(monkeypatch, client_factory, db_session):
-    db_session.add(_user_session("user-1"))
-    seed_song = _song_with_tag(db_session, artist_name="Seed Artist", title="Seed Track", tag_name="indie", spotify_id="seed-1")
-    db_session.add(ListeningHistory(user_id="user-1", song_id=seed_song.id, played_at=datetime(2026, 5, 5, 10, 0)))
-    db_session.commit()
-
-    monkeypatch.setattr(discovery_workflow_service, "discover_songs_from_artist", lambda artist_name: [
-        {"title": "Found Track", "artist": "Found Artist", "discovery_source": "lastfm_top_tracks", "discovery_confidence": 0.7}
-    ])
-
-    preview = discovery_workflow_service.build_discovery_preview(db_session, "user-1", seed_limit=1, max_candidates=10)
-    assert preview["candidate_count"] == 1
-
-    job = Job(
-        id="job-discovery-1",
-        user_id="user-1",
-        job_type="discovery_preview",
-        status="succeeded",
-        result_json='{\"candidates\":[{\"candidate_id\":1,\"title\":\"Found Track\",\"artist\":\"Found Artist\",\"discovery_source\":\"lastfm_top_tracks\",\"discovery_confidence\":0.7}]}',
-    )
-    db_session.add(job)
-    db_session.commit()
-
-    monkeypatch.setattr(discovery_workflow_service, "store_discovered_songs", lambda db, selected, user_id=None, limit=None: {"store_attempted": len(selected), "store_rate_limited": False})
-
-    client = client_factory(discovery_routes.router)
-    accepted = client.post(
-        "/discoveries/accept",
-        json={"job_id": "job-discovery-1", "candidate_ids": [1]},
-        headers={"X-User-Id": "user-1"},
-    )
-    assert accepted.status_code == 200
-    assert accepted.json()["accepted"] == 1

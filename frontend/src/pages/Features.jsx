@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { RefreshCw, Trash2, BarChart2 } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { RefreshCw, Trash2, BarChart2, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
 
@@ -83,6 +83,70 @@ function ActionButton({ onClick, loading, icon: Icon, label, variant = 'default'
       {loading ? <Spinner size="sm" /> : <Icon className="w-4 h-4" />}
       {label}
     </button>
+  )
+}
+
+function ImportSection() {
+  const [job, setJob]       = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError]   = useState(null)
+  const fileRef = useRef(null)
+
+  // Poll job until done
+  useEffect(() => {
+    if (!job?.id || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return
+    const t = setInterval(async () => {
+      try {
+        const updated = await api.get(`/jobs/${job.id}`)
+        setJob(updated)
+        if (['succeeded', 'failed', 'cancelled'].includes(updated.status)) clearInterval(t)
+      } catch { clearInterval(t) }
+    }, 1500)
+    return () => clearInterval(t)
+  }, [job?.id, job?.status])
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLoading(true)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const result = await api.postForm('/user/import-history/job', form)
+      setJob(result)
+    } catch (err) {
+      setError(err.message || 'Upload failed')
+    } finally {
+      setLoading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <ol className="space-y-1.5 text-sm text-zinc-400 list-decimal list-inside marker:text-zinc-600">
+        <li>Go to <a href="https://www.spotify.com/account/privacy/" target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">spotify.com/account/privacy</a> → <strong className="text-zinc-300">Request data</strong></li>
+        <li>Wait for the email (up to 30 days), then download and unzip the file</li>
+        <li>Upload any <code className="text-xs bg-zinc-800 px-1.5 py-0.5 rounded">StreamingHistory_music_*.json</code> file below — repeat for each file</li>
+      </ol>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <label className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors ${loading ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed' : 'bg-brand text-black hover:bg-green-400'}`}>
+          {loading ? <Spinner size="sm" /> : <Upload className="w-4 h-4" />}
+          {loading ? 'Uploading…' : 'Choose JSON file'}
+          <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleFile} disabled={loading} />
+        </label>
+        {job?.status === 'succeeded' && (
+          <span className="text-green-400 text-sm">
+            ✓ Imported {job.result?.valid_tracks?.toLocaleString() ?? '?'} tracks
+          </span>
+        )}
+      </div>
+
+      {error && <p className="text-red-400 text-sm">{error}</p>}
+      <JobProgress job={job} onRetry={() => fileRef.current?.click()} />
+    </div>
   )
 }
 
@@ -192,6 +256,13 @@ export default function Features() {
         <h1 className="text-2xl font-bold text-white">Library Tools</h1>
         <p className="text-zinc-400 text-sm mt-1">Enrichment, deduplication, and maintenance</p>
       </div>
+
+      <Section
+        title="Import Spotify History"
+        description="Bootstrap your library instantly using Spotify's full data export — includes years of listening history, not just the last 50 tracks."
+      >
+        <ImportSection />
+      </Section>
 
       <Section title="Metadata Enrichment" description="Fetch Last.fm tags and genre data for songs in your library.">
         <div className="flex items-center gap-4 flex-wrap">

@@ -9,6 +9,7 @@ from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..models.song_tag import SongTag
+from ..models.user_song_pref import UserSongPref
 from ..services.enrichment_service import enrich_song
 from ..services.recommendation_service import _apply_enrichment
 from ..services.spotify_service import load_request_user_session
@@ -112,8 +113,18 @@ def get_songs(
         .outerjoin(playlist_use_subq, playlist_use_subq.c.song_id == Song.id)
     )
 
-    if not include_deleted:
-        query = query.filter(Song.is_deleted.is_(False))
+    # Fetch the set of song IDs this user has hidden (per-user, not global).
+    _hidden_ids_rows = (
+        db.query(UserSongPref.song_id)
+        .filter(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+        .all()
+    )
+    hidden_song_ids = {r[0] for r in _hidden_ids_rows}
+
+    # For the SQL-paginated path, exclude hidden songs at the DB level.
+    if not include_deleted and not quick_filter and not q:
+        if hidden_song_ids:
+            query = query.filter(Song.id.notin_(hidden_song_ids))
 
     if genre:
         query = query.filter(Song.genre == genre)
@@ -166,9 +177,15 @@ def get_songs(
             continue
         if quick_filter == "never_used_in_playlist" and playlist_count > 0:
             continue
-        if quick_filter == "hidden" and not s.is_deleted:
+        is_hidden_for_user = s.id in hidden_song_ids
+        # Also exclude hidden songs in the Python-filtered path (quick_filter / q).
+        if not include_deleted and (quick_filter not in ("hidden", None) or q):
+            if is_hidden_for_user and quick_filter != "hidden":
+                continue
+
+        if quick_filter == "hidden" and not is_hidden_for_user:
             continue
-        if quick_filter == "active" and s.is_deleted:
+        if quick_filter == "active" and is_hidden_for_user:
             continue
         if quick_filter == "duplicate_candidates":
             key = f"{(s.artist.name if s.artist else '').lower().strip()}::{_canonical_title(s.title)}"
@@ -201,7 +218,7 @@ def get_songs(
                 "enrichment_error": s.enrichment_error,
                 "discovery_source": s.discovery_source,
                 "discovery_confidence": s.discovery_confidence,
-                "is_deleted": bool(s.is_deleted),
+                "is_deleted": s.id in hidden_song_ids,
             }
         )
 
@@ -280,15 +297,18 @@ def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db
 @router.post("/{song_id}/hide")
 def hide_song(song_id: int, request: Request, db: Session = Depends(get_db)):
     session = load_request_user_session(db, request)
-    if not session.get("user_id"):
+    user_id = session.get("user_id")
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
 
-    song = db.query(Song).filter(Song.id == song_id).first()
-    if not song:
+    if not db.query(Song).filter(Song.id == song_id).first():
         raise HTTPException(status_code=404, detail="Song not found")
 
-    song.is_deleted = True
-    db.add(song)
+    pref = db.query(UserSongPref).filter_by(user_id=user_id, song_id=song_id).first()
+    if pref:
+        pref.is_hidden = True
+    else:
+        db.add(UserSongPref(user_id=user_id, song_id=song_id, is_hidden=True))
     db.commit()
     return {"message": "Song hidden", "song_id": song_id}
 
@@ -296,16 +316,17 @@ def hide_song(song_id: int, request: Request, db: Session = Depends(get_db)):
 @router.post("/{song_id}/restore")
 def restore_song(song_id: int, request: Request, db: Session = Depends(get_db)):
     session = load_request_user_session(db, request)
-    if not session.get("user_id"):
+    user_id = session.get("user_id")
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
 
-    song = db.query(Song).filter(Song.id == song_id).first()
-    if not song:
+    if not db.query(Song).filter(Song.id == song_id).first():
         raise HTTPException(status_code=404, detail="Song not found")
 
-    song.is_deleted = False
-    db.add(song)
-    db.commit()
+    pref = db.query(UserSongPref).filter_by(user_id=user_id, song_id=song_id).first()
+    if pref:
+        pref.is_hidden = False
+        db.commit()
     return {"message": "Song restored", "song_id": song_id}
 
 
