@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from spotipy.exceptions import SpotifyException
 
 from .config import settings
+from .services.metrics_service import record_request
 
 
 logger = logging.getLogger(__name__)
@@ -39,9 +40,17 @@ def install_error_handlers(app):
         request.state.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         started = time.perf_counter()
         response = await call_next(request)
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        elapsed = time.perf_counter() - started
+        elapsed_ms = round(elapsed * 1000, 2)
         response.headers["X-Request-ID"] = request.state.request_id
         response.headers["X-Process-Time-Ms"] = str(elapsed_ms)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if settings.APP_ENV == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        record_request(request.method, request.url.path, response.status_code, elapsed)
         logger.info(
             "request_completed method=%s path=%s status=%s duration_ms=%s request_id=%s",
             request.method,
