@@ -54,6 +54,39 @@ def _playlist_level_summary(items: list[dict[str, Any]], context_type: str | Non
     }
 
 
+def _title_case_context(context_type: str | None):
+    labels = {
+        "focus": "Focus",
+        "workout": "Workout",
+        "late-night": "Late Night",
+        "chill": "Chill",
+    }
+    return labels.get((context_type or "").strip().lower())
+
+
+def build_playlist_name(items: list[dict[str, Any]], *, context_type: str | None = None, explicit_name: str | None = None):
+    if explicit_name and explicit_name.strip():
+        return explicit_name.strip()
+
+    summary = _playlist_level_summary(items, context_type=context_type)
+    genre = next((g for g in summary.get("dominant_genres", []) if g), None)
+    context = _title_case_context(context_type)
+    try:
+        date_label = utcnow_naive().strftime("%b %-d")
+    except ValueError:
+        date_label = utcnow_naive().strftime("%b %#d")
+
+    if genre and context:
+        return f"{genre.title()} {context} Mix - {date_label}"
+    if context == "Late Night":
+        return f"Late Night Chill - {date_label}"
+    if context:
+        return f"{context} Mix - {date_label}"
+    if genre:
+        return f"{genre.title()} Mix - {date_label}"
+    return f"Your Top Picks - {date_label}"
+
+
 def create_playlist_preview_record(
     db: Session,
     *,

@@ -15,6 +15,7 @@ from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..services.generated_playlist_service import (
     ALGORITHM_VERSION,
+    build_playlist_name,
     create_playlist_preview_record,
     get_generated_playlist,
     list_generated_playlists,
@@ -42,6 +43,10 @@ class PlaylistGeneratePayload(BaseModel):
     max_tracks: int = 30
     name: str | None = None
     context_type: str | None = None
+
+
+class PlaylistNamePayload(BaseModel):
+    name: str
 
 
 CONTEXT_DEFAULTS = {
@@ -144,15 +149,6 @@ def _build_playlist_warnings(details, max_tracks, created_track_count=0, spotify
     if spotify_rate_limited:
         warnings.append("Spotify search rate limit was hit during this request, so track resolution was cut short.")
     return warnings
-
-
-def _preview_name(payload: PlaylistGeneratePayload):
-    if payload.name:
-        return payload.name
-    if payload.context_type:
-        return f"MusicIntelligence {payload.context_type.title()} Preview"
-    return "MusicIntelligence Preview"
-
 
 def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, user_id: str):
     resolved_now = 0
@@ -266,7 +262,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     record = create_playlist_preview_record(
         db,
         user_id=user_id,
-        name=_preview_name(payload),
+        name=build_playlist_name(selected, context_type=payload.context_type, explicit_name=payload.name),
         context_type=payload.context_type,
         request_params=request_params,
         candidate_pool_size=len(details),
@@ -315,6 +311,30 @@ def generated_detail(generated_playlist_id: int, request: Request, db: Session =
     if not record:
         raise HTTPException(status_code=404, detail="Generated playlist not found")
 
+    return serialize_generated_playlist(record, include_tracks=True)
+
+
+@router.patch("/generated/{generated_playlist_id}/name")
+def update_generated_name(generated_playlist_id: int, payload: PlaylistNamePayload, request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Playlist name is required")
+    if len(name) > 120:
+        raise HTTPException(status_code=400, detail="Playlist name must be 120 characters or fewer")
+
+    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Generated playlist not found")
+
+    record.name = name
+    db.add(record)
+    db.commit()
+    db.refresh(record)
     return serialize_generated_playlist(record, include_tracks=True)
 
 
@@ -484,7 +504,6 @@ def generate_context_playlist(context_name: str, request: Request, db: Session =
         familiarity=defaults["familiarity"],
         max_tracks=defaults["max_tracks"],
         min_known_ratio=0.65 if key == "workout" else 0.55,
-        name=f"MusicIntelligence {key.title()} Playlist",
     )
     result = generate(payload, request, db)
     result["context"] = key

@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from ..models.song_tag import SongTag
 from ..services.api_cache_service import clear_provider_cache
 from ..services.recommendation_service import build_discovery_feed
 from ..services.spotify_service import load_request_user_session
+from ..time_utils import utcnow_naive
 
 router = APIRouter(prefix="/insights", tags=["Insights"])
 
@@ -217,7 +218,7 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
         .all()
     )
 
-    now = datetime.utcnow()
+    now = utcnow_naive()
     week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
     total_events = (
@@ -264,6 +265,23 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
         )
 
     return {"goals": statuses}
+
+
+@router.delete("/goals/{goal_id}")
+def delete_goal(goal_id: int, request: Request, db: Session = Depends(get_db)):
+    user_id = _require_user_id(db, request)
+    goal = (
+        db.query(ListeningGoal)
+        .filter(ListeningGoal.id == goal_id, ListeningGoal.user_id == user_id, ListeningGoal.active.is_(True))
+        .first()
+    )
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    goal.active = False
+    db.add(goal)
+    db.commit()
+    return {"message": "Goal removed", "goal_id": goal_id}
 
 
 @router.get("/data-quality")
@@ -561,4 +579,83 @@ def dedup_undo(batch_id: str, request: Request, db: Session = Depends(get_db)):
 
     return {"message": "Undo complete", "batch_id": batch_id, "restored": undone}
 
+
+@router.get("/tags")
+def user_tags(request: Request, limit: int = 100, db: Session = Depends(get_db)):
+    """Return tags present in the user's listening history, ranked by play count."""
+    user_id = _require_user_id(db, request)
+    safe_limit = max(1, min(limit, 500))
+
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+
+    from ..models.tag import Tag as _Tag
+    rows = (
+        db.query(
+            _Tag.name,
+            func.count(SongTag.song_id.distinct()).label("song_count"),
+        )
+        .join(SongTag, SongTag.tag_id == _Tag.id)
+        .join(user_song_ids, user_song_ids.c.song_id == SongTag.song_id)
+        .group_by(_Tag.name)
+        .order_by(func.count(SongTag.song_id.distinct()).desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    return {"tags": [{"name": name, "song_count": int(count)} for name, count in rows]}
+
+
+@router.get("/tags/{tag_name}/songs")
+def songs_by_tag(tag_name: str, request: Request, limit: int = 50, db: Session = Depends(get_db)):
+    """Return the user's songs that carry a given Last.fm tag."""
+    user_id = _require_user_id(db, request)
+    safe_limit = max(1, min(limit, 200))
+
+    from ..models.tag import Tag as _Tag
+    from sqlalchemy.orm import joinedload as _joinedload
+
+    tag = db.query(_Tag).filter(_Tag.name == tag_name).first()
+    if not tag:
+        return {"songs": []}
+
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+
+    songs = (
+        db.query(Song)
+        .options(_joinedload(Song.artist))
+        .join(SongTag, SongTag.song_id == Song.id)
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(SongTag.tag_id == tag.id, Song.is_deleted.is_(False))
+        .order_by(Song.popularity_score.desc().nullslast())
+        .limit(safe_limit)
+        .all()
+    )
+
+    return {
+        "tag": tag_name,
+        "songs": [
+            {
+                "id": s.id,
+                "title": s.title,
+                "artist": s.artist.name if s.artist else None,
+                "spotify_id": s.spotify_id,
+                "image_url": s.image_url,
+                "preview_url": s.preview_url,
+                "genre": s.genre,
+                "popularity_score": s.popularity_score,
+                "enrichment_status": s.enrichment_status,
+            }
+            for s in songs
+        ],
+    }
 

@@ -159,7 +159,25 @@ def _needs_enrichment(song, include_partial=True, include_failed=False):
     )
 
 
-def sync_listening_history(db, user_id, tracks):
+def _normalize_enrichment_status(song):
+    if song.is_deleted:
+        return False
+
+    has_core_metadata = bool(song.genre and song.song_tags)
+    has_popularity = (song.playcount or 0) > 0 and (song.listeners or 0) > 0
+    previous = song.enrichment_status
+
+    if has_core_metadata and has_popularity:
+        song.enrichment_status = "complete"
+        song.enrichment_error = None
+    elif song.enrichment_status == "pending" and (song.genre or song.song_tags or has_popularity):
+        song.enrichment_status = "partial"
+        song.enrichment_error = song.enrichment_error or "Partial metadata"
+
+    return song.enrichment_status != previous
+
+
+def sync_listening_history(db, user_id, tracks, enrich_inline=True):
 
     new_songs = 0
     new_history_rows = 0
@@ -226,7 +244,7 @@ def sync_listening_history(db, user_id, tracks):
         if preview_url:
             song.preview_url = preview_url
 
-        if _needs_enrichment(song):
+        if enrich_inline and _needs_enrichment(song):
             data = enrich_song(song)
             _apply_enrichment(db, song, data)
 
@@ -320,6 +338,8 @@ def backfill_missing_metadata(db, user_id: str | None = None, max_songs=1000, in
 
     for song in songs:
         if not _needs_enrichment(song, include_partial=include_partial, include_failed=include_failed):
+            if _normalize_enrichment_status(song):
+                updated += 1
             continue
 
         scanned += 1
@@ -855,8 +875,6 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
 
     db.commit()
     return {"store_attempted": len(songs), "store_rate_limited": rate_limited}
-
-
 
 
 
