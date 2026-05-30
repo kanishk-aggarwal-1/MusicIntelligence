@@ -11,6 +11,7 @@ from spotipy.exceptions import SpotifyException
 
 from ..database import get_db
 from ..models.generated_playlist import GeneratedPlaylist
+from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..services.generated_playlist_service import (
@@ -144,16 +145,19 @@ def _artist_name(item):
     return (artist.name if artist else "unknown").strip().lower()
 
 
+def _artist_cap_for_diversity(diversity: float):
+    if diversity >= 0.75:
+        return 1
+    if diversity >= 0.45:
+        return 2
+    return 3
+
+
 def _cap_artist_repetition(details, max_tracks: int, diversity: float):
     if not details or max_tracks <= 0:
         return details
 
-    if diversity >= 0.75:
-        max_per_artist = 1
-    elif diversity >= 0.45:
-        max_per_artist = 2
-    else:
-        max_per_artist = 3
+    max_per_artist = _artist_cap_for_diversity(diversity)
 
     selected = []
     deferred = []
@@ -178,6 +182,53 @@ def _cap_artist_repetition(details, max_tracks: int, diversity: float):
     selected_ids = {id(item) for item in selected}
     selected.extend(item for item in details if id(item) not in selected_ids)
     return selected
+
+
+def _recent_generated_song_ids(db: Session, user_id: str, limit: int = 5):
+    recent_playlist_ids = [
+        row[0]
+        for row in (
+            db.query(GeneratedPlaylist.id)
+            .filter(GeneratedPlaylist.user_id == user_id)
+            .order_by(GeneratedPlaylist.created_at.desc())
+            .limit(max(1, limit))
+            .all()
+        )
+    ]
+    if not recent_playlist_ids:
+        return set()
+
+    return {
+        row[0]
+        for row in (
+            db.query(GeneratedPlaylistTrack.song_id)
+            .filter(GeneratedPlaylistTrack.generated_playlist_id.in_(recent_playlist_ids))
+            .all()
+        )
+    }
+
+
+def _deprioritize_recent_playlist_repeats(details, recent_song_ids: set[int], max_tracks: int):
+    if not details or not recent_song_ids:
+        return details
+
+    fresh = [item for item in details if item["song"].id not in recent_song_ids]
+    repeated = [item for item in details if item["song"].id in recent_song_ids]
+    if len(fresh) >= max_tracks:
+        return fresh + repeated
+    return details
+
+
+def _playlist_quality_notes(*, diversity: float, recent_song_ids: set[int]):
+    artist_cap = _artist_cap_for_diversity(diversity)
+    notes = [
+        f"Artist variety guardrail prefers at most {artist_cap} track{'s' if artist_cap != 1 else ''} per artist when alternatives exist.",
+    ]
+    if recent_song_ids:
+        notes.append("Recent playlist repeat guardrail prefers songs not used in your last 5 generated playlists.")
+    else:
+        notes.append("Recent playlist repeat guardrail will activate after you have generated playlist history.")
+    return notes
 
 
 def _build_playlist_warnings(details, max_tracks, created_track_count=0, spotify_rate_limited=False):
@@ -291,6 +342,8 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     details = _apply_quality_controls(details, payload.diversity, payload.familiarity)
     details = _enforce_known_ratio(details, requested_tracks, payload.min_known_ratio)
     details = _cap_artist_repetition(details, requested_tracks, payload.diversity)
+    recent_song_ids = _recent_generated_song_ids(db, user_id, limit=5)
+    details = _deprioritize_recent_playlist_repeats(details, recent_song_ids, requested_tracks)
     selected = details[:requested_tracks]
 
     request_params = {
@@ -300,6 +353,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
         "max_tracks": requested_tracks,
         "context_type": payload.context_type,
         "generated_at_utc": utcnow().isoformat(),
+        "recent_playlist_repeat_guard": bool(recent_song_ids),
     }
 
     record = create_playlist_preview_record(
@@ -328,6 +382,9 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
             "diversity": payload.diversity,
             "familiarity": payload.familiarity,
             "max_tracks": requested_tracks,
+            "artist_cap": _artist_cap_for_diversity(payload.diversity),
+            "recent_repeat_guard_active": bool(recent_song_ids),
+            "notes": _playlist_quality_notes(diversity=payload.diversity, recent_song_ids=recent_song_ids),
         },
     }
 
