@@ -1,5 +1,6 @@
 from collections import Counter
 from datetime import timedelta
+import logging
 from math import log, sqrt
 import random
 
@@ -27,6 +28,7 @@ from . import spotify_service
 
 
 ALGORITHM_VERSION = "tfidf-knn-v1"
+logger = logging.getLogger(__name__)
 CONTEXT_HINTS = {
     "focus": {"ambient", "instrumental", "classical", "lofi", "study", "piano", "minimal"},
     "workout": {"hip hop", "edm", "dance", "rock", "energetic", "gym", "trap", "drum and bass"},
@@ -591,7 +593,11 @@ def recommend_songs(
     limit: int = 30,
 ):
 
-    print(f"recommend_songs.start user_id={user_id} include_discovery_summary={include_discovery_summary}")
+    logger.info(
+        "recommend_songs.start user_id=%s include_discovery_summary=%s",
+        user_id,
+        include_discovery_summary,
+    )
     discovery_summary = {
         "seed_artists": 0,
         "total_history_artists": 0,
@@ -711,7 +717,7 @@ def build_discovery_feed(db, user_id, limit=20):
 
 def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: int | None = None):
 
-    print(f"discover_new_songs.start user_id={user_id} include_summary={include_summary}")
+    logger.info("discover_new_songs.start user_id=%s include_summary=%s", user_id, include_summary)
     artist_rows = (
         db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
         .join(Song, Song.artist_id == Artist.id)
@@ -748,7 +754,13 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
             selected.append(pool.pop(chosen_index))
 
     artists = [name for name, _ in selected]
-    print(f"discover_new_songs.artist_rows={len(artist_rows)} unique_artists={total_artists} selected_seed_artists={len(artists)} seed_limit={seed_limit}")
+    logger.info(
+        "discover_new_songs.artist_rows=%s unique_artists=%s selected_seed_artists=%s seed_limit=%s",
+        len(artist_rows),
+        total_artists,
+        len(artists),
+        seed_limit,
+    )
 
     new_songs = []
     summary = {
@@ -760,7 +772,7 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
 
     for index, artist in enumerate(artists, start=1):
         if index == 1 or index % 10 == 0 or index == len(artists):
-            print(f"discover_new_songs.artist {index}/{len(artists)} name={artist}")
+            logger.info("discover_new_songs.artist index=%s total=%s name=%s", index, len(artists), artist)
 
         try:
             if include_summary:
@@ -770,12 +782,12 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
             else:
                 discovered = discover_songs_from_artist(artist)
         except Exception as exc:
-            print(f"discover_new_songs.artist_failed name={artist} error={exc}")
+            logger.warning("discover_new_songs.artist_failed name=%s error=%s", artist, exc)
             discovered = []
 
         new_songs.extend(discovered)
 
-    print(f"discover_new_songs.done discovered={len(new_songs)} summary={summary}")
+    logger.info("discover_new_songs.done discovered=%s summary=%s", len(new_songs), summary)
     if include_summary:
         return new_songs, summary
 
@@ -787,7 +799,12 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
     total_input = len(songs)
     if limit is not None:
         songs = songs[: max(0, int(limit))]
-    print(f"store_discovered_songs.start count={len(songs)} total_input={total_input} limit={limit}")
+    logger.info(
+        "store_discovered_songs.start count=%s total_input=%s limit=%s",
+        len(songs),
+        total_input,
+        limit,
+    )
     session = load_user_session(db, user_id=user_id)
     token = session.get("token")
     rate_limited = False
@@ -799,7 +816,7 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
 
     for idx, s in enumerate(songs, start=1):
         if idx == 1 or idx % 10 == 0 or idx == len(songs):
-            print(f"store_discovered_songs.progress {idx}/{len(songs)}")
+            logger.info("store_discovered_songs.progress index=%s total=%s", idx, len(songs))
 
         title = s["title"]
 
@@ -828,7 +845,7 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
         except Exception as exc:
             status = getattr(exc, "http_status", None)
             if status == 401:
-                print(f"store_discovered_songs.token_expired refreshing title={title} artist={artist_name}")
+                logger.info("store_discovered_songs.token_expired title=%s artist=%s", title, artist_name)
                 refreshed_session = load_user_session(db, user_id=user_id)
                 refreshed_token = refreshed_session.get("token")
                 if not refreshed_token:
@@ -836,7 +853,7 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
                 sp = spotify_service.get_spotify_client(refreshed_token)
                 spotify_id = resolve_track_id(sp, title, artist_name)
             elif status == 429:
-                print(f"store_discovered_songs.rate_limited title={title} artist={artist_name}")
+                logger.warning("store_discovered_songs.rate_limited title=%s artist=%s", title, artist_name)
                 rate_limited = True
                 spotify_id = None
                 break

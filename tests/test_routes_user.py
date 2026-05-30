@@ -35,6 +35,7 @@ def test_frontend_message_origin_uses_allowed_state(monkeypatch):
         "BACKEND_CORS_ORIGINS",
         ["http://127.0.0.1:5173", "https://music-intelligence-eight.vercel.app"],
     )
+    monkeypatch.setattr(user_routes.settings, "APP_ENV", "production")
 
     assert (
         user_routes._frontend_message_origin("https://music-intelligence-eight.vercel.app")
