@@ -34,7 +34,8 @@ export default function Login() {
           </div>
           <h1 className="text-3xl font-bold text-white">MusicIntelligence</h1>
           <p className="text-zinc-400 text-sm leading-relaxed">
-            AI-powered playlists built from your actual listening history.
+            Playlists that know your taste — built from your real Spotify history
+            using tag analysis and KNN matching.
             Connect Spotify to get started.
           </p>
         </div>

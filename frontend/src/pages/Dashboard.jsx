@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import { Music2, Users, Disc, TrendingUp, RefreshCw } from 'lucide-react'
+import { Music2, Users, Disc, TrendingUp, RefreshCw, Upload } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
 import { SkeletonCard, SkeletonChartCard } from '../components/ui/Skeleton'
@@ -60,6 +61,7 @@ function StatCard({ icon: Icon, label, value, sub }) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [stats, setStats] = useState(null)
   const [timeline, setTimeline] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -161,6 +163,20 @@ export default function Dashboard() {
                 {syncing || syncJob ? <Spinner size="sm" /> : <RefreshCw className="w-4 h-4" />}
                 {syncing || syncJob ? 'Syncing...' : 'Sync Now'}
               </button>
+              <div className="border-t border-zinc-800 pt-4 space-y-2">
+                <p className="text-xs text-zinc-500">
+                  Spotify limits live sync to your last 50 tracks.{' '}
+                  <strong className="text-zinc-400">Import years of history at once:</strong>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/features')}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm hover:bg-zinc-700 transition-colors"
+                >
+                  <Upload className="w-4 h-4" />
+                  Import Spotify Data Export
+                </button>
+              </div>
             </>
           )}
         </div>

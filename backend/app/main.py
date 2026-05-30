@@ -18,13 +18,13 @@ from .models import user_session
 from .models import recommendation_feedback
 from .models import listening_goal
 from .models import dedup_merge_log
+from .models import user_song_pref
 from .routes import user_routes
 from .routes import playlist_routes
 from .routes import music_routes
 from .routes import dashboard_routes
 from .routes import insights_routes
 from .routes import job_routes
-from .routes import discovery_routes
 from .routes import ops_routes
 
 app = FastAPI(title="Music Recommendation API")
@@ -58,7 +58,6 @@ app.include_router(music_routes.router)
 app.include_router(dashboard_routes.router)
 app.include_router(insights_routes.router)
 app.include_router(job_routes.router)
-app.include_router(discovery_routes.router)
 app.include_router(ops_routes.router)
 
 
