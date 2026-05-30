@@ -87,6 +87,8 @@ def run_startup_migrations():
                 cols = _column_type_map(inspector, "songs")
 
                 if dialect == "postgresql":
+                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS image_url VARCHAR"))
+                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS preview_url VARCHAR"))
                     conn.execute(text("ALTER TABLE songs DROP COLUMN IF EXISTS musicbrainz_id"))
                     conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS listeners INTEGER DEFAULT 0"))
                     conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS playcount INTEGER DEFAULT 0"))
@@ -97,6 +99,10 @@ def run_startup_migrations():
                     conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS discovery_confidence DOUBLE PRECISION"))
                     conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE"))
                 else:
+                    if "image_url" not in cols:
+                        conn.execute(text("ALTER TABLE songs ADD COLUMN image_url VARCHAR"))
+                    if "preview_url" not in cols:
+                        conn.execute(text("ALTER TABLE songs ADD COLUMN preview_url VARCHAR"))
                     if "musicbrainz_id" in cols:
                         conn.execute(text("ALTER TABLE songs DROP COLUMN musicbrainz_id"))
                         inspector = inspect(engine)

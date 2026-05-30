@@ -298,6 +298,7 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
                 spotify_id = uri.split(":")[-1]
 
             first_artist = (track.get("artists") or [{}])[0]
+            images = (track.get("album") or {}).get("images") or []
             tracks.append(
                 {
                     "title": track.get("name"),
@@ -306,6 +307,8 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
                     "spotify_id": spotify_id,
                     "played_at": item.get("played_at"),
                     "duration_ms": track.get("duration_ms"),
+                    "image_url": images[0].get("url") if images else None,
+                    "preview_url": track.get("preview_url"),
                 }
             )
 

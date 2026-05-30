@@ -147,9 +147,11 @@ def serialize_generated_playlist(record: GeneratedPlaylist, include_tracks: bool
                 "explanation": _loads(track.explanation_json) or {},
                 "song": {
                     "title": track.song.title if track.song else None,
-                    "spotify_id": track.song.spotify_id if track.song else None,
-                    "genre": track.song.genre if track.song else None,
                     "artist": track.song.artist.name if track.song and track.song.artist else None,
+                    "spotify_id": track.song.spotify_id if track.song else None,
+                    "image_url": track.song.image_url if track.song else None,
+                    "preview_url": track.song.preview_url if track.song else None,
+                    "genre": track.song.genre if track.song else None,
                     "enrichment_status": track.song.enrichment_status if track.song else None,
                 },
             }
