@@ -26,6 +26,53 @@ function Result({ data }) {
   )
 }
 
+function JobProgress({ job, onRetry }) {
+  if (!job) return null
+  const failed = job.status === 'failed'
+  const done = ['succeeded', 'failed', 'cancelled'].includes(job.status)
+  const total = Number(job.progress_total || 0)
+  const current = Number(job.progress_current || 0)
+  const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0
+  const result = job.result || null
+
+  return (
+    <div className={`rounded-lg border p-3 space-y-2 ${failed ? 'bg-red-950/20 border-red-900/50' : 'bg-zinc-950 border-zinc-800'}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-white text-sm capitalize">{job.status}</p>
+          <p className={failed ? 'text-red-300 text-xs mt-0.5 line-clamp-2' : 'text-zinc-500 text-xs mt-0.5 truncate'}>
+            {failed ? (job.error || job.message || 'Job failed') : (job.message || 'Working')}
+          </p>
+        </div>
+        {failed && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="text-xs text-red-200 hover:text-white underline underline-offset-2 shrink-0"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+      {total > 0 && (
+        <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${failed ? 'bg-red-400' : 'bg-brand'}`} style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      {done && result && (
+        <div className="grid grid-cols-3 gap-2 pt-1">
+          {['scanned', 'updated', 'new_songs'].map(key => result[key] !== undefined && (
+            <div key={key} className="bg-zinc-900 rounded-md p-2">
+              <p className="text-zinc-500 text-[11px]">{key.replace(/_/g, ' ')}</p>
+              <p className="text-white text-sm font-semibold">{result[key]}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ActionButton({ onClick, loading, icon: Icon, label, variant = 'default' }) {
   const base = 'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60'
   const variants = {
@@ -216,6 +263,7 @@ function GoalsSection() {
 export default function Features() {
   const [backfillResult, setBackfillResult] = useState(null)
   const [backfillLoading, setBackfillLoading] = useState(false)
+  const [backfillPoll, setBackfillPoll] = useState(null)
   const [retryFailed, setRetryFailed] = useState(false)
   const [retryPartial, setRetryPartial] = useState(false)
 
@@ -230,8 +278,29 @@ export default function Features() {
   const [cacheClearing, setCacheClearing] = useState(false)
   const [cacheResult, setCacheResult] = useState(null)
 
+  useEffect(() => {
+    if (!backfillResult?.id || ['succeeded', 'failed', 'cancelled'].includes(backfillResult.status)) return
+
+    const timer = setInterval(async () => {
+      try {
+        const job = await api.get(`/jobs/${backfillResult.id}`)
+        setBackfillResult(job)
+        if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
+          clearInterval(timer)
+          setBackfillPoll(null)
+        }
+      } catch (e) {
+        setBackfillPoll({ error: e.message })
+      }
+    }, 1500)
+
+    setBackfillPoll({ active: true })
+    return () => clearInterval(timer)
+  }, [backfillResult?.id, backfillResult?.status])
+
   async function handleBackfill() {
     setBackfillLoading(true)
+    setBackfillPoll(null)
     try {
       const job = await api.post(`/user/backfill-metadata/job?limit=500&retry_partial=${retryPartial}&retry_failed=${retryFailed}`)
       setBackfillResult(job)
@@ -318,7 +387,8 @@ export default function Features() {
           </label>
           <ActionButton onClick={handleBackfill} loading={backfillLoading} icon={RefreshCw} label="Run Backfill" variant="primary" />
         </div>
-        <Result data={backfillResult} />
+        <JobProgress job={backfillResult} onRetry={handleBackfill} />
+        {backfillPoll?.error && <p className="text-red-400 text-sm">{backfillPoll.error}</p>}
       </Section>
 
       <Section title="Data Quality" description="Check enrichment coverage across your library.">
