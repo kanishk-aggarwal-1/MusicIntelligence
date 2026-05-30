@@ -2,6 +2,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .database import engine, Base, run_startup_migrations
+from .error_handlers import install_error_handlers
 
 # IMPORTANT: import models
 from .models import song
@@ -29,6 +30,7 @@ from .routes import ops_routes
 from .routes import filter_routes
 
 app = FastAPI(title="Music Recommendation API")
+install_error_handlers(app)
 
 # Local development CORS configuration for frontend testing.
 app.add_middleware(

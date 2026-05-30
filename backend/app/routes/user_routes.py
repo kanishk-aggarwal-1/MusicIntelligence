@@ -1,19 +1,24 @@
 from functools import partial
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 import spotipy
 
 from ..database import get_db
+from ..config import settings
 from ..models.user_session import UserSession
 from ..services.job_service import create_job, run_job, serialize_job
 from ..services.spotify_service import (
+    SESSION_COOKIE_NAME,
+    create_session_cookie_value,
     fetch_recent_tracks,
     get_spotify_oauth,
     get_spotify_client,
+    get_session_cookie_options,
     load_request_user_session,
     load_user_session,
+    read_session_cookie_value,
     save_user_session,
 )
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
@@ -48,7 +53,8 @@ def callback(request: Request, db: Session = Depends(get_db)):
     user = sp.current_user()
     save_user_session(db, user["id"], token_info=token_info)
 
-    return """
+    response = HTMLResponse(
+        """
     <html>
       <head><title>Login Complete</title></head>
       <body style=\"font-family: sans-serif; padding: 16px;\">
@@ -56,6 +62,9 @@ def callback(request: Request, db: Session = Depends(get_db)):
       </body>
     </html>
     """
+    )
+    response.set_cookie(value=create_session_cookie_value(user["id"]), **get_session_cookie_options())
+    return response
 
 
 @router.get("/session")
@@ -69,13 +78,15 @@ def session_status(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
-    requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
-    query = db.query(UserSession)
-    if requested_user_id:
-        query = query.filter(UserSession.user_id == requested_user_id)
-    deleted = query.delete(synchronize_session=False)
+    requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
+    if not requested_user_id and settings.APP_ENV != "production":
+        requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
+    query = db.query(UserSession).filter(UserSession.user_id == requested_user_id) if requested_user_id else None
+    deleted = query.delete(synchronize_session=False) if query is not None else 0
     db.commit()
-    return {"message": "Logged out", "deleted_sessions": deleted}
+    response = JSONResponse({"message": "Logged out", "deleted_sessions": deleted})
+    response.delete_cookie(key=SESSION_COOKIE_NAME)
+    return response
 
 
 @router.post("/sync-history")

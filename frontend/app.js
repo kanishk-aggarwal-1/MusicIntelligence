@@ -1049,6 +1049,7 @@ async function callApi(path, options = {}) {
   const response = await fetch(`${getBaseUrl()}${path}`, {
     ...options,
     headers,
+    credentials: "include",
   });
 
   const data = await parseBody(response);
