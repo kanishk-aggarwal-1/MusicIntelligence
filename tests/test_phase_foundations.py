@@ -67,6 +67,7 @@ def test_api_cache_persists_success_and_failure(testing_session_local, monkeypat
 
 def test_job_service_records_result(testing_session_local, db_session, monkeypatch):
     monkeypatch.setattr(job_service, "SessionLocal", testing_session_local)
+    job_service.record_job.__globals__["METRICS"]["jobs"].clear()
     job = create_job(db_session, user_id="user-1", job_type="sync_history", progress_total=2)
 
     def _handler(db, progress):
@@ -78,6 +79,9 @@ def test_job_service_records_result(testing_session_local, db_session, monkeypat
     stored = get_job(db_session, job_id=job.id, user_id="user-1")
     assert stored.status == "succeeded"
     assert "rows" in stored.result_json
+    assert job_service.record_job.__globals__["METRICS"]["jobs"]["queued"] == 1
+    assert job_service.record_job.__globals__["METRICS"]["jobs"]["running"] == 1
+    assert job_service.record_job.__globals__["METRICS"]["jobs"]["succeeded"] == 1
 
 
 def test_sync_history_normalizes_timezone_and_prevents_duplicates(db_session):
@@ -99,6 +103,24 @@ def test_sync_history_normalizes_timezone_and_prevents_duplicates(db_session):
     assert second["existing_history_rows"] == 1
     stored = db_session.query(ListeningHistory).one()
     assert stored.played_at == datetime(2026, 5, 2, 3, 30)
+
+
+def test_sync_history_deduplicates_items_within_same_batch(db_session):
+    db_session.add(_user_session("user-1"))
+    db_session.commit()
+
+    result = sync_listening_history(
+        db_session,
+        "user-1",
+        [
+            {"title": "Repeated Song", "artist": "Loop Artist", "spotify_id": "loop-1", "played_at": "2026-05-02T03:30:00Z"},
+            {"title": "Repeated Song", "artist": "Loop Artist", "spotify_id": "loop-1", "played_at": "2026-05-02T03:30:00Z"},
+        ],
+    )
+
+    assert result["new_history_rows"] == 1
+    assert result["existing_history_rows"] == 1
+    assert db_session.query(ListeningHistory).count() == 1
 
 
 def test_dashboard_stats_are_user_scoped(client_factory, db_session):

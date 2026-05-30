@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models.job import Job
+from ..services.metrics_service import record_job
 from ..time_utils import utcnow_naive
 
 
@@ -59,6 +60,7 @@ def create_job(db: Session, *, user_id: str, job_type: str, message: str = "Queu
     db.add(job)
     db.commit()
     db.refresh(job)
+    record_job("queued")
     return job
 
 
@@ -92,6 +94,7 @@ def cancel_job(db: Session, *, job_id: str, user_id: str) -> Job | None:
     db.add(job)
     db.commit()
     db.refresh(job)
+    record_job("cancelled")
     return job
 
 
@@ -110,6 +113,7 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
         db.add(job)
         db.commit()
         db.refresh(job)
+        record_job("running")
 
         progress = JobProgress(db, job)
         result = handler(db, progress) or {}
@@ -120,6 +124,7 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
                 job.finished_at = utcnow_naive()
             db.add(job)
             db.commit()
+            record_job("cancelled")
             return
 
         job.status = "succeeded"
@@ -133,6 +138,7 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
             job.result_json = json.dumps(result)
         db.add(job)
         db.commit()
+        record_job("succeeded")
     except Exception as exc:
         db.rollback()
         job = db.query(Job).filter(Job.id == job_id).first()
@@ -142,5 +148,6 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
             job.finished_at = utcnow_naive()
             db.add(job)
             db.commit()
+        record_job("failed")
     finally:
         db.close()

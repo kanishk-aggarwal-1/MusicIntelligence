@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from spotipy.exceptions import SpotifyException
 
 from ..database import get_db
 from ..models.generated_playlist import GeneratedPlaylist
@@ -203,6 +204,14 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
         return create_playlist(sp, user_id, track_ids, name=name)
     except Exception as exc:
         if getattr(exc, "http_status", None) != 401:
+            if isinstance(exc, SpotifyException) and getattr(exc, "http_status", None) == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Spotify refused playlist creation or track insertion. "
+                        "Log in again and approve playlist-modify-private and playlist-modify-public scopes."
+                    ),
+                ) from exc
             raise
         print(f"playlist.create.token_expired user_id={user_id}")
         session = load_user_session(db, user_id=user_id)
@@ -210,7 +219,18 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
         if not refreshed_token:
             raise
         refreshed_sp = get_spotify_client(refreshed_token)
-        return create_playlist(refreshed_sp, user_id, track_ids, name=name)
+        try:
+            return create_playlist(refreshed_sp, user_id, track_ids, name=name)
+        except Exception as refresh_exc:
+            if isinstance(refresh_exc, SpotifyException) and getattr(refresh_exc, "http_status", None) == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Spotify refused playlist creation or track insertion after token refresh. "
+                        "Log in again and approve playlist-modify-private and playlist-modify-public scopes."
+                    ),
+                ) from refresh_exc
+            raise
 
 
 def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
