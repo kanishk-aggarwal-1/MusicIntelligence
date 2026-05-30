@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 import spotipy
 
 from ..database import get_db
+from ..models.user_session import UserSession
 from ..services.job_service import create_job, run_job, serialize_job
 from ..services.spotify_service import (
     fetch_recent_tracks,
@@ -38,7 +39,7 @@ def callback(request: Request, db: Session = Depends(get_db)):
     if not code:
         raise HTTPException(status_code=400, detail="Missing Spotify authorization code")
 
-    token_info = sp_oauth.get_access_token(code)
+    token_info = sp_oauth.get_access_token(code, check_cache=False)
     if not token_info or "access_token" not in token_info:
         raise HTTPException(status_code=400, detail="Failed to exchange Spotify authorization code")
 
@@ -52,9 +53,6 @@ def callback(request: Request, db: Session = Depends(get_db)):
       <head><title>Login Complete</title></head>
       <body style=\"font-family: sans-serif; padding: 16px;\">
         <p>Login successful. You can close this window.</p>
-        <script>
-          try { window.close(); } catch (e) {}
-        </script>
       </body>
     </html>
     """
@@ -67,6 +65,17 @@ def session_status(request: Request, db: Session = Depends(get_db)):
         "logged_in": bool(session.get("token") and session.get("user_id")),
         "user_id": session.get("user_id"),
     }
+
+
+@router.post("/logout")
+def logout(request: Request, db: Session = Depends(get_db)):
+    requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
+    query = db.query(UserSession)
+    if requested_user_id:
+        query = query.filter(UserSession.user_id == requested_user_id)
+    deleted = query.delete(synchronize_session=False)
+    db.commit()
+    return {"message": "Logged out", "deleted_sessions": deleted}
 
 
 @router.post("/sync-history")

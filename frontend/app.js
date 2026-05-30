@@ -1097,6 +1097,12 @@ async function submitQuickFeedback(songId, feedbackAction, output) {
 }
 
 async function loginWithPopup() {
+  try {
+    await callApi("/user/logout", { method: "POST" });
+  } finally {
+    localStorage.removeItem(USER_KEY);
+  }
+
   const popup = window.open(
     `${getBaseUrl()}/user/login`,
     "spotify_login",
@@ -1447,8 +1453,9 @@ async function handleAction(action) {
     if (action === "retryFailedMetadata" || action === "retryPartialMetadata") {
       const retryFailed = action === "retryFailedMetadata";
       const retryPartial = action === "retryPartialMetadata";
+      const retryLimit = Number(document.getElementById("metadataRetryLimit")?.value || 25);
       const params = new URLSearchParams({
-        limit: "500",
+        limit: String(Math.max(1, Math.min(retryLimit, 5000))),
         retry_partial: String(retryPartial),
         retry_failed: String(retryFailed),
       });

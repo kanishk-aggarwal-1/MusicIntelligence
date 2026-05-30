@@ -42,6 +42,10 @@
 
       <section class="card">
         <h2>Data Quality</h2>
+        <div class="row">
+          <label for="metadataRetryLimit">Retry Limit</label>
+          <input id="metadataRetryLimit" type="number" min="1" max="5000" value="25" />
+        </div>
         <div class="actions">
           <button data-action="dataQuality" type="button">Check Coverage</button>
           <button data-action="retryFailedMetadata" type="button">Retry Failed</button>

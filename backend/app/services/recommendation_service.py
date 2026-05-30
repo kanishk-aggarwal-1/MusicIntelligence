@@ -5,6 +5,7 @@ import random
 
 
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 
 from ..models.artist import Artist
@@ -159,6 +160,7 @@ def sync_listening_history(db, user_id, tracks):
     new_songs = 0
     new_history_rows = 0
     existing_history_rows = 0
+    pending_history_keys = set()
 
     for item in tracks:
         title = item.get("title")
@@ -214,6 +216,11 @@ def sync_listening_history(db, user_id, tracks):
             _apply_enrichment(db, song, data)
 
         played_at = _parse_played_at(item.get("played_at"))
+        history_key = (user_id, song.id, played_at)
+
+        if history_key in pending_history_keys:
+            existing_history_rows += 1
+            continue
 
         if played_at:
             existing = db.query(ListeningHistory).filter(
@@ -228,13 +235,28 @@ def sync_listening_history(db, user_id, tracks):
             ).first()
 
         if not existing:
-            history = ListeningHistory(
-                user_id=user_id,
-                song_id=song.id,
-                played_at=played_at
-            )
-            db.add(history)
-            new_history_rows += 1
+            if db.bind and db.bind.dialect.name == "postgresql":
+                result = db.execute(
+                    postgres_insert(ListeningHistory.__table__)
+                    .values(user_id=user_id, song_id=song.id, played_at=played_at)
+                    .on_conflict_do_nothing(
+                        index_elements=["user_id", "song_id", "played_at"],
+                    )
+                )
+                if result.rowcount:
+                    new_history_rows += 1
+                    pending_history_keys.add(history_key)
+                else:
+                    existing_history_rows += 1
+            else:
+                history = ListeningHistory(
+                    user_id=user_id,
+                    song_id=song.id,
+                    played_at=played_at
+                )
+                db.add(history)
+                pending_history_keys.add(history_key)
+                new_history_rows += 1
         else:
             existing_history_rows += 1
 

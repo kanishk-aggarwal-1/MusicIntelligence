@@ -91,6 +91,7 @@ def get_spotify_oauth():
         client_secret=settings.SPOTIFY_CLIENT_SECRET,
         redirect_uri=settings.SPOTIFY_REDIRECT_URI,
         scope=SCOPES,
+        show_dialog=True,
     )
 
 
@@ -297,13 +298,26 @@ def search_track(sp, title: str, artist: str):
 
 
 def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playlist"):
-    playlist = sp.user_playlist_create(
-        user=user_id,
-        name=name,
-        public=False,
+    playlist = sp._post(
+        "me/playlists",
+        payload={
+            "name": name,
+            "public": False,
+        },
     )
 
     if track_ids:
-        sp.playlist_add_items(playlist["id"], track_ids)
+        uris = [
+            track_id if str(track_id).startswith("spotify:") else f"spotify:track:{track_id}"
+            for track_id in track_ids
+        ]
+        try:
+            sp._post(f"playlists/{playlist['id']}/items", payload={"uris": uris})
+        except Exception:
+            try:
+                sp.current_user_unfollow_playlist(playlist["id"])
+            except Exception:
+                pass
+            raise
 
     return playlist
