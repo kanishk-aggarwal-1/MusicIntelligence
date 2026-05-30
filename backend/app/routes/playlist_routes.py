@@ -169,7 +169,7 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
             except Exception as exc:
                 status = getattr(exc, "http_status", None)
                 if status == 401:
-                    print(f"playlist.resolve.token_expired title={song.title} artist={artist_name}")
+                    logger.info("playlist.resolve.token_expired title=%s artist=%s", song.title, artist_name)
                     session = load_user_session(db, user_id=user_id)
                     refreshed_token = session.get("token")
                     if not refreshed_token:
@@ -177,7 +177,7 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
                     sp = get_spotify_client(refreshed_token)
                     track_id = resolve_track_id(sp, song.title, artist_name)
                 elif status == 429:
-                    print(f"playlist.resolve.rate_limited title={song.title} artist={artist_name}")
+                    logger.warning("playlist.resolve.rate_limited title=%s artist=%s", song.title, artist_name)
                     rate_limited = True
                     break
                 else:
@@ -209,7 +209,7 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
                     ),
                 ) from exc
             raise
-        print(f"playlist.create.token_expired user_id={user_id}")
+        logger.info("playlist.create.token_expired user_id=%s", user_id)
         session = load_user_session(db, user_id=user_id)
         refreshed_token = session.get("token")
         if not refreshed_token:
@@ -417,22 +417,29 @@ def regenerate_preview(generated_playlist_id: int, request: Request, db: Session
 @router.post("/generate")
 def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = Depends(get_db)):
     started = time.perf_counter()
-    print(
-        f"playlist.generate.start max_tracks={payload.max_tracks} diversity={payload.diversity} "
-        f"familiarity={payload.familiarity} min_known_ratio={payload.min_known_ratio}"
+    logger.info(
+        "playlist.generate.start max_tracks=%s diversity=%s familiarity=%s min_known_ratio=%s",
+        payload.max_tracks,
+        payload.diversity,
+        payload.familiarity,
+        payload.min_known_ratio,
     )
 
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
     token = session.get("token")
     if not token or not user_id:
-        print("playlist.generate.unauthorized")
+        logger.info("playlist.generate.unauthorized")
         raise HTTPException(status_code=401, detail="User not logged in")
 
     preview_response = _build_preview(db, user_id, payload)
     generated_playlist = preview_response["generated_playlist"]
     preview_id = generated_playlist["id"]
-    print(f"playlist.generate.preview_done generated_playlist_id={preview_id} candidates={preview_response['recommendation_candidates']}")
+    logger.info(
+        "playlist.generate.preview_done generated_playlist_id=%s candidates=%s",
+        preview_id,
+        preview_response["recommendation_candidates"],
+    )
 
     sp = get_spotify_client(token)
     record = get_generated_playlist(db, generated_playlist_id=preview_id, user_id=user_id)
@@ -471,7 +478,7 @@ def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = D
         )
 
     elapsed = round(time.perf_counter() - started, 2)
-    print(f"playlist.generate.done seconds={elapsed:.2f} warnings={len(warnings)}")
+    logger.info("playlist.generate.done seconds=%.2f warnings=%s", elapsed, len(warnings))
     known_track_ratio = (
         sum(1 for track in record.tracks if track.song and track.song.spotify_id) / max(1, len(record.tracks))
     )
