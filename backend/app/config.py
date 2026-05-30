@@ -14,7 +14,13 @@ def _parse_csv(value):
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
+def _clean_origins(origins):
+    return [origin.rstrip("/") for origin in origins if origin]
+
+
 class Settings:
+
+    APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -30,12 +36,19 @@ class Settings:
     # Session/token security settings.
     SESSION_ENCRYPTION_KEY = os.getenv("SESSION_ENCRYPTION_KEY")
 
-    BACKEND_CORS_ORIGINS = _parse_csv(os.getenv("BACKEND_CORS_ORIGINS")) or [
+    _default_local_origins = [
         "http://127.0.0.1:5500",
         "http://localhost:5500",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
     ]
+    BACKEND_CORS_ORIGINS = _clean_origins(_parse_csv(os.getenv("BACKEND_CORS_ORIGINS")) or _default_local_origins)
+
+    if APP_ENV == "production":
+        if "*" in BACKEND_CORS_ORIGINS:
+            raise ValueError("BACKEND_CORS_ORIGINS must not contain '*' in production")
+        if BACKEND_CORS_ORIGINS == _default_local_origins:
+            raise ValueError("BACKEND_CORS_ORIGINS must be set explicitly in production")
 
 
 settings = Settings()

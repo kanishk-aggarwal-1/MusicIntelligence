@@ -14,6 +14,7 @@ Render uses:
 Create these environment variables in Render when prompted:
 
 ```text
+APP_ENV=production
 BACKEND_CORS_ORIGINS=https://your-vercel-app.vercel.app,http://127.0.0.1:5500,http://localhost:5500
 DATABASE_URL=postgresql://...
 SPOTIFY_CLIENT_ID=...
@@ -62,7 +63,11 @@ Install Command: leave empty
 
 The frontend directory includes `vercel.json` for clean static routing and basic browser security headers.
 
-After Vercel gives you a URL, add it to the backend `BACKEND_CORS_ORIGINS` list in Render.
+After Vercel gives you a URL, add it to the backend `BACKEND_CORS_ORIGINS` list in Render. For production hardening, prefer only the Vercel origin:
+
+```text
+BACKEND_CORS_ORIGINS=https://your-vercel-app.vercel.app
+```
 
 Set the default backend URL in `frontend/config.js`:
 
