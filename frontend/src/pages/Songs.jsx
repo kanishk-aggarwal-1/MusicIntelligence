@@ -148,11 +148,15 @@ export default function Songs() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // Re-fetch from scratch whenever filter or sort changes (offset resets to 0)
   useEffect(() => {
     setLoading(true)
     setSongs([])
     setHasMore(false)
     const params = { limit: PAGE_SIZE, offset: 0 }
+    // Only send sort to the backend when no client-side filter is active.
+    // quick_filter and q modes sort in Python on the full set, which is fine.
+    if (!statusFilter) params.sort = sort
     if (statusFilter) params.enrichment_status = statusFilter
     api.get('/songs', params)
       .then(data => {
@@ -161,11 +165,12 @@ export default function Songs() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [statusFilter])
+  }, [statusFilter, sort])
 
   function loadMore() {
     setLoadingMore(true)
     const params = { limit: PAGE_SIZE, offset: songs.length }
+    if (!statusFilter) params.sort = sort
     if (statusFilter) params.enrichment_status = statusFilter
     api.get('/songs', params)
       .then(data => {
@@ -177,25 +182,16 @@ export default function Songs() {
   }
 
   const filtered = useMemo(() => {
-    let list = songs
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      list = list.filter(s =>
-        s.title?.toLowerCase().includes(q) ||
-        s.artist?.toLowerCase().includes(q) ||
-        s.genre?.toLowerCase().includes(q) ||
-        s.top_tag?.toLowerCase().includes(q)
-      )
-    }
-    return [...list].sort((a, b) => {
-      switch (sort) {
-        case 'plays': return (b.listening_count || 0) - (a.listening_count || 0)
-        case 'popularity': return (b.popularity_score || 0) - (a.popularity_score || 0)
-        case 'alpha': return (a.title || '').localeCompare(b.title || '')
-        default: return (b.last_listened_at || '').localeCompare(a.last_listened_at || '')
-      }
-    })
-  }, [songs, search, sort])
+    // Client-side search filter — applied on top of the server-fetched set
+    if (!search.trim()) return songs
+    const q = search.toLowerCase()
+    return songs.filter(s =>
+      s.title?.toLowerCase().includes(q) ||
+      s.artist?.toLowerCase().includes(q) ||
+      s.genre?.toLowerCase().includes(q) ||
+      s.top_tag?.toLowerCase().includes(q)
+    )
+  }, [songs, search])
 
   const width = Math.max(320, size.width || 960)
   const columns = width >= 1280 ? 6 : width >= 1024 ? 5 : width >= 768 ? 4 : width >= 640 ? 3 : 2

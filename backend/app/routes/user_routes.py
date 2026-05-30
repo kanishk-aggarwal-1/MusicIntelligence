@@ -12,8 +12,11 @@ import spotipy
 
 from ..database import get_db
 from ..config import settings
+from ..models.generated_playlist import GeneratedPlaylist
 from ..models.job import Job
+from ..models.listening_goal import ListeningGoal
 from ..models.listening_history import ListeningHistory
+from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.user_session import UserSession
 from ..services.job_service import create_job, get_active_job, run_job, serialize_job
@@ -205,6 +208,75 @@ def sync_status(request: Request, db: Session = Depends(get_db)):
         "pending_enrichment_count": int(pending_count),
         "total_songs": int(total_songs),
     }
+
+
+@router.get("/profile")
+def get_profile(request: Request, db: Session = Depends(get_db)):
+    """Return Spotify profile data for the logged-in user."""
+    session = load_request_user_session(db, request)
+    token = session.get("token")
+    user_id = session.get("user_id")
+    if not token or not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    spotify_user: dict = {}
+    try:
+        sp = get_spotify_client(token)
+        spotify_user = sp.current_user() or {}
+    except Exception:
+        logger.warning("profile.spotify_fetch_failed user_id=%s", user_id)
+
+    return {
+        "user_id": user_id,
+        "display_name": spotify_user.get("display_name") or user_id,
+        "email": spotify_user.get("email"),
+        "country": spotify_user.get("country"),
+        "followers": (spotify_user.get("followers") or {}).get("total", 0),
+        "images": spotify_user.get("images") or [],
+        "product": spotify_user.get("product"),
+        "spotify_url": (spotify_user.get("external_urls") or {}).get("spotify"),
+    }
+
+
+@router.delete("/delete-data")
+def delete_user_data(request: Request, db: Session = Depends(get_db)):
+    """Permanently delete all data associated with the logged-in user.
+
+    Songs and artists are shared across users and are NOT deleted.
+    The session cookie is cleared and the user is logged out.
+    """
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    deleted: dict[str, int] = {}
+
+    def _del(model, **filters):
+        n = db.query(model).filter_by(**filters).delete(synchronize_session=False)
+        deleted[model.__tablename__] = n
+
+    _del(ListeningHistory,       user_id=user_id)
+    _del(ListeningGoal,          user_id=user_id)
+    _del(RecommendationFeedback, user_id=user_id)
+    _del(Job,                    user_id=user_id)
+    # Playlists cascade to tracks via the DB FK relationship
+    _del(GeneratedPlaylist,      user_id=user_id)
+    _del(UserSession,            user_id=user_id)
+
+    db.commit()
+    logger.info("delete_data.done user_id=%s rows=%s", user_id, deleted)
+
+    response = JSONResponse({"message": "All user data deleted.", "deleted": deleted})
+    cookie_opts = get_session_cookie_options()
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        secure=cookie_opts["secure"],
+        httponly=cookie_opts["httponly"],
+        samesite=cookie_opts["samesite"],
+    )
+    return response
 
 
 @router.post("/logout")

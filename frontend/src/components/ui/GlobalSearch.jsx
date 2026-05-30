@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ListMusic, Music, Music2, Search, Tag, Heart, Wrench, X } from 'lucide-react'
+import { LayoutDashboard, ListMusic, Music, Music2, Search, Settings, Tag, Heart, Wrench, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import SongModal from './SongModal'
 import Spinner from './Spinner'
@@ -12,6 +12,7 @@ const PAGES = [
   { path: '/for-you',   label: 'For You',   icon: Heart,           keywords: ['recommendations', 'discover', 'goals'] },
   { path: '/playlists', label: 'Playlists', icon: ListMusic,        keywords: ['generate', 'create', 'spotify'] },
   { path: '/features',  label: 'Tools',     icon: Wrench,           keywords: ['enrichment', 'dedup', 'maintenance'] },
+  { path: '/settings',  label: 'Settings',  icon: Settings,         keywords: ['account', 'profile', 'delete', 'logout'] },
 ]
 
 export default function GlobalSearch() {

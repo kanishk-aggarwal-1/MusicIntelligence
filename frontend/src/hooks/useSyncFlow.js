@@ -11,6 +11,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
   const [enrichmentJob, setEnrichmentJob] = useState(null)
   const [syncStatus, setSyncStatus] = useState(null)
   const [syncError, setSyncError] = useState(null)
+  const [syncAtLimit, setSyncAtLimit] = useState(false)
   const timersRef = useRef({})
   const failuresRef = useRef({})
 
@@ -49,6 +50,10 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
         if (kind === 'sync') {
           onSyncFinished?.(job)
           const result = job.result || {}
+          // Spotify caps recent-plays at 50 tracks per call — warn the user.
+          if (job.status === 'succeeded' && (result.new_history_rows ?? 0) >= 50) {
+            setSyncAtLimit(true)
+          }
           if (result.enrichment_queued && result.enrichment_job_id) {
             const queued = {
               id: result.enrichment_job_id,
@@ -114,6 +119,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
     enrichmentJob,
     syncStatus,
     syncError,
+    syncAtLimit,
     startSync,
     startEnrichment,
     refreshSyncStatus,

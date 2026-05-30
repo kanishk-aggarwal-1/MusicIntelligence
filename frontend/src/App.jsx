@@ -11,6 +11,7 @@ const Browse = lazy(() => import('./pages/Browse'))
 const ForYou = lazy(() => import('./pages/ForYou'))
 const Playlists = lazy(() => import('./pages/Playlists'))
 const Features = lazy(() => import('./pages/Features'))
+const Settings = lazy(() => import('./pages/Settings'))
 
 function PageLoading() {
   return (
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="/for-you"   element={<ProtectedRoute><ForYou /></ProtectedRoute>} />
         <Route path="/playlists" element={<ProtectedRoute><Playlists /></ProtectedRoute>} />
         <Route path="/features"  element={<ProtectedRoute><Features /></ProtectedRoute>} />
+        <Route path="/settings"  element={<ProtectedRoute><Settings /></ProtectedRoute>} />
         <Route path="*"          element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Suspense>

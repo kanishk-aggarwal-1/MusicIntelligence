@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Music2, ListMusic, Tag, Heart, Wrench, LogOut, RefreshCw, CheckCircle, XCircle, Search } from 'lucide-react'
+import { LayoutDashboard, Music2, ListMusic, Tag, Heart, Wrench, Settings, LogOut, RefreshCw, CheckCircle, XCircle, Search } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSyncFlow } from '../../hooks/useSyncFlow'
 
@@ -10,6 +10,7 @@ const links = [
   { to: '/for-you',   icon: Heart,           label: 'For You'   },
   { to: '/playlists', icon: ListMusic,        label: 'Playlists' },
   { to: '/features',  icon: Wrench,           label: 'Tools'     },
+  { to: '/settings',  icon: Settings,         label: 'Settings'  },
 ]
 
 function formatUserId(id) {
@@ -74,7 +75,7 @@ function JobToast({ job, label, onRetry }) {
 export default function Sidebar({ onNavigate }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const { syncing, syncJob, enrichmentJob, syncStatus, startSync, startEnrichment } = useSyncFlow()
+  const { syncing, syncJob, enrichmentJob, syncStatus, syncAtLimit, startSync, startEnrichment } = useSyncFlow()
 
   async function handleSync() {
     try {
@@ -165,6 +166,11 @@ export default function Sidebar({ onNavigate }) {
         <div className="space-y-2">
           <JobToast job={syncJob} label="Syncing history" onRetry={handleSync} />
           <JobToast job={enrichmentJob} label="Enriching tags" onRetry={handleEnrichmentRetry} />
+          {syncAtLimit && !syncJob && (
+            <p className="mx-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-xs text-zinc-400 leading-snug">
+              Spotify limits recent history to 50 tracks. Sync regularly to grow your library.
+            </p>
+          )}
         </div>
 
         {user && (
