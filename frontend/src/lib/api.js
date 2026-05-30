@@ -1,10 +1,11 @@
-const BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL
-  || import.meta.env.VITE_API_URL
-  || 'http://127.0.0.1:8000'
-).replace(/\/$/, '')
+const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL
+const BASE_URL = (configuredBaseUrl || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')).replace(/\/$/, '')
 
 async function request(path, options = {}) {
+  if (!BASE_URL) {
+    throw new Error('Missing VITE_API_BASE_URL. Set it to your Render backend URL and redeploy.')
+  }
+
   const headers = { ...(options.headers || {}) }
   if (!(options.body instanceof FormData)) {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json'
