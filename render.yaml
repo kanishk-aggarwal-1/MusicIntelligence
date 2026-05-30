@@ -28,3 +28,17 @@ services:
         value: http://ws.audioscrobbler.com/2.0/
       - key: SESSION_ENCRYPTION_KEY
         sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: musicintelligence-hourly-sync
+    runtime: python
+    schedule: "0 * * * *"
+    buildCommand: pip install requests
+    startCommand: python scripts/hourly_sync.py
+    envVars:
+      - key: API_URL
+        value: https://musicintelligence-api.onrender.com
+      - key: CRON_SECRET
+        sync: false

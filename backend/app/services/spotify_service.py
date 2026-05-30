@@ -361,12 +361,10 @@ def search_track(sp, title: str, artist: str):
 
 
 def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playlist"):
-    playlist = sp._post(
-        "me/playlists",
-        payload={
-            "name": name,
-            "public": False,
-        },
+    playlist = sp.user_playlist_create(
+        user=user_id,
+        name=name,
+        public=False,
     )
 
     if track_ids:
@@ -375,7 +373,7 @@ def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playl
             for track_id in track_ids
         ]
         try:
-            sp._post(f"playlists/{playlist['id']}/items", payload={"uris": uris})
+            sp.playlist_add_items(playlist["id"], uris)
         except Exception:
             try:
                 sp.current_user_unfollow_playlist(playlist["id"])

@@ -85,7 +85,14 @@ def logout(request: Request, db: Session = Depends(get_db)):
     deleted = query.delete(synchronize_session=False) if query is not None else 0
     db.commit()
     response = JSONResponse({"message": "Logged out", "deleted_sessions": deleted})
-    response.delete_cookie(key=SESSION_COOKIE_NAME)
+    cookie_opts = get_session_cookie_options()
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        secure=cookie_opts["secure"],
+        httponly=cookie_opts["httponly"],
+        samesite=cookie_opts["samesite"],
+    )
     return response
 
 

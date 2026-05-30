@@ -8,6 +8,8 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 
+from ..database import engine as _db_engine
+
 from ..models.artist import Artist
 from ..models.listening_history import ListeningHistory
 from ..models.recommendation_feedback import RecommendationFeedback
@@ -235,7 +237,7 @@ def sync_listening_history(db, user_id, tracks):
             ).first()
 
         if not existing:
-            if db.bind and db.bind.dialect.name == "postgresql":
+            if _db_engine.dialect.name == "postgresql":
                 result = db.execute(
                     postgres_insert(ListeningHistory.__table__)
                     .values(user_id=user_id, song_id=song.id, played_at=played_at)
@@ -595,9 +597,18 @@ def recommend_songs(
         .all()
     )
 
+    # Hard-exclude songs the user never wants to see again, or has disliked repeatedly.
+    excluded_song_ids = {
+        song_id
+        for song_id, counts in feedback_map.items()
+        if counts.get("never_show", 0) >= 1 or counts.get("dislike", 0) >= 2
+    }
+
     scored = []
 
     for song in songs:
+        if song.id in excluded_song_ids:
+            continue
         if not song.song_tags:
             continue
 
@@ -668,7 +679,7 @@ def recommend_songs(
             + rarity_or_discovery_score * 0.07
             + quality_confidence_score * 0.08
             + (1.0 if song.spotify_id else 0.0) * 0.05
-            + feedback_boost * 0.10
+            + feedback_boost * 0.20
             - repetition_penalty * 0.10
             - recently_overplayed_penalty * 0.05
         )
