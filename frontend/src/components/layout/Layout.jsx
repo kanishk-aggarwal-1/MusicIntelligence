@@ -1,5 +1,6 @@
 import Sidebar from './Sidebar'
 import PreviewPlayer from '../ui/PreviewPlayer'
+import GlobalSearch from '../ui/GlobalSearch'
 import { usePlayer } from '../../contexts/PlayerContext'
 import { Menu, X } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
@@ -7,10 +8,11 @@ import { useState } from 'react'
 
 const PAGE_TITLES = {
   '/dashboard': 'Dashboard',
-  '/songs': 'Songs',
-  '/browse': 'Browse',
+  '/songs':     'Songs',
+  '/browse':    'Browse',
+  '/for-you':   'For You',
   '/playlists': 'Playlists',
-  '/features': 'Features',
+  '/features':  'Tools',
 }
 
 export default function Layout({ children }) {
@@ -68,6 +70,7 @@ export default function Layout({ children }) {
         {children}
       </main>
       <PreviewPlayer />
+      <GlobalSearch />
     </div>
   )
 }

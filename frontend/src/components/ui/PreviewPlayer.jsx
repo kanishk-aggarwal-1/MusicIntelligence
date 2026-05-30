@@ -51,7 +51,10 @@ export default function PreviewPlayer() {
               style={{ width: `${progress * 100}%` }}
             />
           </div>
-          <p className="text-center text-zinc-500 text-xs">30s preview</p>
+          <p className="text-center text-zinc-600 text-xs">
+            <kbd className="font-mono">space</kbd> play/pause &nbsp;·&nbsp;
+            <kbd className="font-mono">←→</kbd> seek 10s
+          </p>
         </div>
 
         {/* Close */}

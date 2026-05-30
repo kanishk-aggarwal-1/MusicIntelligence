@@ -293,6 +293,23 @@ export default function Playlists() {
 
           {error && <p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-2.5">{error}</p>}
 
+          {pushed && (
+            <div className="flex items-center justify-between gap-4 bg-brand/10 border border-brand/20 rounded-xl px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-brand text-sm font-medium">Playlist saved to Spotify!</p>
+                <p className="text-zinc-400 text-xs mt-0.5 truncate">{pushed.name}</p>
+              </div>
+              <a
+                href={`https://open.spotify.com/playlist/${pushed.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand text-black font-semibold rounded-lg hover:bg-green-400 transition-colors shrink-0"
+              >
+                <ExternalLink className="w-3 h-3" /> Open
+              </a>
+            </div>
+          )}
+
           {preview && (
             <div className="bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden">
               <div className="flex items-center justify-between gap-4 px-5 py-4 border-b border-zinc-800">
@@ -325,13 +342,18 @@ export default function Playlists() {
                     {generating ? <Spinner size="sm" /> : <RotateCcw className="w-3.5 h-3.5" />}
                   </button>
                   {spotifyPlaylistId ? (
-                    <a href={`https://open.spotify.com/playlist/${spotifyPlaylistId}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand text-black font-medium rounded-lg hover:bg-green-400 transition-colors">
-                      <ExternalLink className="w-3 h-3" /> Open in Spotify
+                    <a
+                      href={`https://open.spotify.com/playlist/${spotifyPlaylistId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand text-black font-semibold rounded-lg hover:bg-green-400 transition-colors"
+                    >
+                      <ExternalLink className="w-3 h-3" /> Open in Spotify ↗
                     </a>
                   ) : (
                     <button onClick={pushToSpotify} disabled={pushing} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand text-black font-medium rounded-lg hover:bg-green-400 transition-colors disabled:opacity-60">
                       {pushing ? <Spinner size="sm" /> : <ExternalLink className="w-3 h-3" />}
-                      {pushing ? 'Creating...' : 'Create Playlist in Spotify'}
+                      {pushing ? 'Creating...' : 'Save to Spotify'}
                     </button>
                   )}
                 </div>

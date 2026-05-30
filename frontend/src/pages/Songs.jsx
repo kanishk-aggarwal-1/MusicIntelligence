@@ -126,9 +126,13 @@ function SongListRow({ song, index, style }) {
   )
 }
 
+const PAGE_SIZE = 500
+
 export default function Songs() {
   const [songs, setSongs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -136,16 +140,41 @@ export default function Songs() {
   const [view, setView] = useState('grid')
   const [selected, setSelected] = useState(null)
   const [containerRef, size] = useElementSize()
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight)
+
+  useEffect(() => {
+    const onResize = () => setWindowHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   useEffect(() => {
     setLoading(true)
-    const params = { limit: 5000 }
+    setSongs([])
+    setHasMore(false)
+    const params = { limit: PAGE_SIZE, offset: 0 }
     if (statusFilter) params.enrichment_status = statusFilter
     api.get('/songs', params)
-      .then(setSongs)
+      .then(data => {
+        setSongs(data)
+        setHasMore(data.length === PAGE_SIZE)
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [statusFilter])
+
+  function loadMore() {
+    setLoadingMore(true)
+    const params = { limit: PAGE_SIZE, offset: songs.length }
+    if (statusFilter) params.enrichment_status = statusFilter
+    api.get('/songs', params)
+      .then(data => {
+        setSongs(prev => [...prev, ...data])
+        setHasMore(data.length === PAGE_SIZE)
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoadingMore(false))
+  }
 
   const filtered = useMemo(() => {
     let list = songs
@@ -172,14 +201,19 @@ export default function Songs() {
   const columns = width >= 1280 ? 6 : width >= 1024 ? 5 : width >= 768 ? 4 : width >= 640 ? 3 : 2
   const columnWidth = Math.floor(width / columns)
   const rowHeight = columnWidth + 94
-  const virtualHeight = Math.max(420, Math.min(900, window.innerHeight - 260))
+  const virtualHeight = Math.max(420, Math.min(900, windowHeight - 260))
 
   return (
     <div className="p-4 md:p-8 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-white">Songs</h1>
         <p className="text-zinc-400 text-sm mt-1">
-          {loading ? 'Loading...' : `${filtered.length.toLocaleString()} songs`}
+          {loading ? 'Loading…' : (
+            <>
+              {filtered.length.toLocaleString()} songs
+              {hasMore && !search && <span className="text-zinc-600"> · more available</span>}
+            </>
+          )}
         </p>
       </div>
 
@@ -248,6 +282,20 @@ export default function Songs() {
               {({ index, style }) => <SongListRow song={filtered[index]} index={index} style={style} />}
             </FixedSizeList>
           )}
+        </div>
+      )}
+
+      {!loading && !search && hasMore && (
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300 text-sm hover:bg-zinc-700 disabled:opacity-60"
+          >
+            {loadingMore ? <Spinner size="sm" /> : null}
+            {loadingMore ? 'Loading…' : 'Load more songs'}
+          </button>
         </div>
       )}
 

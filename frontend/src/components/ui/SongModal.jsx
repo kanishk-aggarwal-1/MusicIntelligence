@@ -1,8 +1,13 @@
 import { useState } from 'react'
-import { X, EyeOff, Eye, RefreshCw, ThumbsUp, ThumbsDown, SkipForward, Ban, Heart } from 'lucide-react'
+import { X, EyeOff, Eye, RefreshCw, ThumbsUp, ThumbsDown, SkipForward, Ban, Heart, Calendar, Headphones, ListMusic } from 'lucide-react'
 import { api } from '../../lib/api'
 import { usePlayer } from '../../contexts/PlayerContext'
 import Spinner from './Spinner'
+
+function formatDate(value) {
+  if (!value) return null
+  return new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
 
 const FEEDBACK = [
   { action: 'like',          label: 'Like',           icon: ThumbsUp,    color: 'text-green-400'  },
@@ -99,9 +104,27 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
               </span>
               {song.is_deleted && <span className="text-xs px-2 py-0.5 bg-red-500/10 text-red-400 rounded-full">hidden</span>}
             </div>
-            {song.listening_count > 0 && (
-              <p className="text-zinc-500 text-xs mt-1">Played {song.listening_count} times</p>
-            )}
+            {/* Listening stats */}
+            <div className="flex gap-3 mt-3 flex-wrap">
+              {song.listening_count > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                  <Headphones className="w-3.5 h-3.5 text-zinc-600" />
+                  <span>{song.listening_count} play{song.listening_count !== 1 ? 's' : ''}</span>
+                </div>
+              )}
+              {song.last_listened_at && (
+                <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                  <Calendar className="w-3.5 h-3.5 text-zinc-600" />
+                  <span>Last: {formatDate(song.last_listened_at)}</span>
+                </div>
+              )}
+              {song.playlist_inclusion_count > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                  <ListMusic className="w-3.5 h-3.5 text-zinc-600" />
+                  <span>In {song.playlist_inclusion_count} playlist{song.playlist_inclusion_count !== 1 ? 's' : ''}</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Feedback */}

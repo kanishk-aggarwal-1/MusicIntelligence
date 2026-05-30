@@ -1,0 +1,224 @@
+import { useState, useEffect } from 'react'
+import { Music, Pause, Play, SkipForward, Target, CheckCircle, X } from 'lucide-react'
+import { api } from '../lib/api'
+import { usePlayer } from '../contexts/PlayerContext'
+import Spinner from '../components/ui/Spinner'
+import ErrorBoundary from '../components/ui/ErrorBoundary'
+
+function Section({ title, description, children }) {
+  return (
+    <div className="bg-zinc-900 rounded-xl p-5 border border-zinc-800 space-y-4">
+      <div>
+        <h2 className="text-white font-semibold">{title}</h2>
+        {description && <p className="text-zinc-400 text-sm mt-1">{description}</p>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function matchLabel(score) {
+  if (score == null) return null
+  if (score >= 0.8) return { text: 'Strong match', color: 'text-green-400' }
+  if (score >= 0.5) return { text: 'Good match',   color: 'text-brand'     }
+  return               { text: 'Possible match', color: 'text-zinc-500'   }
+}
+
+function DiscoveryFeed() {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const { play, isPlaying } = usePlayer()
+
+  useEffect(() => {
+    api.get('/insights/discovery-feed', { limit: 20 })
+      .then(d => setItems(d.items || []))
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <div className="flex justify-center py-6"><Spinner /></div>
+  if (!items.length) return (
+    <p className="text-zinc-500 text-sm">
+      Sync your library and run enrichment to generate personalised recommendations.
+    </p>
+  )
+
+  return (
+    <div className="space-y-1">
+      {items.map((item, i) => {
+        const song = { ...item, id: item.song_id }
+        const active = isPlaying(song)
+        const match = matchLabel(item.score)
+        return (
+          <div key={item.song_id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-zinc-800 group">
+            <span className="w-5 text-xs text-zinc-600 text-center shrink-0">{i + 1}</span>
+
+            <div className="relative w-10 h-10 shrink-0">
+              {item.image_url
+                ? <img src={item.image_url} alt="" className="w-full h-full rounded object-cover" />
+                : <div className="w-full h-full rounded bg-zinc-800 flex items-center justify-center"><Music className="w-4 h-4 text-zinc-600" /></div>}
+              {item.preview_url && (
+                <button
+                  onClick={() => play(song)}
+                  className="absolute inset-0 rounded bg-black/60 items-center justify-center hidden group-hover:flex"
+                >
+                  {active ? <Pause className="w-3 h-3 text-brand" /> : <Play className="w-3 h-3 text-white" />}
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <p className="text-white text-sm truncate">{item.title}</p>
+              <p className="text-zinc-500 text-xs truncate">{item.artist}</p>
+              {item.reasons?.[0] && (
+                <p className="text-zinc-600 text-xs italic truncate mt-0.5">{item.reasons[0]}</p>
+              )}
+            </div>
+
+            {match && (
+              <span className={`text-xs shrink-0 hidden sm:inline ${match.color}`}>{match.text}</span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const GOAL_TYPES = [
+  { value: 'new_songs_per_week',      label: 'New songs per week'   },
+  { value: 'listening_days_per_week', label: 'Active days per week' },
+  { value: 'repeat_rate_max',         label: 'Max repeat rate (%)'  },
+]
+
+function GoalsSection() {
+  const [goals, setGoals]       = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [form, setForm]         = useState({ goal_type: 'new_songs_per_week', target_value: 5, period: 'weekly' })
+  const [toast, setToast]       = useState(null)
+
+  function loadGoals() {
+    setLoading(true)
+    api.get('/insights/goals-status')
+      .then(d => setGoals(d.goals || []))
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { loadGoals() }, [])
+
+  async function createGoal() {
+    setCreating(true)
+    try {
+      await api.post('/insights/goals', { ...form, target_value: Number(form.target_value) })
+      loadGoals()
+    } catch (e) { console.error(e) }
+    finally { setCreating(false) }
+  }
+
+  async function removeGoal(goalId) {
+    try {
+      await api.delete(`/insights/goals/${goalId}`)
+      setGoals(prev => prev.filter(g => g.goal_id !== goalId))
+      setToast('Goal removed')
+      setTimeout(() => setToast(null), 2000)
+    } catch (e) { console.error(e) }
+  }
+
+  return (
+    <div className="space-y-4">
+      {toast && (
+        <div className="rounded-lg bg-brand/10 border border-brand/20 text-brand text-sm px-3 py-2">
+          {toast}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3 items-end">
+        <div className="space-y-1">
+          <label className="text-xs text-zinc-500">Goal type</label>
+          <select
+            value={form.goal_type}
+            onChange={e => setForm(f => ({ ...f, goal_type: e.target.value }))}
+            className="bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand"
+          >
+            {GOAL_TYPES.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-zinc-500">Target</label>
+          <input
+            type="number" min={1} max={100}
+            value={form.target_value}
+            onChange={e => setForm(f => ({ ...f, target_value: e.target.value }))}
+            className="w-20 bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand"
+          />
+        </div>
+        <button
+          onClick={createGoal}
+          disabled={creating}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-brand text-black hover:bg-green-400 disabled:opacity-50"
+        >
+          {creating ? <Spinner size="sm" /> : <Target className="w-4 h-4" />}
+          Add Goal
+        </button>
+      </div>
+
+      {loading ? <Spinner /> : goals.length === 0 ? (
+        <p className="text-zinc-500 text-sm">No active goals yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {goals.map(g => {
+            const pct = Math.min(100, Math.round((g.progress / g.target) * 100))
+            const onTrack = g.status === 'on_track'
+            return (
+              <div key={g.goal_id} className="bg-zinc-950 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-white text-sm">{GOAL_TYPES.find(t => t.value === g.goal_type)?.label ?? g.goal_type}</p>
+                  <div className="flex items-center gap-1.5">
+                    {onTrack && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
+                    <span className={`text-xs font-medium ${onTrack ? 'text-green-400' : 'text-yellow-400'}`}>
+                      {g.progress} / {g.target}
+                    </span>
+                    <button
+                      type="button"
+                      title="Remove goal"
+                      onClick={() => removeGoal(g.goal_id)}
+                      className="w-5 h-5 rounded flex items-center justify-center text-zinc-600 hover:text-red-400 hover:bg-zinc-800"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+                <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${onTrack ? 'bg-green-400' : 'bg-brand'}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function ForYou() {
+  return (
+    <div className="p-4 md:p-8 space-y-6 max-w-2xl">
+      <div>
+        <h1 className="text-2xl font-bold text-white">For You</h1>
+        <p className="text-zinc-400 text-sm mt-1">Recommendations and goals based on your taste profile</p>
+      </div>
+
+      <Section title="Recommended" description="Songs from your library ranked by your current taste.">
+        <ErrorBoundary><DiscoveryFeed /></ErrorBoundary>
+      </Section>
+
+      <Section title="Listening Goals" description="Set weekly targets and track your progress.">
+        <ErrorBoundary><GoalsSection /></ErrorBoundary>
+      </Section>
+    </div>
+  )
+}

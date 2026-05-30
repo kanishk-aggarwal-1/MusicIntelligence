@@ -7,9 +7,10 @@ import Spinner from './components/ui/Spinner'
 const Login = lazy(() => import('./pages/Login'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Songs = lazy(() => import('./pages/Songs'))
+const Browse = lazy(() => import('./pages/Browse'))
+const ForYou = lazy(() => import('./pages/ForYou'))
 const Playlists = lazy(() => import('./pages/Playlists'))
 const Features = lazy(() => import('./pages/Features'))
-const Browse = lazy(() => import('./pages/Browse'))
 
 function PageLoading() {
   return (
@@ -33,9 +34,10 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/songs"     element={<ProtectedRoute><Songs /></ProtectedRoute>} />
+        <Route path="/browse"    element={<ProtectedRoute><Browse /></ProtectedRoute>} />
+        <Route path="/for-you"   element={<ProtectedRoute><ForYou /></ProtectedRoute>} />
         <Route path="/playlists" element={<ProtectedRoute><Playlists /></ProtectedRoute>} />
         <Route path="/features"  element={<ProtectedRoute><Features /></ProtectedRoute>} />
-        <Route path="/browse"    element={<ProtectedRoute><Browse /></ProtectedRoute>} />
         <Route path="*"          element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Suspense>

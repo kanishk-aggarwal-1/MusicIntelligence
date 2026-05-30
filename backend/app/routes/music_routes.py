@@ -49,8 +49,10 @@ def _top_tag_name(song: Song):
 @router.get("/")
 def get_songs(
     request: Request,
+    q: str | None = None,
     genre: str | None = None,
-    limit: int = 1000,
+    limit: int = 500,
+    offset: int = 0,
     enrichment_status: str | None = None,
     quick_filter: str | None = None,
     include_deleted: bool = False,
@@ -62,7 +64,8 @@ def get_songs(
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
 
-    safe_limit = max(1, min(limit, 5000))
+    safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
     safe_days = max(1, min(recently_played_days, 365))
 
     if quick_filter and quick_filter not in QUICK_FILTERS:
@@ -104,6 +107,14 @@ def get_songs(
     if enrichment_status:
         query = query.filter(Song.enrichment_status == enrichment_status)
 
+    # Push ORDER BY + LIMIT into SQL only for the simple case.
+    # When quick_filter or q is set we need Python-side filtering first.
+    if not quick_filter and not q:
+        query = query.order_by(
+            last_listen_subq.c.last_listened_at.desc(),
+            Song.title,
+        ).limit(safe_limit).offset(safe_offset)
+
     rows = query.all()
 
     duplicate_keys = set()
@@ -120,6 +131,12 @@ def get_songs(
         top_tag = _top_tag_name(s)
         popularity_value = s.popularity_score or 0
         playlist_count = int(playlist_inclusion_count or 0)
+
+        if q:
+            q_lower = q.lower()
+            artist_name = (s.artist.name if s.artist else "").lower()
+            if q_lower not in (s.title or "").lower() and q_lower not in artist_name:
+                continue
 
         if quick_filter == "failed_enrichment" and s.enrichment_status != "failed":
             continue
@@ -172,8 +189,13 @@ def get_songs(
             }
         )
 
-    filtered.sort(key=lambda row: (row["last_listened_at"] is None, row["last_listened_at"] or "", row["title"]), reverse=True)
-    return filtered[:safe_limit]
+    if quick_filter or q:
+        # Python-filtered results: sort and paginate here
+        filtered.sort(key=lambda row: (row["last_listened_at"] is None, row["last_listened_at"] or "", row["title"]), reverse=True)
+        return filtered[safe_offset:safe_offset + safe_limit]
+
+    # Common path: SQL already applied ORDER BY + LIMIT + OFFSET
+    return filtered
 
 
 @router.get("/{song_id}")

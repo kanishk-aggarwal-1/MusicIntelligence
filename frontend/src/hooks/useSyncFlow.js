@@ -10,6 +10,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
   const [syncJob, setSyncJob] = useState(null)
   const [enrichmentJob, setEnrichmentJob] = useState(null)
   const [syncStatus, setSyncStatus] = useState(null)
+  const [syncError, setSyncError] = useState(null)
   const timersRef = useRef({})
   const failuresRef = useRef({})
 
@@ -77,11 +78,16 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
 
   async function startSync() {
     setSyncing(true)
+    setSyncError(null)
     try {
       const job = await api.post('/user/sync-history/job')
       setSyncJob(job)
       startPolling('sync', job.id)
       return job
+    } catch (e) {
+      const msg = e?.message || 'Sync failed. Please try again.'
+      setSyncError(msg)
+      throw e
     } finally {
       setSyncing(false)
     }
@@ -107,6 +113,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
     syncJob,
     enrichmentJob,
     syncStatus,
+    syncError,
     startSync,
     startEnrichment,
     refreshSyncStatus,
