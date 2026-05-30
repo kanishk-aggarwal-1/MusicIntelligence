@@ -1,6 +1,8 @@
 # Environment / secrets
 .env
 .env.*
+!.env.example
+!frontend/.env.example
 
 # Python cache / build
 __pycache__/
@@ -25,6 +27,8 @@ env/
 tmp/
 output/
 *.log
+frontend/dist/
+frontend/node_modules/
 
 # OS / editor
 .DS_Store

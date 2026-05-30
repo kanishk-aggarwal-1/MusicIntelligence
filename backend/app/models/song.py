@@ -15,6 +15,8 @@ class Song(Base):
     artist_id = Column(Integer, ForeignKey("artists.id"))
 
     spotify_id = Column(String, unique=True, index=True)
+    image_url = Column(String, nullable=True)
+    preview_url = Column(String, nullable=True)
 
     genre = Column(String)
 

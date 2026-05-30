@@ -8,7 +8,7 @@ from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..time_utils import utcnow_naive
 
-ALGORITHM_VERSION = "heuristic-v2"
+from .ml_recommendation_service import ALGORITHM_VERSION
 
 
 def _loads(text: str | None):
@@ -52,6 +52,39 @@ def _playlist_level_summary(items: list[dict[str, Any]], context_type: str | Non
         "context_fit": context_type,
         "diversity_summary": f"{unique_artists} unique artists across {len(items)} tracks.",
     }
+
+
+def _title_case_context(context_type: str | None):
+    labels = {
+        "focus": "Focus",
+        "workout": "Workout",
+        "late-night": "Late Night",
+        "chill": "Chill",
+    }
+    return labels.get((context_type or "").strip().lower())
+
+
+def build_playlist_name(items: list[dict[str, Any]], *, context_type: str | None = None, explicit_name: str | None = None):
+    if explicit_name and explicit_name.strip():
+        return explicit_name.strip()
+
+    summary = _playlist_level_summary(items, context_type=context_type)
+    genre = next((g for g in summary.get("dominant_genres", []) if g), None)
+    context = _title_case_context(context_type)
+    try:
+        date_label = utcnow_naive().strftime("%b %-d")
+    except ValueError:
+        date_label = utcnow_naive().strftime("%b %#d")
+
+    if genre and context:
+        return f"{genre.title()} {context} Mix - {date_label}"
+    if context == "Late Night":
+        return f"Late Night Chill - {date_label}"
+    if context:
+        return f"{context} Mix - {date_label}"
+    if genre:
+        return f"{genre.title()} Mix - {date_label}"
+    return f"Your Top Picks - {date_label}"
 
 
 def create_playlist_preview_record(
@@ -147,9 +180,11 @@ def serialize_generated_playlist(record: GeneratedPlaylist, include_tracks: bool
                 "explanation": _loads(track.explanation_json) or {},
                 "song": {
                     "title": track.song.title if track.song else None,
-                    "spotify_id": track.song.spotify_id if track.song else None,
-                    "genre": track.song.genre if track.song else None,
                     "artist": track.song.artist.name if track.song and track.song.artist else None,
+                    "spotify_id": track.song.spotify_id if track.song else None,
+                    "image_url": track.song.image_url if track.song else None,
+                    "preview_url": track.song.preview_url if track.song else None,
+                    "genre": track.song.genre if track.song else None,
                     "enrichment_status": track.song.enrichment_status if track.song else None,
                 },
             }

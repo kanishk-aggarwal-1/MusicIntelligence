@@ -38,6 +38,14 @@ def _canonical_title(title: str):
     return t
 
 
+def _top_tag_name(song: Song):
+    tags = [st for st in (song.song_tags or []) if st.tag and st.tag.name]
+    if not tags:
+        return None
+    tags.sort(key=lambda st: (float(st.weight or 0), st.tag.name.lower()), reverse=True)
+    return tags[0].tag.name
+
+
 @router.get("/")
 def get_songs(
     request: Request,
@@ -109,6 +117,7 @@ def get_songs(
     filtered = []
     for s, last_listened_at, listening_count, playlist_inclusion_count in rows:
         tag_count = len(s.song_tags or [])
+        top_tag = _top_tag_name(s)
         popularity_value = s.popularity_score or 0
         playlist_count = int(playlist_inclusion_count or 0)
 
@@ -144,6 +153,8 @@ def get_songs(
                 "title": s.title,
                 "artist": s.artist.name if s.artist else None,
                 "spotify_id": s.spotify_id,
+                "image_url": s.image_url,
+                "preview_url": s.preview_url,
                 "genre": s.genre,
                 "listeners": s.listeners,
                 "playcount": s.playcount,
@@ -152,6 +163,7 @@ def get_songs(
                 "listening_count": int(listening_count or 0),
                 "playlist_inclusion_count": playlist_count,
                 "tag_count": tag_count,
+                "top_tag": top_tag,
                 "enrichment_status": s.enrichment_status,
                 "enrichment_error": s.enrichment_error,
                 "discovery_source": s.discovery_source,
@@ -201,6 +213,8 @@ def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db
         "title": song.title,
         "artist": song.artist.name if song.artist else None,
         "spotify_id": song.spotify_id,
+        "image_url": song.image_url,
+        "preview_url": song.preview_url,
         "genre": song.genre,
         "listeners": song.listeners,
         "playcount": song.playcount,
@@ -214,6 +228,7 @@ def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db
         "last_listened_at": last_played.isoformat() if last_played else None,
         "is_deleted": bool(song.is_deleted),
         "tags": [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
+        "top_tag": _top_tag_name(song),
     }
 
 

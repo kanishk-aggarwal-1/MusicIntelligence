@@ -1,12 +1,18 @@
+import json
+import threading
 from functools import partial
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 import spotipy
 
 from ..database import get_db
 from ..config import settings
+from ..models.job import Job
+from ..models.listening_history import ListeningHistory
+from ..models.song import Song
 from ..models.user_session import UserSession
 from ..services.job_service import create_job, run_job, serialize_job
 from ..services.spotify_service import (
@@ -76,6 +82,58 @@ def session_status(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/sync-status")
+def sync_status(request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+    total_songs = (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False))
+        .scalar()
+    ) or 0
+    pending_count = (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False), Song.enrichment_status == "pending")
+        .scalar()
+    ) or 0
+
+    last_sync_job = (
+        db.query(func.max(Job.finished_at))
+        .filter(Job.user_id == user_id, Job.job_type == "sync_history", Job.status == "succeeded")
+        .scalar()
+    )
+    last_import_job = (
+        db.query(func.max(Job.finished_at))
+        .filter(Job.user_id == user_id, Job.job_type == "import_history", Job.status == "succeeded")
+        .scalar()
+    )
+    last_enriched = (
+        db.query(func.max(Job.finished_at))
+        .filter(Job.user_id == user_id, Job.job_type == "backfill_metadata", Job.status == "succeeded")
+        .scalar()
+    )
+
+    last_synced = max([dt for dt in (last_sync_job, last_import_job) if dt], default=None)
+
+    return {
+        "last_synced_at": last_synced.isoformat() if last_synced else None,
+        "last_enriched_at": last_enriched.isoformat() if last_enriched else None,
+        "pending_enrichment_count": int(pending_count),
+        "total_songs": int(total_songs),
+    }
+
+
 @router.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
     requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
@@ -116,6 +174,42 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
     }
 
 
+def _pending_enrichment_count(db: Session, user_id: str):
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+    return (
+        db.query(func.count(Song.id))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False), Song.enrichment_status == "pending")
+        .scalar()
+    ) or 0
+
+
+def _queue_enrichment_job(db: Session, *, user_id: str, limit: int = 200):
+    pending_count = int(_pending_enrichment_count(db, user_id))
+    if pending_count <= 0:
+        return None
+
+    job = create_job(
+        db,
+        user_id=user_id,
+        job_type="backfill_metadata",
+        message="Queued tag and genre enrichment",
+        progress_total=min(limit, pending_count),
+    )
+    thread = threading.Thread(
+        target=run_job,
+        args=(job.id, partial(_run_backfill_job, user_id=user_id, limit=limit, retry_partial=False, retry_failed=False)),
+        daemon=True,
+    )
+    thread.start()
+    return job
+
+
 def _run_sync_history_job(db: Session, progress, *, user_id: str):
     session = load_user_session(db, user_id=user_id)
     token = session.get("token")
@@ -130,11 +224,14 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
     sync_result = sync_listening_history(db, user_id, tracks)
 
     progress.update(current=2, message="Finalizing sync")
+    enrichment_job = _queue_enrichment_job(db, user_id=user_id, limit=200)
     return {
         "message": "History sync completed",
         "fetched_items": len(tracks),
         "progress_current": 3,
         "progress_total": 3,
+        "enrichment_queued": bool(enrichment_job),
+        "enrichment_job_id": enrichment_job.id if enrichment_job else None,
         **sync_result,
     }
 
@@ -206,6 +303,104 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
         "progress_total": max(1, int(result.get("scanned") or limit or 1)),
         **result,
     }
+
+
+def _parse_extended_history(data: list) -> list:
+    """Convert Spotify extended streaming history entries into sync-compatible track dicts."""
+    tracks = []
+    for entry in data:
+        # Skip podcast episodes and entries with no track name
+        if entry.get("episode_name") or not entry.get("master_metadata_track_name"):
+            continue
+
+        ms_played = entry.get("ms_played") or 0
+
+        # Ignore plays shorter than 30 seconds — accidental starts, previews
+        if ms_played < 30_000:
+            continue
+
+        reason_end = (entry.get("reason_end") or "").lower()
+        skipped = reason_end in ("fwdbtn", "endplay")
+
+        spotify_uri = entry.get("spotify_track_uri") or ""
+        spotify_id = spotify_uri.split(":")[-1] if spotify_uri.startswith("spotify:track:") else None
+
+        tracks.append({
+            "title": entry.get("master_metadata_track_name"),
+            "artist": entry.get("master_metadata_album_artist_name"),
+            "spotify_id": spotify_id,
+            "played_at": entry.get("ts"),
+            "ms_played": ms_played,
+            "skipped": skipped,
+        })
+    return tracks
+
+
+def _run_import_history_job(db, progress, *, user_id: str, data: list):
+    progress.update(total=3, current=0, message="Parsing tracks from Spotify history file")
+    tracks = _parse_extended_history(data)
+
+    progress.update(current=1, message=f"Importing {len(tracks):,} tracks into library")
+    result = sync_listening_history(db, user_id, tracks, enrich_inline=False)
+
+    progress.update(current=2, message="Backfilling Last.fm metadata for new songs")
+    new_songs = result.get("new_songs", 0)
+    if new_songs > 0:
+        backfill_missing_metadata(db, user_id=user_id, max_songs=new_songs + 50)
+
+    return {
+        "message": "Import complete",
+        "entries_in_file": len(data),
+        "valid_tracks": len(tracks),
+        **result,
+    }
+
+
+@router.post("/import-history/job")
+async def import_history_job(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db=Depends(get_db),
+):
+    """Upload a Spotify Extended Streaming History JSON file to bulk-import listening history.
+
+    Download your data at: https://www.spotify.com/account/privacy/
+    Upload any of the StreamingHistory_music_*.json files.
+    """
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    if file.content_type not in ("application/json", "text/plain", "application/octet-stream"):
+        raise HTTPException(status_code=400, detail="Expected a JSON file")
+
+    content = await file.read()
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+
+    try:
+        data = json.loads(content)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not parse JSON file")
+
+    if not isinstance(data, list):
+        raise HTTPException(status_code=400, detail="Expected a JSON array of history entries")
+
+    job = create_job(
+        db,
+        user_id=user_id,
+        job_type="import_history",
+        message=f"Queued import of {len(data):,} history entries",
+        progress_total=3,
+    )
+    background_tasks.add_task(
+        run_job,
+        job.id,
+        partial(_run_import_history_job, user_id=user_id, data=data),
+    )
+    return serialize_job(job)
 
 
 @router.post("/backfill-metadata/job")

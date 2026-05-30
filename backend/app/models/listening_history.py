@@ -13,11 +13,8 @@ class ListeningHistory(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-
     user_id = Column(String, index=True)
-
     song_id = Column(Integer, ForeignKey("songs.id"))
-
     played_at = Column(DateTime, default=utcnow_naive)
 
     song = relationship("Song", back_populates="listening_history")
