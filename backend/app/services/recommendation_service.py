@@ -762,12 +762,16 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
         if index == 1 or index % 10 == 0 or index == len(artists):
             print(f"discover_new_songs.artist {index}/{len(artists)} name={artist}")
 
-        if include_summary:
-            discovery_result = discover_songs_from_artist(artist, include_stats=True)
-            discovered = discovery_result.get("songs", [])
-            summary["source_artists"] += int(discovery_result.get("source_artists") or 0)
-        else:
-            discovered = discover_songs_from_artist(artist)
+        try:
+            if include_summary:
+                discovery_result = discover_songs_from_artist(artist, include_stats=True)
+                discovered = discovery_result.get("songs", [])
+                summary["source_artists"] += int(discovery_result.get("source_artists") or 0)
+            else:
+                discovered = discover_songs_from_artist(artist)
+        except Exception as exc:
+            print(f"discover_new_songs.artist_failed name={artist} error={exc}")
+            discovered = []
 
         new_songs.extend(discovered)
 
@@ -875,7 +879,6 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
 
     db.commit()
     return {"store_attempted": len(songs), "store_rate_limited": rate_limited}
-
 
 
 

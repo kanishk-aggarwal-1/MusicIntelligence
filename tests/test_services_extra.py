@@ -28,6 +28,7 @@ from backend.app.services.recommendation_service import (
     build_discovery_feed,
     build_song_vector,
     build_user_profile,
+    discover_new_songs,
     recommend_songs,
     sync_listening_history,
 )
@@ -181,8 +182,31 @@ def test_recommend_songs_with_context_type(db_session):
     ])
     db_session.commit()
 
-    result = recommend_songs(db_session, "u1", context_type="focus", limit=5)
+    result = recommend_songs(db_session, "u1", context_type="focus", allow_discovery=False, limit=5)
     assert isinstance(result, list)
+
+
+def test_discover_new_songs_ignores_lastfm_artist_failures(monkeypatch, db_session):
+    db_session.add(_session("u1"))
+    song = _song_with_tag(
+        db_session,
+        artist_name="Failing Discovery Artist",
+        title="Discovery Seed",
+        tag_name="indie",
+        spotify_id="disc-fail-1",
+    )
+    db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, 0)))
+    db_session.commit()
+
+    def _failing_discovery(*args, **kwargs):
+        raise RuntimeError("lastfm unavailable")
+
+    monkeypatch.setattr(recommendation_service, "discover_songs_from_artist", _failing_discovery)
+
+    result, summary = discover_new_songs(db_session, "u1", include_summary=True)
+
+    assert result == []
+    assert summary["seed_artists"] == 1
 
 
 def test_recommend_songs_excludes_never_show(db_session):
