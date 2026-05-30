@@ -3,6 +3,7 @@ from datetime import datetime
 from backend.app.models.job import Job
 from backend.app.models.user_session import UserSession
 from backend.app.routes import user_routes
+from backend.app.services.job_service import create_job
 
 
 def _session(user_id: str):
@@ -42,3 +43,24 @@ def test_frontend_message_origin_uses_allowed_state(monkeypatch):
         == "https://music-intelligence-eight.vercel.app"
     )
     assert user_routes._frontend_message_origin("https://evil.example") == "http://127.0.0.1:5173"
+
+
+def test_sync_history_job_reuses_active_job(client_factory, db_session):
+    db_session.add(_session("u1"))
+    existing = create_job(
+        db_session,
+        user_id="u1",
+        job_type="sync_history",
+        message="Already syncing",
+        progress_total=3,
+    )
+    db_session.commit()
+
+    client = client_factory(user_routes.router)
+    resp = client.post("/user/sync-history/job", headers={"X-User-Id": "u1"})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == existing.id
+    assert payload["message"] == "Already syncing"
+    assert db_session.query(Job).filter_by(user_id="u1", job_type="sync_history").count() == 1

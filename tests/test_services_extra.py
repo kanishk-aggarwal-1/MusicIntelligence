@@ -19,6 +19,7 @@ from backend.app.services.api_cache_service import (
 from backend.app.services.job_service import (
     cancel_job,
     create_job,
+    get_active_job,
     get_job,
     list_jobs,
     run_job,
@@ -142,6 +143,21 @@ def test_get_job_without_user_id_filter(testing_session_local, db_session):
     result = get_job(db_session, job_id=job.id)
     assert result is not None
     assert result.user_id == "u1"
+
+
+def test_get_active_job_returns_latest_queued_or_running(db_session):
+    old = create_job(db_session, user_id="u1", job_type="sync_history")
+    old.status = "succeeded"
+    queued = create_job(db_session, user_id="u1", job_type="sync_history")
+    running = create_job(db_session, user_id="u1", job_type="sync_history")
+    running.status = "running"
+    other_user = create_job(db_session, user_id="u2", job_type="sync_history")
+    db_session.commit()
+
+    result = get_active_job(db_session, user_id="u1", job_type="sync_history")
+
+    assert result.id == running.id
+    assert result.id not in {old.id, other_user.id}
 
 
 # ── recommendation_service: build_discovery_feed ─────────────────────────────

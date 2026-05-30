@@ -71,6 +71,19 @@ def get_job(db: Session, *, job_id: str, user_id: str | None = None) -> Job | No
     return query.first()
 
 
+def get_active_job(db: Session, *, user_id: str, job_type: str) -> Job | None:
+    return (
+        db.query(Job)
+        .filter(
+            Job.user_id == user_id,
+            Job.job_type == job_type,
+            Job.status.in_(("queued", "running")),
+        )
+        .order_by(Job.created_at.desc())
+        .first()
+    )
+
+
 def list_jobs(db: Session, *, user_id: str, limit: int = 50) -> list[Job]:
     safe_limit = max(1, min(limit, 200))
     return (
