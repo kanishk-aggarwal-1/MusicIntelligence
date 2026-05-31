@@ -30,6 +30,7 @@ from ..services.spotify_service import (
     get_session_cookie_options,
     load_request_user_session,
     load_user_session,
+    missing_playlist_scopes,
     read_session_cookie_value,
     save_user_session,
 )
@@ -124,6 +125,19 @@ def callback(request: Request, db: Session = Depends(get_db)):
                 message="Failed to exchange Spotify authorization code.",
                 frontend_origin=frontend_origin,
                 status_code=400,
+            )
+
+        missing_scopes = missing_playlist_scopes(token_info)
+        if missing_scopes:
+            logger.warning("spotify.callback.missing_scopes missing=%s", ",".join(missing_scopes))
+            return _login_popup_response(
+                success=False,
+                message=(
+                    "Spotify login is missing playlist permissions. "
+                    "Please approve playlist-modify-private and playlist-modify-public."
+                ),
+                frontend_origin=frontend_origin,
+                status_code=403,
             )
 
         access_token = token_info["access_token"]
