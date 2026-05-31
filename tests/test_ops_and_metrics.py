@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from backend.app.database import get_db
 from backend.app.error_handlers import install_error_handlers
 from backend.app.routes import ops_routes
+from backend.app.services import rate_limit_service
 from backend.app.services.metrics_service import (
     get_metrics_snapshot,
     record_job,
@@ -75,7 +76,8 @@ def test_security_and_request_headers_are_added(db_session):
     assert resp.headers["X-Request-ID"]
 
 
-def test_rate_limit_returns_retry_after_header():
+def test_rate_limit_returns_retry_after_header(monkeypatch, testing_session_local):
+    monkeypatch.setattr(rate_limit_service, "SessionLocal", testing_session_local)
     request = _DummyRequest()
     namespace = "test-rate-limit"
     enforce_rate_limit(request, namespace=namespace, user_id="u1", limit=1, window_seconds=60)
@@ -85,5 +87,20 @@ def test_rate_limit_returns_retry_after_header():
     except HTTPException as exc:
         assert exc.status_code == 429
         assert exc.headers["Retry-After"]
+    else:
+        raise AssertionError("Expected rate limit HTTPException")
+
+
+def test_rate_limit_uses_database_store(monkeypatch, testing_session_local):
+    monkeypatch.setattr(rate_limit_service, "SessionLocal", testing_session_local)
+    request = _DummyRequest()
+    namespace = "test-db-rate-limit"
+
+    rate_limit_service.enforce_rate_limit(request, namespace=namespace, user_id="db-user", limit=1, window_seconds=60)
+
+    try:
+        rate_limit_service.enforce_rate_limit(request, namespace=namespace, user_id="db-user", limit=1, window_seconds=60)
+    except HTTPException as exc:
+        assert exc.status_code == 429
     else:
         raise AssertionError("Expected rate limit HTTPException")

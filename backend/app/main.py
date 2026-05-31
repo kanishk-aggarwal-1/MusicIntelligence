@@ -47,11 +47,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Run migrations before and after create_all:
-# before for legacy column/table compatibility, after for indexes on freshly created tables.
+# Migration strategy:
+# - run_startup_migrations() handles legacy additive compatibility fixes for
+#   deployed databases that predate Alembic.
+# - Base.metadata.create_all() creates any missing SQLAlchemy model tables.
+# - Alembic is the migration path going forward; run_startup_migrations() is
+#   legacy/frozen and should not grow further.
 run_startup_migrations()
 Base.metadata.create_all(bind=engine)
-run_startup_migrations()
 app.include_router(user_routes.router)
 app.include_router(playlist_routes.router)
 app.include_router(music_routes.router)

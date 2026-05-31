@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Music, Pause, Play, SkipForward, Target, CheckCircle, X, RefreshCw, Sparkles, Heart } from 'lucide-react'
+import { ExternalLink, Music, Pause, Play, Target, CheckCircle, X, RefreshCw, Sparkles, Heart } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { usePlayer } from '../contexts/PlayerContext'
@@ -52,6 +52,129 @@ function DiscoveryEmptyState() {
           </li>
         ))}
       </ol>
+    </div>
+  )
+}
+
+function TasteProfileSkeleton() {
+  return (
+    <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800 space-y-3">
+      <div className="h-4 w-40 bg-zinc-800 rounded animate-pulse" />
+      <div className="flex gap-2">
+        {[0, 1, 2, 3].map(i => <div key={i} className="h-6 w-20 bg-zinc-800 rounded-full animate-pulse" />)}
+      </div>
+    </div>
+  )
+}
+
+function TasteProfileSummary() {
+  const [profile, setProfile] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.get('/insights/taste-profile')
+      .then(d => setProfile(d))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <TasteProfileSkeleton />
+  if (!profile) return null
+
+  const strength = profile.profile_strength || 'building'
+  const label = `${strength.charAt(0).toUpperCase()}${strength.slice(1)} taste profile`
+
+  return (
+    <div className="bg-zinc-900 rounded-xl p-4 border border-zinc-800 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-zinc-300 text-sm">
+          {label} <span className="text-zinc-600">·</span> {profile.total_tagged_songs || 0} tagged songs
+        </p>
+        {strength === 'building' && (
+          <p className="text-zinc-500 text-xs">Keep syncing and enriching to improve recommendations.</p>
+        )}
+      </div>
+      {!!profile.top_tags?.length && (
+        <div className="flex flex-wrap gap-2">
+          {profile.top_tags.slice(0, 4).map(tag => (
+            <span key={tag.name} className="px-2.5 py-1 rounded-full bg-brand/10 text-brand text-xs">
+              {tag.name} {tag.pct}%
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiscoverSkeleton() {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {[0, 1, 2, 3].map(i => (
+        <div key={i} className="bg-zinc-950 rounded-lg p-3 space-y-2">
+          <div className="h-4 w-2/3 bg-zinc-800 rounded animate-pulse" />
+          <div className="h-3 w-1/2 bg-zinc-800 rounded animate-pulse" />
+          <div className="h-5 w-24 bg-zinc-800 rounded-full animate-pulse" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DiscoverSection() {
+  const [items, setItems] = useState([])
+  const [artistCount, setArtistCount] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.get('/insights/new-for-you')
+      .then(d => {
+        setItems(d.items || [])
+        setArtistCount(d.distinct_artist_count)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <DiscoverSkeleton />
+  if (!items.length) {
+    return (
+      <p className="text-zinc-500 text-sm">
+        {artistCount != null && artistCount < 5
+          ? 'Listen to more music to unlock discoveries'
+          : 'No new discoveries right now.'}
+      </p>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {items.slice(0, 10).map((item, i) => (
+        <div key={`${item.title}-${item.artist}-${i}`} className="bg-zinc-950 rounded-lg p-3 border border-zinc-900 hover:border-zinc-800 transition-colors">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-white text-sm font-medium truncate">{item.title}</p>
+              <p className="text-zinc-500 text-xs truncate mt-0.5">{item.artist}</p>
+            </div>
+            {item.spotify_url && (
+              <a
+                href={item.spotify_url}
+                target="_blank"
+                rel="noreferrer"
+                title="Open in Spotify"
+                className="shrink-0 w-7 h-7 rounded-lg bg-zinc-900 text-zinc-400 hover:text-brand hover:bg-zinc-800 flex items-center justify-center"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+          {item.reason && (
+            <span className="inline-flex mt-3 px-2 py-0.5 rounded-full bg-zinc-900 text-zinc-500 text-xs">
+              {item.reason}
+            </span>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
@@ -246,6 +369,12 @@ export default function ForYou() {
         <h1 className="text-2xl font-bold text-white">For You</h1>
         <p className="text-zinc-400 text-sm mt-1">Recommendations and goals based on your taste profile</p>
       </div>
+
+      <ErrorBoundary><TasteProfileSummary /></ErrorBoundary>
+
+      <Section title="Discover" description="New tracks from artists near your listening habits.">
+        <ErrorBoundary><DiscoverSection /></ErrorBoundary>
+      </Section>
 
       <Section title="Recommended" description="Songs from your library ranked by your current taste.">
         <ErrorBoundary><DiscoveryFeed /></ErrorBoundary>

@@ -25,7 +25,12 @@ def _column_type_map(inspector, table_name):
 
 
 def run_startup_migrations():
-    """Apply lightweight compatibility migrations for legacy schemas."""
+    """Apply frozen legacy compatibility migrations.
+
+    This function exists only to keep older deployed Neon databases compatible
+    with the current SQLAlchemy models through additive/raw SQL fixes. Do not
+    add new schema changes here; use Alembic for migrations going forward.
+    """
     try:
         inspector = inspect(engine)
         dialect = engine.dialect.name
