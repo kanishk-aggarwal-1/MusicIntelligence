@@ -26,6 +26,7 @@ SCOPES = (
     "playlist-modify-private "
     "playlist-modify-public"
 )
+REQUIRED_PLAYLIST_SCOPES = {"playlist-modify-private", "playlist-modify-public"}
 
 
 def _get_cipher():
@@ -152,7 +153,13 @@ def get_spotify_oauth():
         client_secret=settings.SPOTIFY_CLIENT_SECRET,
         redirect_uri=settings.SPOTIFY_REDIRECT_URI,
         scope=SCOPES,
+        show_dialog=True,
     )
+
+
+def missing_playlist_scopes(token_info: dict | None):
+    granted = set(((token_info or {}).get("scope") or "").split())
+    return sorted(REQUIRED_PLAYLIST_SCOPES - granted)
 
 
 def get_spotify_client(access_token: str):
