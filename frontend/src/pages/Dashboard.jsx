@@ -101,6 +101,8 @@ export default function Dashboard() {
     loadData()
   }, [loadData])
 
+  const trend = useMemo(() => computeTrend(timeline), [timeline])
+
   if (loading) return (
     <div className="p-4 md:p-8 space-y-8">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -113,8 +115,6 @@ export default function Dashboard() {
     </div>
   )
   if (error) return <div className="p-8 text-red-400">{error}</div>
-
-  const trend = useMemo(() => computeTrend(timeline), [timeline])
 
   const topArtists = (stats?.top_artists || []).map(a => ({
     ...a,

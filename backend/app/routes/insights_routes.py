@@ -16,7 +16,10 @@ from ..models.listening_history import ListeningHistory
 from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.song_tag import SongTag
+from ..models.tag import Tag
 from ..services.api_cache_service import clear_provider_cache
+from ..services.api_cache_service import get_cached_response, store_cached_response
+from ..services.discovery_service import discover_songs_from_artist
 from ..services.recommendation_service import build_discovery_feed
 from ..services.spotify_service import load_request_user_session
 from ..time_utils import utcnow_naive
@@ -148,6 +151,158 @@ def discovery_feed(request: Request, limit: int = 20, db: Session = Depends(get_
     safe_limit = max(1, min(limit, 100))
     feed = build_discovery_feed(db, user_id, limit=safe_limit)
     return {"items": feed}
+
+
+def _spotify_url_from_item(item: dict):
+    spotify_url = item.get("spotify_url") or item.get("external_url")
+    if spotify_url:
+        return spotify_url
+    spotify_id = item.get("spotify_id")
+    if spotify_id:
+        return f"https://open.spotify.com/track/{spotify_id}"
+    return None
+
+
+@router.get("/new-for-you")
+def new_for_you(request: Request, db: Session = Depends(get_db)):
+    user_id = _require_user_id(db, request)
+    cache_key = f"new_for_you:{user_id}"
+    cached = get_cached_response("insights", cache_key)
+    if cached and cached.get("payload") is not None:
+        return cached["payload"]
+
+    artist_rows = (
+        db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .join(Artist, Artist.id == Song.artist_id)
+        .filter(
+            ListeningHistory.user_id == user_id,
+            Song.is_deleted.is_(False),
+            Artist.name.is_not(None),
+        )
+        .group_by(Artist.name)
+        .order_by(func.count(ListeningHistory.id).desc())
+        .limit(5)
+        .all()
+    )
+
+    if len(artist_rows) < 5:
+        payload = {"items": [], "distinct_artist_count": len(artist_rows)}
+        store_cached_response("insights", cache_key, payload=payload, ttl=timedelta(hours=6))
+        return payload
+
+    listened_rows = (
+        db.query(Song.title, Artist.name, Song.spotify_id)
+        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
+        .join(Artist, Artist.id == Song.artist_id)
+        .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
+        .all()
+    )
+    listened_spotify_ids = {spotify_id for _, _, spotify_id in listened_rows if spotify_id}
+    listened_keys = {
+        ((title or "").strip().lower(), (artist or "").strip().lower())
+        for title, artist, _ in listened_rows
+    }
+
+    items = []
+    seen = set()
+    for artist_name, _plays in artist_rows:
+        try:
+            discovered = discover_songs_from_artist(artist_name)
+        except Exception:
+            continue
+
+        for item in discovered:
+            title = (item.get("title") or "").strip()
+            artist = (item.get("artist") or "").strip()
+            if not title or not artist:
+                continue
+
+            spotify_id = item.get("spotify_id")
+            normalized = (title.lower(), artist.lower())
+            if spotify_id and spotify_id in listened_spotify_ids:
+                continue
+            if normalized in listened_keys or normalized in seen:
+                continue
+
+            seen.add(normalized)
+            items.append(
+                {
+                    "title": title,
+                    "artist": artist,
+                    "spotify_url": _spotify_url_from_item(item),
+                    "reason": f"Similar to {artist_name}",
+                }
+            )
+            if len(items) >= 10:
+                payload = {"items": items, "distinct_artist_count": len(artist_rows)}
+                store_cached_response("insights", cache_key, payload=payload, ttl=timedelta(hours=6))
+                return payload
+
+    payload = {"items": items, "distinct_artist_count": len(artist_rows)}
+    store_cached_response("insights", cache_key, payload=payload, ttl=timedelta(hours=6))
+    return payload
+
+
+def _pct_rows(rows, total):
+    if not total:
+        return []
+    return [
+        {"name": name, "pct": int(round((float(value or 0) / total) * 100))}
+        for name, value in rows
+        if name
+    ]
+
+
+@router.get("/taste-profile")
+def taste_profile(request: Request, db: Session = Depends(get_db)):
+    user_id = _require_user_id(db, request)
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
+
+    all_tag_rows = (
+        db.query(Tag.name, func.sum(func.coalesce(SongTag.weight, 1.0)).label("weight"))
+        .join(SongTag, SongTag.tag_id == Tag.id)
+        .join(user_song_ids, user_song_ids.c.song_id == SongTag.song_id)
+        .group_by(Tag.name)
+        .order_by(func.sum(func.coalesce(SongTag.weight, 1.0)).desc())
+        .all()
+    )
+    total_tag_weight = sum(float(weight or 0) for _name, weight in all_tag_rows)
+
+    total_tagged_songs = (
+        db.query(func.count(func.distinct(SongTag.song_id)))
+        .join(user_song_ids, user_song_ids.c.song_id == SongTag.song_id)
+        .scalar()
+    ) or 0
+
+    all_genre_rows = (
+        db.query(Song.genre, func.count(func.distinct(Song.id)).label("songs"))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.genre.is_not(None), Song.is_deleted.is_(False))
+        .group_by(Song.genre)
+        .order_by(func.count(func.distinct(Song.id)).desc())
+        .all()
+    )
+    total_genre_count = sum(int(count or 0) for _name, count in all_genre_rows)
+
+    if total_tagged_songs >= 100:
+        profile_strength = "strong"
+    elif total_tagged_songs >= 30:
+        profile_strength = "moderate"
+    else:
+        profile_strength = "building"
+
+    return {
+        "top_tags": _pct_rows(all_tag_rows[:6], total_tag_weight),
+        "top_genres": _pct_rows(all_genre_rows[:4], total_genre_count),
+        "total_tagged_songs": int(total_tagged_songs),
+        "profile_strength": profile_strength,
+    }
 
 
 @router.post("/feedback")

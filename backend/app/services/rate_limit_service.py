@@ -1,25 +1,23 @@
-from collections import defaultdict, deque
-from time import monotonic
+import json
+import logging
+from datetime import timedelta
+from time import time
 
 from fastapi import HTTPException, Request
+from sqlalchemy.exc import IntegrityError
+
+from ..database import SessionLocal
+from ..models.api_cache import ApiCache
+from ..time_utils import utcnow_naive
 
 
-_REQUESTS: dict[str, deque] = {}
-
-# IPs that are trusted to set X-Forwarded-For (e.g. Render's load balancer).
-# Extend via the TRUSTED_PROXIES env var if needed.
-_TRUSTED_PROXIES = {"127.0.0.1", "::1", "10.0.0.0/8"}
-
-
-def _is_trusted_proxy(ip: str) -> bool:
-    """Return True if `ip` is a known trusted reverse-proxy address."""
-    return ip in _TRUSTED_PROXIES or ip.startswith("10.")
+logger = logging.getLogger(__name__)
 
 
 def _client_ip(request: Request) -> str:
     real_ip = request.client.host if request.client else "unknown"
     forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded and _is_trusted_proxy(real_ip):
+    if forwarded and (real_ip in {"127.0.0.1", "::1"} or real_ip.startswith("10.")):
         # Only trust the header when the direct connection comes from a known proxy.
         return forwarded.split(",", 1)[0].strip()
     return real_ip
@@ -33,58 +31,72 @@ def enforce_rate_limit(
     limit: int = 10,
     window_seconds: int = 60,
 ) -> None:
-    key = f"{namespace}:{user_id or _client_ip(request)}"
-    now = monotonic()
+    key = f"rate_limit:{namespace}:{user_id or _client_ip(request)}"
+    now = time()
+    cutoff = now - window_seconds
+    db = SessionLocal()
 
-    bucket = _REQUESTS.get(key)
-    if bucket is None:
-        bucket = deque()
-        _REQUESTS[key] = bucket
+    try:
+        now_dt = utcnow_naive()
+        db.query(ApiCache).filter(
+            ApiCache.provider == "rate_limit",
+            ApiCache.expires_at < now_dt,
+        ).delete(synchronize_session=False)
 
-    # Slide the window — remove expired timestamps.
-    while bucket and now - bucket[0] > window_seconds:
-        bucket.popleft()
-
-    if len(bucket) >= limit:
-        retry_after = max(1, int(window_seconds - (now - bucket[0])))
-        raise HTTPException(
-            status_code=429,
-            detail="Too many requests. Please wait a moment and try again.",
-            headers={"Retry-After": str(retry_after)},
+        row = (
+            db.query(ApiCache)
+            .filter(ApiCache.provider == "rate_limit", ApiCache.cache_key == key)
+            .first()
         )
 
-    bucket.append(now)
+        timestamps = []
+        if row and row.response_json:
+            try:
+                timestamps = [float(item) for item in json.loads(row.response_json)]
+            except Exception:
+                timestamps = []
 
-    # Prune the key entirely once its bucket is empty so _REQUESTS doesn't
-    # grow unbounded over time (e.g. unique IPs that each make one request).
-    # We can only prune after appending, so check on the *next* call for that key.
-    # Instead, prune stale keys opportunistically: if after sliding the window the
-    # bucket would be empty on a future visit, schedule removal now.
-    # Simple approach: if the bucket has exactly the entry we just added and the
-    # previous bucket was empty (i.e. this is a "fresh" key after expiry), delete
-    # the entry for any *other* key whose bucket is now empty.
-    # Practical approach: delete keys with empty buckets found during our own lookup.
-    # This is O(1) amortised per request.
-    if len(bucket) == 1:
-        # This key just became active again after being idle; take the opportunity
-        # to scan for and remove a few stale keys (bounded work per call).
-        _prune_stale(now, window_seconds, max_scan=20)
+        timestamps = [item for item in timestamps if item > cutoff]
 
+        if len(timestamps) >= limit:
+            retry_after = max(1, int(window_seconds - (now - timestamps[0])))
+            db.commit()
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please wait a moment and try again.",
+                headers={"Retry-After": str(retry_after)},
+            )
 
-def _prune_stale(now: float, window_seconds: float, max_scan: int = 20) -> None:
-    """Remove up to `max_scan` keys whose windows have fully expired."""
-    to_delete = []
-    scanned = 0
-    for key, bucket in _REQUESTS.items():
-        if scanned >= max_scan:
-            break
-        scanned += 1
-        if bucket and now - bucket[0] <= window_seconds:
-            continue
-        # Slide the window to see if the bucket would be empty.
-        while bucket and now - bucket[0] > window_seconds:
-            bucket.popleft()
-        if not bucket:
-            to_delete.append(key)
-    for key in to_delete:
-        _REQUESTS.pop(key, None)
+        timestamps.append(now)
+        serialized = json.dumps(timestamps)
+        expires_at = now_dt + timedelta(seconds=window_seconds)
+
+        if row:
+            row.response_json = serialized
+            row.status_code = 200
+            row.error = None
+            row.fetched_at = now_dt
+            row.expires_at = expires_at
+        else:
+            db.add(
+                ApiCache(
+                    provider="rate_limit",
+                    cache_key=key,
+                    response_json=serialized,
+                    status_code=200,
+                    error=None,
+                    fetched_at=now_dt,
+                    expires_at=expires_at,
+                )
+            )
+        db.commit()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        db.rollback()
+        logger.warning("rate_limit.write_conflict namespace=%s", namespace)
+    except Exception:
+        db.rollback()
+        logger.warning("rate_limit.failed_open namespace=%s", namespace, exc_info=True)
+    finally:
+        db.close()
