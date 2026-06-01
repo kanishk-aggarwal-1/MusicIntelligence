@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Ban, ChevronDown, ChevronUp, Clock, ExternalLink, Music, Pause, Play, RotateCcw, Shuffle, SkipForward, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { useAuth } from '../contexts/AuthContext'
 import { usePlayer } from '../contexts/PlayerContext'
 import Spinner from '../components/ui/Spinner'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
@@ -176,6 +178,8 @@ function HistoryTab() {
 }
 
 export default function Playlists() {
+  const navigate = useNavigate()
+  const { logout } = useAuth()
   const [tab, setTab] = useState('generate')
   const [config, setConfig] = useState({ context_type: '', max_tracks: 20, diversity: 0.5, familiarity: 0.5 })
   const [preview, setPreview] = useState(null)
@@ -216,6 +220,11 @@ export default function Playlists() {
       setPushed(res.playlist)
       setPreview(prev => prev ? { ...prev, generated_playlist: res.generated_playlist } : prev)
     } catch (e) {
+      if (e.status === 401) {
+        try { await logout() } catch {}
+        navigate('/login')
+        return
+      }
       setError(e.message)
     } finally {
       setPush(false)
