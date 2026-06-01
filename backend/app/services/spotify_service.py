@@ -491,7 +491,7 @@ def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playl
     owner_id = _current_spotify_user_id(sp, fallback_user_id=user_id)
     playlist = _spotify_post(
         sp,
-        f"https://api.spotify.com/v1/users/{owner_id}/playlists",
+        "https://api.spotify.com/v1/me/playlists",
         {
             "name": name,
             "public": False,
@@ -499,6 +499,14 @@ def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playl
             "description": "Created by MusicIntelligence",
         },
     )
+    playlist_owner_id = ((playlist.get("owner") or {}).get("id") or owner_id)
+    if playlist_owner_id != owner_id:
+        logger.warning(
+            "spotify.playlist_owner_mismatch expected_owner_id=%s playlist_owner_id=%s playlist_id=%s",
+            owner_id,
+            playlist_owner_id,
+            playlist.get("id"),
+        )
 
     if track_ids:
         uris = [
