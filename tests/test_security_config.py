@@ -80,7 +80,7 @@ def test_request_session_without_cookie_does_not_fall_back_to_latest_user(db_ses
     assert load_request_user_session(db_session, request=None) == {"token": None, "user_id": None}
 
 
-def test_create_playlist_uses_token_owner_endpoint(monkeypatch):
+def test_create_playlist_uses_current_user_playlist_endpoint(monkeypatch):
     from backend.app.services import spotify_service
 
     calls = []
@@ -98,7 +98,7 @@ def test_create_playlist_uses_token_owner_endpoint(monkeypatch):
 
         def json(self):
             if self.url.endswith("/playlists"):
-                return {"id": "playlist-id", "name": self.payload["name"]}
+                return {"id": "playlist-id", "name": self.payload["name"], "owner": {"id": "current-user"}}
             return {"snapshot_id": "snapshot-id"}
 
     class FakeSpotify:
@@ -120,7 +120,7 @@ def test_create_playlist_uses_token_owner_endpoint(monkeypatch):
     playlist = create_playlist(FakeSpotify(), "stale-user-id", ["track-1"], name="Test Mix")
 
     assert playlist["id"] == "playlist-id"
-    assert calls[0][0] == "https://api.spotify.com/v1/users/current-user/playlists"
+    assert calls[0][0] == "https://api.spotify.com/v1/me/playlists"
     assert calls[0][1]["Authorization"] == "Bearer token"
     assert calls[0][1]["Content-Type"] == "application/json"
     assert calls[0][2]["name"] == "Test Mix"
@@ -161,4 +161,4 @@ def test_create_playlist_falls_back_to_session_user_if_current_user_fails(monkey
 
     create_playlist(FakeSpotify(), "session-user", [], name="Fallback Mix")
 
-    assert calls[0][0] == "https://api.spotify.com/v1/users/session-user/playlists"
+    assert calls[0][0] == "https://api.spotify.com/v1/me/playlists"
