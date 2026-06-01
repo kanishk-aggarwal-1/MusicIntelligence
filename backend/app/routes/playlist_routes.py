@@ -268,6 +268,30 @@ def _build_playlist_warnings(details, max_tracks, created_track_count=0, spotify
         warnings.append("Spotify search rate limit was hit during this request, so track resolution was cut short.")
     return warnings
 
+
+def _spotify_error_detail(exc, *, prefix: str):
+    reason = getattr(exc, "reason", None)
+    status = getattr(exc, "http_status", None)
+    raw = str(exc)
+    parts = [prefix]
+    if status:
+        parts.append(f"Spotify status {status}.")
+    if reason:
+        parts.append(f"Reason: {reason}.")
+    if raw:
+        parts.append(raw[:700])
+    return " ".join(parts)
+
+
+def _looks_like_scope_error(exc):
+    text = f"{getattr(exc, 'reason', '')} {exc}".lower()
+    return (
+        "scope" in text
+        or "permission" in text
+        or "playlist-modify-private" in text
+        or "playlist-modify-public" in text
+    )
+
 def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, user_id: str):
     resolved_now = 0
     track_ids = []
@@ -330,13 +354,11 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
     except Exception as exc:
         if getattr(exc, "http_status", None) != 401:
             if isinstance(exc, SpotifyException) and getattr(exc, "http_status", None) == 403:
-                clear_user_session(db, user_id)
+                if _looks_like_scope_error(exc):
+                    clear_user_session(db, user_id)
                 raise HTTPException(
                     status_code=403,
-                    detail=(
-                        "Spotify refused playlist creation or track insertion. "
-                        "Log in again and approve playlist-modify-private and playlist-modify-public scopes."
-                    ),
+                    detail=_spotify_error_detail(exc, prefix="Spotify refused playlist creation or track insertion."),
                 ) from exc
             raise
         logger.info("playlist.create.token_expired user_id=%s", user_id)
@@ -349,13 +371,11 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
             return create_playlist(refreshed_sp, user_id, track_ids, name=name)
         except Exception as refresh_exc:
             if isinstance(refresh_exc, SpotifyException) and getattr(refresh_exc, "http_status", None) == 403:
-                clear_user_session(db, user_id)
+                if _looks_like_scope_error(refresh_exc):
+                    clear_user_session(db, user_id)
                 raise HTTPException(
                     status_code=403,
-                    detail=(
-                        "Spotify refused playlist creation or track insertion after token refresh. "
-                        "Log in again and approve playlist-modify-private and playlist-modify-public scopes."
-                    ),
+                    detail=_spotify_error_detail(refresh_exc, prefix="Spotify refused playlist creation or track insertion after token refresh."),
                 ) from refresh_exc
             raise
 
@@ -494,8 +514,10 @@ def create_from_preview(generated_playlist_id: int, request: Request, db: Sessio
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
     token = session.get("token")
-    if not token or not user_id:
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    if not token:
+        raise HTTPException(status_code=401, detail="spotify_token_expired")
 
     record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
     if not record:

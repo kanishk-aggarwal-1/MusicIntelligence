@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Ban, ChevronDown, ChevronUp, Clock, ExternalLink, Music, Pause, Play, RotateCcw, Shuffle, SkipForward, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { Ban, ChevronDown, ChevronUp, Clock, ExternalLink, Music, Pause, Play, RefreshCw, RotateCcw, Shuffle, SkipForward, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
@@ -21,6 +21,16 @@ const QUICK_FEEDBACK = [
   { action: 'skip', icon: SkipForward, tip: 'Skip' },
   { action: 'never_show', icon: Ban, tip: 'Never show' },
 ]
+
+function isSpotifyTokenExpired(error) {
+  return error?.data?.detail === 'spotify_token_expired'
+}
+
+function isLoggedOutError(error) {
+  if (isSpotifyTokenExpired(error)) return false
+  const text = `${error?.message || ''} ${error?.data?.detail || ''} ${error?.data?.message || ''}`.toLowerCase()
+  return error?.status === 401 || text.includes('user not logged in')
+}
 
 function QualityNotes({ preview }) {
   const controls = preview?.quality_controls
@@ -179,7 +189,7 @@ function HistoryTab() {
 
 export default function Playlists() {
   const navigate = useNavigate()
-  const { logout } = useAuth()
+  const { login } = useAuth()
   const [tab, setTab] = useState('generate')
   const [config, setConfig] = useState({ context_type: '', max_tracks: 20, diversity: 0.5, familiarity: 0.5 })
   const [preview, setPreview] = useState(null)
@@ -187,6 +197,8 @@ export default function Playlists() {
   const [pushing, setPush] = useState(false)
   const [pushed, setPushed] = useState(null)
   const [error, setError] = useState(null)
+  const [spotifyExpired, setSpotifyExpired] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [draftName, setDraftName] = useState('')
 
@@ -194,6 +206,7 @@ export default function Playlists() {
     setGen(true)
     setError(null)
     setPushed(null)
+    setSpotifyExpired(false)
     try {
       const res = await api.post('/playlists/preview', {
         ...config,
@@ -211,18 +224,36 @@ export default function Playlists() {
     }
   }
 
+  async function handleReconnectSpotify() {
+    setReconnecting(true)
+    try {
+      await login({ skipLogout: true })
+      setSpotifyExpired(false)
+      // Retry the push automatically after reconnect
+      await pushToSpotify()
+    } catch (e) {
+      setError(e.message || 'Reconnect failed. Please try again.')
+    } finally {
+      setReconnecting(false)
+    }
+  }
+
   async function pushToSpotify() {
     if (!preview?.generated_playlist?.id) return
     setPush(true)
     setError(null)
+    setSpotifyExpired(false)
     try {
       const res = await api.post(`/playlists/generated/${preview.generated_playlist.id}/create`)
       setPushed(res.playlist)
       setPreview(prev => prev ? { ...prev, generated_playlist: res.generated_playlist } : prev)
     } catch (e) {
-      if (e.status === 401) {
-        try { await logout() } catch {}
-        navigate('/login')
+      if (isSpotifyTokenExpired(e)) {
+        setSpotifyExpired(true)
+        return
+      }
+      if (isLoggedOutError(e)) {
+        navigate('/login', { replace: true })
         return
       }
       setError(e.message)
@@ -301,6 +332,23 @@ export default function Playlists() {
           </div>
 
           {error && <p className="text-red-400 text-sm bg-red-400/10 rounded-lg px-4 py-2.5">{error}</p>}
+
+          {spotifyExpired && (
+            <div className="flex items-center justify-between gap-4 bg-yellow-900/20 border border-yellow-700/40 rounded-xl px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-yellow-300 text-sm font-medium">Your Spotify session expired</p>
+                <p className="text-zinc-400 text-xs mt-0.5">Reconnect Spotify to save this playlist — your preview is still here.</p>
+              </div>
+              <button
+                onClick={handleReconnectSpotify}
+                disabled={reconnecting}
+                className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand text-black font-semibold rounded-lg hover:bg-green-400 transition-colors disabled:opacity-60"
+              >
+                {reconnecting ? <Spinner size="sm" /> : <RefreshCw className="w-3 h-3" />}
+                {reconnecting ? 'Connecting…' : 'Reconnect'}
+              </button>
+            </div>
+          )}
 
           {pushed && (
             <div className="flex items-center justify-between gap-4 bg-brand/10 border border-brand/20 rounded-xl px-4 py-3">
