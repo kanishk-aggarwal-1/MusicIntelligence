@@ -1,5 +1,12 @@
 from backend.app.config import settings
-from backend.app.services.spotify_service import create_session_cookie_value, missing_playlist_scopes, read_session_cookie_value
+from backend.app.models.user_session import UserSession
+from backend.app.services.spotify_service import (
+    clear_user_session,
+    create_session_cookie_value,
+    get_missing_stored_playlist_scopes,
+    missing_playlist_scopes,
+    read_session_cookie_value,
+)
 
 
 def test_cors_defaults_are_local_only():
@@ -22,3 +29,16 @@ def test_missing_playlist_scopes_detects_under_scoped_token():
 
     assert missing_playlist_scopes(token_info) == ["playlist-modify-public"]
     assert missing_playlist_scopes({"scope": "user-read-recently-played playlist-modify-private playlist-modify-public"}) == []
+
+
+def test_stored_playlist_scope_helpers(db_session):
+    db_session.add(UserSession(
+        user_id="u1",
+        token="tok",
+        token_info_json='{"scope":"user-read-recently-played playlist-modify-private"}',
+    ))
+    db_session.commit()
+
+    assert get_missing_stored_playlist_scopes(db_session, "u1") == ["playlist-modify-public"]
+    assert clear_user_session(db_session, "u1") == 1
+    assert get_missing_stored_playlist_scopes(db_session, "u1") == ["playlist-modify-private", "playlist-modify-public"]

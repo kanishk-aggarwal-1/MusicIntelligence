@@ -25,7 +25,9 @@ from ..services.generated_playlist_service import (
 )
 from ..services.recommendation_service import recommend_songs
 from ..services.spotify_service import (
+    clear_user_session,
     create_playlist,
+    get_missing_stored_playlist_scopes,
     get_spotify_client,
     load_request_user_session,
     load_user_session,
@@ -312,11 +314,23 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
 
 
 def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
+    missing_scopes = get_missing_stored_playlist_scopes(db, user_id)
+    if missing_scopes:
+        clear_user_session(db, user_id)
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Your stored Spotify login is missing playlist permissions. "
+                "Log in again and approve playlist-modify-private and playlist-modify-public scopes."
+            ),
+        )
+
     try:
         return create_playlist(sp, user_id, track_ids, name=name)
     except Exception as exc:
         if getattr(exc, "http_status", None) != 401:
             if isinstance(exc, SpotifyException) and getattr(exc, "http_status", None) == 403:
+                clear_user_session(db, user_id)
                 raise HTTPException(
                     status_code=403,
                     detail=(
@@ -335,6 +349,7 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
             return create_playlist(refreshed_sp, user_id, track_ids, name=name)
         except Exception as refresh_exc:
             if isinstance(refresh_exc, SpotifyException) and getattr(refresh_exc, "http_status", None) == 403:
+                clear_user_session(db, user_id)
                 raise HTTPException(
                     status_code=403,
                     detail=(
