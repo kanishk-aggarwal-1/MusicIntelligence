@@ -162,6 +162,31 @@ def missing_playlist_scopes(token_info: dict | None):
     return sorted(REQUIRED_PLAYLIST_SCOPES - granted)
 
 
+def _session_token_info(session_row: UserSession | None):
+    if not session_row or not session_row.token_info_json:
+        return {}
+    try:
+        return json.loads(_decrypt(session_row.token_info_json) or "{}")
+    except Exception:
+        return {}
+
+
+def get_missing_stored_playlist_scopes(db: Session, user_id: str):
+    session_row = (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user_id)
+        .order_by(UserSession.updated_at.desc())
+        .first()
+    )
+    return missing_playlist_scopes(_session_token_info(session_row))
+
+
+def clear_user_session(db: Session, user_id: str):
+    deleted = db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
 def get_spotify_client(access_token: str):
     return spotipy.Spotify(auth=access_token)
 
