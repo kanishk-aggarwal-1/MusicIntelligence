@@ -69,31 +69,16 @@ export function AuthProvider({ children }) {
 
       window.addEventListener('message', onMessage)
 
-      const timer = setInterval(async () => {
-        try {
-          if (Date.now() - start > 120_000) {
-            popup.close()
-            return finish(reject, new Error('Login timed out.'))
-          }
+      const timer = setInterval(() => {
+        if (Date.now() - start > 120_000) {
+          popup.close()
+          finish(reject, new Error('Login timed out.'))
+          return
+        }
 
-          if (popup.closed) {
-            const s = await api.get('/user/session')
-            if (s.logged_in) {
-              setUser(s)
-              finish(resolve, s)
-            } else {
-              finish(reject, new Error('Login window closed before authentication completed.'))
-            }
-            return
-          }
-
-          const s = await api.get('/user/session')
-          if (s.logged_in) {
-            popup.close()
-            setUser(s)
-            finish(resolve, s)
-          }
-        } catch {}
+        if (popup.closed) {
+          finish(reject, new Error('Login window closed before authentication completed.'))
+        }
       }, 1000)
     })
   }
