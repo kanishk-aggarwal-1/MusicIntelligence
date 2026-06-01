@@ -2,6 +2,7 @@ from backend.app.config import settings
 from backend.app.models.user_session import UserSession
 from backend.app.services.spotify_service import (
     clear_user_session,
+    create_playlist,
     create_session_cookie_value,
     get_missing_stored_playlist_scopes,
     missing_playlist_scopes,
@@ -42,3 +43,51 @@ def test_stored_playlist_scope_helpers(db_session):
     assert get_missing_stored_playlist_scopes(db_session, "u1") == ["playlist-modify-public"]
     assert clear_user_session(db_session, "u1") == 1
     assert get_missing_stored_playlist_scopes(db_session, "u1") == ["playlist-modify-private", "playlist-modify-public"]
+
+
+def test_create_playlist_uses_current_user_endpoint(monkeypatch):
+    from backend.app.services import spotify_service
+
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = payload
+            self.status_code = 200
+            self.text = "{}"
+
+        @property
+        def reason(self):
+            return "OK"
+
+        def json(self):
+            if self.url.endswith("/playlists"):
+                return {"id": "playlist-id", "name": self.payload["name"]}
+            return {"snapshot_id": "snapshot-id"}
+
+    class FakeSpotify:
+        def _auth_headers(self):
+            return {"Authorization": "Bearer token"}
+
+        def current_user(self):
+            return {"id": "current-user"}
+
+        def current_user_unfollow_playlist(self, playlist_id):
+            calls.append(("unfollow", playlist_id))
+
+    def fake_post(url, headers, json, timeout):
+        calls.append((url, headers, json, timeout))
+        return FakeResponse(url, json)
+
+    monkeypatch.setattr(spotify_service.requests, "post", fake_post)
+
+    playlist = create_playlist(FakeSpotify(), "stale-user-id", ["track-1"], name="Test Mix")
+
+    assert playlist["id"] == "playlist-id"
+    assert calls[0][0] == "https://api.spotify.com/v1/users/current-user/playlists"
+    assert calls[0][1]["Authorization"] == "Bearer token"
+    assert calls[0][1]["Content-Type"] == "application/json"
+    assert calls[0][2]["name"] == "Test Mix"
+    assert calls[1][0] == "https://api.spotify.com/v1/playlists/playlist-id/items"
+    assert calls[1][2] == {"uris": ["spotify:track:track-1"]}

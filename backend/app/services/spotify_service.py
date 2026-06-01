@@ -5,9 +5,11 @@ import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
 
+import requests
 import spotipy
 from fastapi import Request
 from cryptography.fernet import Fernet, InvalidToken
+from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyOAuth
 from sqlalchemy.orm import Session
 
@@ -397,11 +399,57 @@ def search_track(sp, title: str, artist: str):
     return resolve_track_id(sp, title, artist)
 
 
+def _spotify_headers(sp):
+    headers = dict(sp._auth_headers())
+    headers["Accept"] = "application/json"
+    headers["Content-Type"] = "application/json"
+    return headers
+
+
+def _raise_spotify_response_error(response):
+    try:
+        payload = response.json()
+        error = payload.get("error") or {}
+        message = error.get("message") or response.text
+        reason = error.get("reason")
+    except Exception:
+        message = response.text or response.reason
+        reason = None
+    raise SpotifyException(
+        response.status_code,
+        -1,
+        f"{response.url}:\n {message}",
+        reason=reason,
+        headers=response.headers,
+    )
+
+
+def _spotify_post(sp, url: str, payload: dict):
+    response = requests.post(url, headers=_spotify_headers(sp), json=payload, timeout=15)
+    if response.status_code >= 400:
+        logger.warning(
+            "spotify.post.failed url=%s status=%s reason=%s body=%s",
+            url,
+            response.status_code,
+            response.reason,
+            response.text[:500],
+        )
+        _raise_spotify_response_error(response)
+    return response.json() if response.text else {}
+
+
 def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playlist"):
-    playlist = sp.user_playlist_create(
-        user=user_id,
-        name=name,
-        public=False,
+    current_user = sp.current_user() or {}
+    owner_id = current_user.get("id") or user_id
+    playlist = _spotify_post(
+        sp,
+        f"https://api.spotify.com/v1/users/{owner_id}/playlists",
+        {
+            "name": name,
+            "public": False,
+            "collaborative": False,
+            "description": "Created by MusicIntelligence",
+        },
     )
 
     if track_ids:
@@ -409,13 +457,19 @@ def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playl
             track_id if str(track_id).startswith("spotify:") else f"spotify:track:{track_id}"
             for track_id in track_ids
         ]
-        try:
-            sp.playlist_add_items(playlist["id"], uris)
-        except Exception:
+        for start in range(0, len(uris), 100):
+            batch = uris[start:start + 100]
             try:
-                sp.current_user_unfollow_playlist(playlist["id"])
+                _spotify_post(
+                    sp,
+                    f"https://api.spotify.com/v1/playlists/{playlist['id']}/items",
+                    {"uris": batch},
+                )
             except Exception:
-                pass
-            raise
+                try:
+                    sp.current_user_unfollow_playlist(playlist["id"])
+                except Exception:
+                    pass
+                raise
 
     return playlist
