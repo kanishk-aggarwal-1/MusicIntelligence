@@ -159,8 +159,10 @@ def get_spotify_oauth():
     )
 
 
-def missing_playlist_scopes(token_info: dict | None):
-    granted = set(((token_info or {}).get("scope") or "").split())
+def missing_playlist_scopes(token_info: dict | None, *, require_scope_field: bool = True):
+    if not token_info or not token_info.get("scope"):
+        return sorted(REQUIRED_PLAYLIST_SCOPES) if require_scope_field else []
+    granted = set((token_info.get("scope") or "").split())
     return sorted(REQUIRED_PLAYLIST_SCOPES - granted)
 
 
@@ -180,7 +182,21 @@ def get_missing_stored_playlist_scopes(db: Session, user_id: str):
         .order_by(UserSession.updated_at.desc())
         .first()
     )
-    return missing_playlist_scopes(_session_token_info(session_row))
+    # Stored token_info may come from Spotify's refresh response, which often
+    # omits the `scope` field. Absence of scope in storage is unknown, not proof
+    # of missing playlist permissions; let the actual Spotify API call decide.
+    return missing_playlist_scopes(_session_token_info(session_row), require_scope_field=False)
+
+
+def get_stored_session_scope(db: Session, user_id: str):
+    session_row = (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user_id)
+        .order_by(UserSession.updated_at.desc())
+        .first()
+    )
+    token_info = _session_token_info(session_row)
+    return token_info.get("scope") or ""
 
 
 def clear_user_session(db: Session, user_id: str):
@@ -212,6 +228,10 @@ def save_user_session(db: Session, user_id: str, token: str = None, token_info: 
     existing = db.query(UserSession).filter(UserSession.user_id == user_id).first()
 
     if existing:
+        existing_info = _session_token_info(existing)
+        merged_token_info = {**existing_info, **token_info}
+        if "scope" not in token_info and existing_info.get("scope"):
+            merged_token_info["scope"] = existing_info["scope"]
         if token_value:
             existing.token = _encrypt(token_value)
         if refresh_token:
@@ -219,7 +239,7 @@ def save_user_session(db: Session, user_id: str, token: str = None, token_info: 
         if token_expires_at:
             existing.token_expires_at = token_expires_at
         if token_info:
-            existing.token_info_json = _encrypt(json.dumps(token_info))
+            existing.token_info_json = _encrypt(json.dumps(merged_token_info))
         existing.updated_at = utcnow_naive()
     else:
         db.add(
@@ -294,11 +314,23 @@ def load_latest_user_session(db: Session):
 
 
 def load_request_user_session(db: Session, request: Request | None = None):
-    requested_user_id = None
-    if request is not None:
-        requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
-        if not requested_user_id and settings.APP_ENV != "production":
-            requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
+    """Load the session for the current HTTP request only.
+
+    Browser requests must be scoped by the signed session cookie. Falling back
+    to the latest row in user_sessions makes a user appear logged in as the
+    wrong Spotify account when cookies are missing or blocked, and it turns
+    real auth/session bugs into confusing downstream Spotify errors.
+    """
+    if request is None:
+        return {"token": None, "user_id": None}
+
+    requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
+    if not requested_user_id and settings.APP_ENV != "production":
+        requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
+
+    if not requested_user_id:
+        return {"token": None, "user_id": None}
+
     return load_user_session(db, user_id=requested_user_id)
 
 
@@ -438,9 +470,25 @@ def _spotify_post(sp, url: str, payload: dict):
     return response.json() if response.text else {}
 
 
+def _current_spotify_user_id(sp, fallback_user_id: str):
+    try:
+        current_user = sp.current_user() or {}
+    except Exception:
+        logger.exception("spotify.current_user.failed; falling back to session user_id")
+        return fallback_user_id
+
+    spotify_user_id = current_user.get("id") or fallback_user_id
+    if spotify_user_id != fallback_user_id:
+        logger.warning(
+            "spotify.user_id_mismatch session_user_id=%s token_user_id=%s; using token owner for playlist creation",
+            fallback_user_id,
+            spotify_user_id,
+        )
+    return spotify_user_id
+
+
 def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playlist"):
-    current_user = sp.current_user() or {}
-    owner_id = current_user.get("id") or user_id
+    owner_id = _current_spotify_user_id(sp, fallback_user_id=user_id)
     playlist = _spotify_post(
         sp,
         f"https://api.spotify.com/v1/users/{owner_id}/playlists",

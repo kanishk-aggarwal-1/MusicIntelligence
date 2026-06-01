@@ -22,8 +22,16 @@ export function AuthProvider({ children }) {
     return () => clearTimeout(warmTimer)
   }, [])
 
-  async function login() {
-    try { await api.post('/user/logout') } catch {}
+  useEffect(() => {
+    const onAuthExpired = () => setUser(null)
+    window.addEventListener('musicintel:auth-expired', onAuthExpired)
+    return () => window.removeEventListener('musicintel:auth-expired', onAuthExpired)
+  }, [])
+
+  async function login({ skipLogout = false } = {}) {
+    if (!skipLogout) {
+      try { await api.post('/user/logout') } catch {}
+    }
 
     const frontendOrigin = encodeURIComponent(window.location.origin)
     const popup = window.open(

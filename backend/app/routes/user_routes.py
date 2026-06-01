@@ -28,6 +28,7 @@ from ..services.spotify_service import (
     get_spotify_oauth,
     get_spotify_client,
     get_session_cookie_options,
+    get_stored_session_scope,
     load_request_user_session,
     load_user_session,
     missing_playlist_scopes,
@@ -166,9 +167,15 @@ def callback(request: Request, db: Session = Depends(get_db)):
 @router.get("/session")
 def session_status(request: Request, db: Session = Depends(get_db)):
     session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    # logged_in only requires a valid app session (cookie with user_id).
+    # spotify_connected separately tracks whether the Spotify OAuth token is
+    # still usable — it expires every hour and can fail to refresh. Keeping
+    # these separate lets the app stay accessible even while Spotify reconnects.
     return {
-        "logged_in": bool(session.get("token") and session.get("user_id")),
-        "user_id": session.get("user_id"),
+        "logged_in": bool(user_id),
+        "spotify_connected": bool(session.get("token") and user_id),
+        "user_id": user_id,
     }
 
 
@@ -249,6 +256,36 @@ def get_profile(request: Request, db: Session = Depends(get_db)):
         "images": spotify_user.get("images") or [],
         "product": spotify_user.get("product"),
         "spotify_url": (spotify_user.get("external_urls") or {}).get("spotify"),
+    }
+
+
+@router.get("/spotify-auth-debug")
+def spotify_auth_debug(request: Request, db: Session = Depends(get_db)):
+    """Return non-secret Spotify auth/session diagnostics for the logged-in user."""
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    token = session.get("token")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    scope = get_stored_session_scope(db, user_id)
+    spotify_user = {}
+    spotify_error = None
+    if token:
+        try:
+            spotify_user = get_spotify_client(token).current_user() or {}
+        except Exception as exc:
+            spotify_error = str(exc)[:700]
+
+    return {
+        "app_session_user_id": user_id,
+        "spotify_connected": bool(token),
+        "spotify_current_user_id": spotify_user.get("id"),
+        "spotify_display_name": spotify_user.get("display_name"),
+        "stored_scope": scope,
+        "required_playlist_scopes": sorted(["playlist-modify-private", "playlist-modify-public"]),
+        "missing_playlist_scopes_from_stored_scope": missing_playlist_scopes({"scope": scope}) if scope else None,
+        "spotify_current_user_error": spotify_error,
     }
 
 

@@ -22,6 +22,16 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     const message = data?.message || data?.detail || `HTTP ${res.status}`
+    const lower = `${message} ${data?.detail || ''}`.toLowerCase()
+    // Only fire auth-expired for true "not logged in" cases — not for
+    // Spotify-specific token expiry (spotify_token_expired), which means the
+    // user IS logged into the app but needs to reconnect Spotify.
+    const isSpotifyTokenExpired = data?.detail === 'spotify_token_expired'
+    if (!isSpotifyTokenExpired && (res.status === 401 || lower.includes('user not logged in'))) {
+      window.dispatchEvent(new CustomEvent('musicintel:auth-expired', {
+        detail: { status: res.status, message },
+      }))
+    }
     throw Object.assign(new Error(message), { status: res.status, data })
   }
 
