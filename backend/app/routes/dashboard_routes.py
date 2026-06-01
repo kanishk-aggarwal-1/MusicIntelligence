@@ -40,7 +40,14 @@ def get_stats(
         raise HTTPException(status_code=401, detail="User not logged in")
 
     safe_days = max(1, min(days, 365))
-    end_dt = _parse_date(end_date) or to_naive_utc(utcnow())
+    latest_played_at = None
+    if not end_date:
+        latest_played_at = (
+            db.query(func.max(ListeningHistory.played_at))
+            .filter(ListeningHistory.user_id == user_id)
+            .scalar()
+        )
+    end_dt = _parse_date(end_date) or latest_played_at or to_naive_utc(utcnow())
     start_dt = _parse_date(start_date) or (end_dt - timedelta(days=safe_days))
 
     artist_join = cast(Song.artist_id, String) == cast(Artist.id, String)
