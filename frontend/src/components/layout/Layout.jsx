@@ -2,7 +2,8 @@ import Sidebar from './Sidebar'
 import PreviewPlayer from '../ui/PreviewPlayer'
 import GlobalSearch from '../ui/GlobalSearch'
 import { usePlayer } from '../../contexts/PlayerContext'
-import { Menu, X } from 'lucide-react'
+import { useAuth } from '../../contexts/AuthContext'
+import { Menu, X, RefreshCw } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import { useState } from 'react'
 
@@ -14,6 +15,42 @@ const PAGE_TITLES = {
   '/playlists': 'Playlists',
   '/features':  'Tools',
   '/settings':  'Settings',
+}
+
+function ReconnectBanner() {
+  const { user, login } = useAuth()
+  const [reconnecting, setReconnecting] = useState(false)
+
+  // Show only when the app session is valid but the Spotify token has expired.
+  if (!user?.logged_in || user?.spotify_connected) return null
+
+  async function handleReconnect() {
+    setReconnecting(true)
+    try {
+      await login({ skipLogout: true })
+    } catch {
+      /* surfaced on next action; keep banner up */
+    } finally {
+      setReconnecting(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-2 bg-yellow-900/20 border-b border-yellow-700/40">
+      <p className="text-yellow-300 text-xs sm:text-sm min-w-0">
+        Your Spotify session expired. Reconnect to sync history and save playlists.
+      </p>
+      <button
+        type="button"
+        onClick={handleReconnect}
+        disabled={reconnecting}
+        className="shrink-0 flex items-center gap-1.5 px-3 py-1 text-xs bg-brand text-black font-semibold rounded-lg hover:bg-green-400 transition-colors disabled:opacity-60"
+      >
+        <RefreshCw className={`w-3 h-3 ${reconnecting ? 'animate-spin' : ''}`} />
+        {reconnecting ? 'Connecting…' : 'Reconnect'}
+      </button>
+    </div>
+  )
 }
 
 export default function Layout({ children }) {
@@ -68,6 +105,7 @@ export default function Layout({ children }) {
       )}
 
       <main className={`flex-1 overflow-auto pt-14 md:pt-0 ${current ? 'pb-24' : ''}`}>
+        <ReconnectBanner />
         {children}
       </main>
       <PreviewPlayer />

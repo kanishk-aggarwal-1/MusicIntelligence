@@ -23,6 +23,7 @@ from ..services.job_service import create_job, get_active_job, run_job, serializ
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.spotify_service import (
     SESSION_COOKIE_NAME,
+    clear_user_session,
     create_session_cookie_value,
     fetch_recent_tracks,
     get_spotify_oauth,
@@ -335,9 +336,12 @@ def logout(request: Request, db: Session = Depends(get_db)):
     requested_user_id = read_session_cookie_value(request.cookies.get(SESSION_COOKIE_NAME))
     if not requested_user_id and settings.APP_ENV != "production":
         requested_user_id = (request.headers.get("X-User-Id") or "").strip() or None
-    query = db.query(UserSession).filter(UserSession.user_id == requested_user_id) if requested_user_id else None
-    deleted = query.delete(synchronize_session=False) if query is not None else 0
-    db.commit()
+    # Deleting the UserSession row discards the stored (encrypted) Spotify tokens
+    # — our revocation mechanism, since load_user_session requires a matching row,
+    # so any still-valid signed cookie is dead the moment the row is gone. This is
+    # effectively "log out everywhere" (one session row per user). Users revoke the
+    # Spotify grant itself from their Spotify account page.
+    deleted = clear_user_session(db, requested_user_id) if requested_user_id else 0
     response = JSONResponse({"message": "Logged out", "deleted_sessions": deleted})
     cookie_opts = get_session_cookie_options()
     response.delete_cookie(

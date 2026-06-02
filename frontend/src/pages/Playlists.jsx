@@ -22,11 +22,11 @@ const QUICK_FEEDBACK = [
   { action: 'never_show', icon: Ban, tip: 'Never show' },
 ]
 
-function isSpotifyTokenExpired(error) {
+export function isSpotifyTokenExpired(error) {
   return error?.data?.detail === 'spotify_token_expired'
 }
 
-function isLoggedOutError(error) {
+export function isLoggedOutError(error) {
   if (isSpotifyTokenExpired(error)) return false
   const text = `${error?.message || ''} ${error?.data?.detail || ''} ${error?.data?.message || ''}`.toLowerCase()
   return error?.status === 401 || text.includes('user not logged in')

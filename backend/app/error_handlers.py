@@ -23,6 +23,13 @@ def _request_id(request: Request):
     return request_id
 
 
+def _ctx(request: Request):
+    """Compact request context for error logs so a failure is actionable on its
+    own — which endpoint, which method, which request id — without having to
+    cross-reference the access log."""
+    return f"method={request.method} path={request.url.path} request_id={_request_id(request)}"
+
+
 def _json_error(request: Request, status_code: int, code: str, message: str, *, detail: str | None = None):
     payload = {
         "error": code,
@@ -76,20 +83,20 @@ def install_error_handlers(app):
             message = "Spotify rate limit reached. Try again later."
         else:
             message = "Spotify request failed."
-        logger.warning("spotify_error status=%s request_id=%s error=%s", status, _request_id(request), exc)
+        logger.warning("spotify_error status=%s %s error=%s", status, _ctx(request), exc)
         return _json_error(request, status, "spotify_error", message, detail=str(exc))
 
     @app.exception_handler(requests.RequestException)
     async def requests_exception_handler(request: Request, exc: requests.RequestException):
-        logger.warning("external_request_error request_id=%s error=%s", _request_id(request), exc)
+        logger.warning("external_request_error %s error=%s", _ctx(request), exc)
         return _json_error(request, 502, "external_request_error", "External service request failed.", detail=str(exc))
 
     @app.exception_handler(SQLAlchemyError)
     async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
-        logger.exception("database_error request_id=%s", _request_id(request))
+        logger.exception("database_error %s", _ctx(request))
         return _json_error(request, 500, "database_error", "Database operation failed.", detail=str(exc))
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
-        logger.exception("unhandled_error request_id=%s", _request_id(request))
+        logger.exception("unhandled_error %s", _ctx(request))
         return _json_error(request, 500, "internal_error", "Internal server error.", detail=str(exc))

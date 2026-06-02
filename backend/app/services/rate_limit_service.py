@@ -43,11 +43,17 @@ def enforce_rate_limit(
             ApiCache.expires_at < now_dt,
         ).delete(synchronize_session=False)
 
-        row = (
-            db.query(ApiCache)
-            .filter(ApiCache.provider == "rate_limit", ApiCache.cache_key == key)
-            .first()
+        # Lock the row for the read-modify-write so concurrent requests for the
+        # same key serialize instead of clobbering each other's timestamp lists
+        # (which would let bursts slip past the limit). Falls back gracefully on
+        # backends/cases where row locking is unavailable.
+        row_query = db.query(ApiCache).filter(
+            ApiCache.provider == "rate_limit", ApiCache.cache_key == key
         )
+        try:
+            row = row_query.with_for_update().first()
+        except Exception:
+            row = row_query.first()
 
         timestamps = []
         if row and row.response_json:

@@ -23,6 +23,7 @@ from ..services.generated_playlist_service import (
     mark_generated_playlist_created,
     serialize_generated_playlist,
 )
+from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import recommend_songs
 from ..services.spotify_service import (
     clear_user_session,
@@ -518,6 +519,10 @@ def create_from_preview(generated_playlist_id: int, request: Request, db: Sessio
         raise HTTPException(status_code=401, detail="User not logged in")
     if not token:
         raise HTTPException(status_code=401, detail="spotify_token_expired")
+
+    # Pushing to Spotify resolves many track IDs and creates a playlist — cap it
+    # to protect the Spotify API quota from rapid repeated saves.
+    enforce_rate_limit(request, namespace="playlist_create", user_id=user_id, limit=10, window_seconds=60)
 
     record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
     if not record:

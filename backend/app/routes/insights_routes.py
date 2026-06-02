@@ -2,6 +2,7 @@ import json
 import re
 import uuid
 from datetime import timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -17,9 +18,9 @@ from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.song_tag import SongTag
 from ..models.tag import Tag
-from ..services.api_cache_service import clear_provider_cache
-from ..services.api_cache_service import get_cached_response, store_cached_response
+from ..services.api_cache_service import clear_provider_cache, get_cached_response, store_cached_response
 from ..services.discovery_service import discover_songs_from_artist
+from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import build_discovery_feed
 from ..services.spotify_service import load_request_user_session
 from ..time_utils import utcnow_naive
@@ -153,13 +154,37 @@ def discovery_feed(request: Request, limit: int = 20, db: Session = Depends(get_
     return {"items": feed}
 
 
-def _spotify_url_from_item(item: dict):
+# How many of the user's top artists to fan out to Last.fm, and how many
+# similar artists to query per source. Both bound the worst-case number of
+# (rate-limited) Last.fm calls on a cold cache.
+NEW_FOR_YOU_SOURCE_ARTISTS = 5
+NEW_FOR_YOU_SIMILAR_PER_SOURCE = 6
+NEW_FOR_YOU_TARGET = 10
+
+# Successful discoveries are stable for hours; an empty result usually means a
+# transient Last.fm failure, so it gets a short TTL to avoid locking the user
+# out of discoveries for hours after a brief outage.
+NEW_FOR_YOU_TTL_OK = timedelta(hours=6)
+NEW_FOR_YOU_TTL_EMPTY = timedelta(minutes=10)
+
+
+def _spotify_url_for_track(item: dict):
+    """Resolve a usable Spotify link for a discovered track.
+
+    Last.fm discoveries carry no Spotify IDs, so fall back to a Spotify search
+    URL built from title + artist — always actionable, never a dead end.
+    """
     spotify_url = item.get("spotify_url") or item.get("external_url")
     if spotify_url:
         return spotify_url
     spotify_id = item.get("spotify_id")
     if spotify_id:
         return f"https://open.spotify.com/track/{spotify_id}"
+    title = (item.get("title") or "").strip()
+    artist = (item.get("artist") or "").strip()
+    if title and artist:
+        query = quote(f"{title} {artist}")
+        return f"https://open.spotify.com/search/{query}"
     return None
 
 
@@ -170,6 +195,17 @@ def new_for_you(request: Request, db: Session = Depends(get_db)):
     cached = get_cached_response("insights", cache_key)
     if cached and cached.get("payload") is not None:
         return cached["payload"]
+
+    # Cache miss means we're about to fan out to Last.fm — rate limit only this
+    # path so cached reads stay free but cold lookups can't hammer the API.
+    enforce_rate_limit(request, namespace="new_for_you", user_id=user_id, limit=5, window_seconds=60)
+
+    def _store(payload, *, results):
+        # Long TTL only when we actually produced discoveries; short TTL on empty
+        # results so a transient Last.fm failure isn't cached for hours.
+        ttl = NEW_FOR_YOU_TTL_OK if results else NEW_FOR_YOU_TTL_EMPTY
+        store_cached_response("insights", cache_key, payload=payload, ttl=ttl)
+        return payload
 
     artist_rows = (
         db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
@@ -182,20 +218,28 @@ def new_for_you(request: Request, db: Session = Depends(get_db)):
         )
         .group_by(Artist.name)
         .order_by(func.count(ListeningHistory.id).desc())
-        .limit(5)
+        .limit(NEW_FOR_YOU_SOURCE_ARTISTS)
         .all()
     )
 
     if len(artist_rows) < 5:
-        payload = {"items": [], "distinct_artist_count": len(artist_rows)}
-        store_cached_response("insights", cache_key, payload=payload, ttl=timedelta(hours=6))
-        return payload
+        # Too few artists is a stable structural state, not a failure — cache long.
+        return _store({"items": [], "distinct_artist_count": len(artist_rows)}, results=True)
 
+    # Build the "already listened" set from DISTINCT songs in the user's
+    # library, not one row per play — otherwise a heavy listener with tens of
+    # thousands of plays loads tens of thousands of duplicate rows into memory.
+    user_song_ids = (
+        db.query(ListeningHistory.song_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .distinct()
+        .subquery()
+    )
     listened_rows = (
         db.query(Song.title, Artist.name, Song.spotify_id)
-        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
         .join(Artist, Artist.id == Song.artist_id)
-        .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False))
         .all()
     )
     listened_spotify_ids = {spotify_id for _, _, spotify_id in listened_rows if spotify_id}
@@ -208,7 +252,9 @@ def new_for_you(request: Request, db: Session = Depends(get_db)):
     seen = set()
     for artist_name, _plays in artist_rows:
         try:
-            discovered = discover_songs_from_artist(artist_name)
+            discovered = discover_songs_from_artist(
+                artist_name, max_similar_artists=NEW_FOR_YOU_SIMILAR_PER_SOURCE
+            )
         except Exception:
             continue
 
@@ -230,18 +276,17 @@ def new_for_you(request: Request, db: Session = Depends(get_db)):
                 {
                     "title": title,
                     "artist": artist,
-                    "spotify_url": _spotify_url_from_item(item),
+                    "spotify_url": _spotify_url_for_track(item),
                     "reason": f"Similar to {artist_name}",
                 }
             )
-            if len(items) >= 10:
-                payload = {"items": items, "distinct_artist_count": len(artist_rows)}
-                store_cached_response("insights", cache_key, payload=payload, ttl=timedelta(hours=6))
-                return payload
+            if len(items) >= NEW_FOR_YOU_TARGET:
+                return _store({"items": items, "distinct_artist_count": len(artist_rows)}, results=True)
 
+    # Empty results (transient Last.fm failure, or everything already listened)
+    # get a short TTL so we retry soon rather than caching emptiness for hours.
     payload = {"items": items, "distinct_artist_count": len(artist_rows)}
-    store_cached_response("insights", cache_key, payload=payload, ttl=timedelta(hours=6))
-    return payload
+    return _store(payload, results=bool(items))
 
 
 def _pct_rows(rows, total):

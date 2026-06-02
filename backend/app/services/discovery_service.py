@@ -1,9 +1,17 @@
 from .lastfm_service import get_artist_top_tracks, get_similar_artists
 
 
-def discover_songs_from_artist(artist, include_stats=False):
+def discover_songs_from_artist(artist, include_stats=False, max_similar_artists=None):
+    """Discover tracks from artists similar to ``artist`` via Last.fm.
+
+    ``max_similar_artists`` bounds how many similar artists are queried. Each
+    similar artist triggers a (potentially uncached, rate-limited) Last.fm call,
+    so callers on a latency-sensitive path should cap it.
+    """
 
     similar_artists = get_similar_artists(artist)
+    if max_similar_artists is not None:
+        similar_artists = similar_artists[:max(0, int(max_similar_artists))]
 
     songs = []
     source_artists = 0
