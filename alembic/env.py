@@ -36,6 +36,7 @@ from backend.app.models import (  # noqa: F401, E402
     song_tag,
     tag,
     user_session,
+    user_song_pref,
 )
 
 target_metadata = Base.metadata

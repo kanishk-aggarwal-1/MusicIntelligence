@@ -8,4 +8,12 @@ export default defineConfig({
     port: 5173,
     strictPort: true,   // fail clearly if 5173 is busy instead of silently shifting ports
   },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/test/setup.js',
+    css: false,
+    // Deterministic API base URL so api.js doesn't throw "Missing VITE_API_BASE_URL".
+    env: { VITE_API_BASE_URL: 'http://test.local' },
+  },
 })

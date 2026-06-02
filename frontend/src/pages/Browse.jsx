@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Play, Pause, Music, Tag, ChevronRight } from 'lucide-react'
+import { Play, Pause, Music, Tag } from 'lucide-react'
 import { api } from '../lib/api'
 import { usePlayer } from '../contexts/PlayerContext'
 import Spinner from '../components/ui/Spinner'

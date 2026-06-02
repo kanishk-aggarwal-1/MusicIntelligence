@@ -130,7 +130,7 @@ def test_new_for_you_discovers_uncached_tracks(monkeypatch, client_factory, db_s
         lambda provider, key, payload=None, **kwargs: cached_payloads.append((provider, key, payload)),
     )
 
-    def _fake_discover(artist_name):
+    def _fake_discover(artist_name, **kwargs):
         return [
             {"title": f"New from {artist_name}", "artist": "New Artist", "spotify_id": f"new-{artist_name}"},
             {"title": top_songs[0].title, "artist": "Seed Artist 0", "spotify_id": top_songs[0].spotify_id},
