@@ -113,7 +113,9 @@ def test_discovery_feed_returns_items(monkeypatch, client_factory, db_session):
     assert resp.json()["items"][0]["title"] == "Discovered Track"
 
 
-def test_new_for_you_discovers_uncached_tracks(monkeypatch, client_factory, db_session):
+def test_compute_new_for_you_discovers_uncached_tracks(monkeypatch, db_session):
+    """The discovery computation (run inside a background job) filters out
+    already-listened tracks and tags each result with a reason."""
     db_session.add(_session("u1"))
     top_songs = []
     for i in range(5):
@@ -123,7 +125,6 @@ def test_new_for_you_discovers_uncached_tracks(monkeypatch, client_factory, db_s
     db_session.commit()
 
     cached_payloads = []
-    monkeypatch.setattr(insights_routes, "get_cached_response", lambda provider, key: None)
     monkeypatch.setattr(
         insights_routes,
         "store_cached_response",
@@ -138,16 +139,59 @@ def test_new_for_you_discovers_uncached_tracks(monkeypatch, client_factory, db_s
 
     monkeypatch.setattr(insights_routes, "discover_songs_from_artist", _fake_discover)
 
+    payload = insights_routes._compute_new_for_you(db_session, "u1")
+
+    assert len(payload["items"]) == 5
+    assert payload["items"][0]["reason"].startswith("Similar to Seed Artist")
+    assert all(item["title"] != "Seed Track 0" for item in payload["items"])
+    # Each item carries an actionable Spotify link (search URL fallback here).
+    assert all(item["spotify_url"] for item in payload["items"])
+    assert cached_payloads[0][0] == "insights"
+    assert cached_payloads[0][1] == "new_for_you:u1"
+
+
+def test_new_for_you_endpoint_schedules_job_on_cache_miss(monkeypatch, client_factory, db_session):
+    """With enough artists and no cache, the endpoint returns pending + a job id
+    instead of blocking on Last.fm."""
+    db_session.add(_session("u1"))
+    for i in range(5):
+        song = _song(db_session, artist_name=f"Seed Artist {i}", title=f"Seed Track {i}", spotify_id=f"seed-{i}")
+        _history(db_session, "u1", song, datetime(2026, 5, i + 1, 10, 0))
+    db_session.commit()
+
+    monkeypatch.setattr(insights_routes, "get_cached_response", lambda provider, key: None)
+    # Discovery must NOT run synchronously on the request path.
+    monkeypatch.setattr(
+        insights_routes, "discover_songs_from_artist",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Last.fm called on request path")),
+    )
+
     client = client_factory(insights_routes.router)
     resp = client.get("/insights/new-for-you", headers={"X-User-Id": "u1"})
 
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["items"]) == 5
-    assert data["items"][0]["reason"].startswith("Similar to Seed Artist")
-    assert all(item["title"] != "Seed Track 0" for item in data["items"])
-    assert cached_payloads[0][0] == "insights"
-    assert cached_payloads[0][1] == "new_for_you:u1"
+    assert data["status"] == "pending"
+    assert data["job_id"]
+    assert data["items"] == []
+
+
+def test_new_for_you_returns_cached_result_ready(monkeypatch, client_factory, db_session):
+    db_session.add(_session("u1"))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        insights_routes, "get_cached_response",
+        lambda provider, key: {"payload": {"items": [{"title": "Cached"}], "distinct_artist_count": 9}},
+    )
+
+    client = client_factory(insights_routes.router)
+    resp = client.get("/insights/new-for-you", headers={"X-User-Id": "u1"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ready"
+    assert data["items"][0]["title"] == "Cached"
 
 
 def test_new_for_you_requires_five_artists(monkeypatch, client_factory, db_session):
@@ -163,8 +207,10 @@ def test_new_for_you_requires_five_artists(monkeypatch, client_factory, db_sessi
     resp = client.get("/insights/new-for-you", headers={"X-User-Id": "u1"})
 
     assert resp.status_code == 200
-    assert resp.json()["items"] == []
-    assert resp.json()["distinct_artist_count"] == 1
+    data = resp.json()
+    assert data["items"] == []
+    assert data["distinct_artist_count"] == 1
+    assert data["status"] == "ready"
 
 
 def test_taste_profile_summarizes_tags_and_genres(client_factory, db_session):

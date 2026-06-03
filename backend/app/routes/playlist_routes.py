@@ -23,6 +23,18 @@ from ..services.generated_playlist_service import (
     mark_generated_playlist_created,
     serialize_generated_playlist,
 )
+from ..services.playlist_schedule_service import (
+    MAX_SCHEDULES_PER_USER,
+    VALID_CADENCES,
+    count_schedules,
+    create_schedule,
+    delete_schedule,
+    due_schedules,
+    get_schedule,
+    list_schedules,
+    mark_ran,
+    serialize_schedule,
+)
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import recommend_songs
 from ..services.spotify_service import (
@@ -51,6 +63,16 @@ class PlaylistGeneratePayload(BaseModel):
 
 class PlaylistNamePayload(BaseModel):
     name: str
+
+
+class ScheduleCreatePayload(BaseModel):
+    cadence: str = "weekly"  # 'daily' | 'weekly'
+    name: str | None = None
+    context_type: str | None = None
+    min_known_ratio: float = 0.6
+    diversity: float = 0.5
+    familiarity: float = 0.5
+    max_tracks: int = 30
 
 
 CONTEXT_DEFAULTS = {
@@ -683,3 +705,104 @@ def generate_context_playlist(context_name: str, request: Request, db: Session =
     result["context"] = key
     result["current_hour_utc"] = utcnow().hour
     return result
+
+
+# ── Scheduled playlist refresh ───────────────────────────────────────────────
+
+def _run_schedule(db: Session, schedule):
+    """Regenerate the playlist for one schedule using the existing pipeline and
+    record the run. Returns the new generated playlist id (or None on failure)."""
+    payload = PlaylistGeneratePayload(
+        min_known_ratio=schedule.min_known_ratio,
+        diversity=schedule.diversity,
+        familiarity=schedule.familiarity,
+        max_tracks=schedule.max_tracks,
+        name=schedule.name,
+        context_type=schedule.context_type,
+    )
+    generated_id = None
+    try:
+        preview = _build_preview(db, schedule.user_id, payload)
+        generated_id = preview["generated_playlist"]["id"]
+    except Exception:
+        logger.exception("playlist.schedule.run_failed schedule_id=%s user_id=%s", schedule.id, schedule.user_id)
+    # Always advance the clock so a persistently failing schedule doesn't run on
+    # every single request — it retries next cadence instead.
+    mark_ran(db, schedule=schedule, generated_playlist_id=generated_id)
+    return generated_id
+
+
+def _process_due_schedules(db: Session, user_id: str) -> int:
+    ran = 0
+    for schedule in due_schedules(db, user_id=user_id):
+        _run_schedule(db, schedule)
+        ran += 1
+    return ran
+
+
+@router.get("/schedules")
+def get_schedules(request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    # Opportunistically run anything due before listing, so simply opening the
+    # page keeps schedules fresh without an external cron.
+    ran = _process_due_schedules(db, user_id)
+    schedules = list_schedules(db, user_id=user_id)
+    return {"items": [serialize_schedule(s) for s in schedules], "ran_now": ran}
+
+
+@router.post("/schedules")
+def post_schedule(payload: ScheduleCreatePayload, request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    if payload.cadence not in VALID_CADENCES:
+        raise HTTPException(status_code=400, detail=f"Unknown cadence. Use one of: {', '.join(sorted(VALID_CADENCES))}")
+    if count_schedules(db, user_id=user_id) >= MAX_SCHEDULES_PER_USER:
+        raise HTTPException(status_code=400, detail=f"You can have at most {MAX_SCHEDULES_PER_USER} schedules.")
+
+    schedule = create_schedule(
+        db,
+        user_id=user_id,
+        cadence=payload.cadence,
+        name=payload.name,
+        context_type=payload.context_type,
+        min_known_ratio=payload.min_known_ratio,
+        diversity=payload.diversity,
+        familiarity=payload.familiarity,
+        max_tracks=payload.max_tracks,
+    )
+    return serialize_schedule(schedule)
+
+
+@router.post("/schedules/{schedule_id}/run")
+def run_schedule_now(schedule_id: int, request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    schedule = get_schedule(db, schedule_id=schedule_id, user_id=user_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    enforce_rate_limit(request, namespace="playlist_schedule_run", user_id=user_id, limit=10, window_seconds=60)
+    generated_id = _run_schedule(db, schedule)
+    return {"schedule": serialize_schedule(schedule), "generated_playlist_id": generated_id}
+
+
+@router.delete("/schedules/{schedule_id}")
+def remove_schedule(schedule_id: int, request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    if not delete_schedule(db, schedule_id=schedule_id, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"message": "Schedule deleted", "schedule_id": schedule_id}
