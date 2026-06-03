@@ -2,9 +2,10 @@ import json
 import re
 import uuid
 from datetime import timedelta
+from functools import partial
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -20,6 +21,7 @@ from ..models.song_tag import SongTag
 from ..models.tag import Tag
 from ..services.api_cache_service import clear_provider_cache, get_cached_response, store_cached_response
 from ..services.discovery_service import discover_songs_from_artist
+from ..services.job_service import create_job, get_active_job, run_job
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import build_discovery_feed
 from ..services.spotify_service import load_request_user_session
@@ -188,25 +190,39 @@ def _spotify_url_for_track(item: dict):
     return None
 
 
-@router.get("/new-for-you")
-def new_for_you(request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
-    cache_key = f"new_for_you:{user_id}"
-    cached = get_cached_response("insights", cache_key)
-    if cached and cached.get("payload") is not None:
-        return cached["payload"]
+NEW_FOR_YOU_JOB_TYPE = "discover_new_for_you"
 
-    # Cache miss means we're about to fan out to Last.fm — rate limit only this
-    # path so cached reads stay free but cold lookups can't hammer the API.
-    enforce_rate_limit(request, namespace="new_for_you", user_id=user_id, limit=5, window_seconds=60)
 
-    def _store(payload, *, results):
-        # Long TTL only when we actually produced discoveries; short TTL on empty
-        # results so a transient Last.fm failure isn't cached for hours.
-        ttl = NEW_FOR_YOU_TTL_OK if results else NEW_FOR_YOU_TTL_EMPTY
-        store_cached_response("insights", cache_key, payload=payload, ttl=ttl)
-        return payload
+def _new_for_you_cache_key(user_id: str) -> str:
+    return f"new_for_you:{user_id}"
 
+
+def _store_new_for_you(user_id: str, payload, *, results: bool):
+    # Long TTL only when we actually produced discoveries; short TTL on empty
+    # results so a transient Last.fm failure isn't cached for hours.
+    ttl = NEW_FOR_YOU_TTL_OK if results else NEW_FOR_YOU_TTL_EMPTY
+    store_cached_response("insights", _new_for_you_cache_key(user_id), payload=payload, ttl=ttl)
+    return payload
+
+
+def _distinct_artist_count(db: Session, user_id: str) -> int:
+    return (
+        db.query(func.count(func.distinct(Artist.name)))
+        .select_from(ListeningHistory)
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .join(Artist, Artist.id == Song.artist_id)
+        .filter(
+            ListeningHistory.user_id == user_id,
+            Song.is_deleted.is_(False),
+            Artist.name.is_not(None),
+        )
+        .scalar()
+    ) or 0
+
+
+def _compute_new_for_you(db: Session, user_id: str) -> dict:
+    """Fan out to Last.fm to find new tracks, store the result in cache, and
+    return the payload. Runs in a background job, not on the request path."""
     artist_rows = (
         db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
         .join(Song, Song.id == ListeningHistory.song_id)
@@ -224,7 +240,7 @@ def new_for_you(request: Request, db: Session = Depends(get_db)):
 
     if len(artist_rows) < 5:
         # Too few artists is a stable structural state, not a failure — cache long.
-        return _store({"items": [], "distinct_artist_count": len(artist_rows)}, results=True)
+        return _store_new_for_you(user_id, {"items": [], "distinct_artist_count": len(artist_rows)}, results=True)
 
     # Build the "already listened" set from DISTINCT songs in the user's
     # library, not one row per play — otherwise a heavy listener with tens of
@@ -281,12 +297,51 @@ def new_for_you(request: Request, db: Session = Depends(get_db)):
                 }
             )
             if len(items) >= NEW_FOR_YOU_TARGET:
-                return _store({"items": items, "distinct_artist_count": len(artist_rows)}, results=True)
+                return _store_new_for_you(user_id, {"items": items, "distinct_artist_count": len(artist_rows)}, results=True)
 
     # Empty results (transient Last.fm failure, or everything already listened)
     # get a short TTL so we retry soon rather than caching emptiness for hours.
     payload = {"items": items, "distinct_artist_count": len(artist_rows)}
-    return _store(payload, results=bool(items))
+    return _store_new_for_you(user_id, payload, results=bool(items))
+
+
+def _run_new_for_you_job(db: Session, progress, *, user_id: str):
+    progress.update(total=1, current=0, message="Finding new music from similar artists")
+    payload = _compute_new_for_you(db, user_id)
+    progress.update(current=1, message="Discovery refreshed")
+    return {
+        "message": "Discovery refreshed",
+        "items_found": len(payload.get("items", [])),
+        "progress_current": 1,
+        "progress_total": 1,
+    }
+
+
+@router.get("/new-for-you")
+def new_for_you(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    user_id = _require_user_id(db, request)
+    cached = get_cached_response("insights", _new_for_you_cache_key(user_id))
+    if cached and cached.get("payload") is not None:
+        return {**cached["payload"], "status": "ready"}
+
+    # No cache. The few-artists case is a cheap DB-only answer — return it
+    # immediately rather than spinning up a job for a known-instant result.
+    artist_count = _distinct_artist_count(db, user_id)
+    if artist_count < 5:
+        payload = {"items": [], "distinct_artist_count": artist_count}
+        _store_new_for_you(user_id, payload, results=True)
+        return {**payload, "status": "ready"}
+
+    # The real Last.fm fan-out is slow; run it off the request path. If a refresh
+    # is already running, return it instead of starting another.
+    existing = get_active_job(db, user_id=user_id, job_type=NEW_FOR_YOU_JOB_TYPE)
+    if existing:
+        return {"items": [], "distinct_artist_count": artist_count, "status": "pending", "job_id": existing.id}
+
+    enforce_rate_limit(request, namespace="new_for_you", user_id=user_id, limit=5, window_seconds=60)
+    job = create_job(db, user_id=user_id, job_type=NEW_FOR_YOU_JOB_TYPE, message="Finding new music", progress_total=1)
+    background_tasks.add_task(run_job, job.id, partial(_run_new_for_you_job, user_id=user_id))
+    return {"items": [], "distinct_artist_count": artist_count, "status": "pending", "job_id": job.id}
 
 
 def _pct_rows(rows, total):

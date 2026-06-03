@@ -127,13 +127,57 @@ function DiscoverSection() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get('/insights/new-for-you')
-      .then(d => {
-        setItems(d.items || [])
+    let cancelled = false
+    let timer = null
+    // Cap polling so a job that never finishes (e.g. a dropped background task)
+    // can't poll forever — ~30s of attempts, then give up gracefully.
+    const MAX_POLLS = 20
+    let polls = 0
+
+    async function load() {
+      try {
+        const d = await api.get('/insights/new-for-you')
+        if (cancelled) return
         setArtistCount(d.distinct_artist_count)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+
+        // Discovery now runs in a background job. On a cache miss the endpoint
+        // returns status:"pending" + a job id; poll it, then refetch the
+        // now-cached results. Cached/instant answers return status:"ready".
+        if (d.status === 'pending' && d.job_id) {
+          timer = setInterval(async () => {
+            polls += 1
+            if (polls > MAX_POLLS) {
+              clearInterval(timer)
+              if (!cancelled) setLoading(false)
+              return
+            }
+            try {
+              const job = await api.get(`/jobs/${d.job_id}`)
+              if (cancelled) return
+              if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
+                clearInterval(timer)
+                const fresh = await api.get('/insights/new-for-you')
+                if (cancelled) return
+                setItems(fresh.items || [])
+                setArtistCount(fresh.distinct_artist_count)
+                setLoading(false)
+              }
+            } catch {
+              clearInterval(timer)
+              if (!cancelled) setLoading(false)
+            }
+          }, 1500)
+        } else {
+          setItems(d.items || [])
+          setLoading(false)
+        }
+      } catch {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => { cancelled = true; if (timer) clearInterval(timer) }
   }, [])
 
   if (loading) return <DiscoverSkeleton />
@@ -228,8 +272,14 @@ function DiscoveryFeed() {
             <div className="flex-1 min-w-0">
               <p className="text-white text-sm truncate">{item.title}</p>
               <p className="text-zinc-500 text-xs truncate">{item.artist}</p>
-              {item.reasons?.[0] && (
-                <p className="text-zinc-600 text-xs italic truncate mt-0.5">{item.reasons[0]}</p>
+              {item.reasons?.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {item.reasons.slice(0, 3).map(reason => (
+                    <span key={reason} className="text-zinc-500 text-[10px] bg-zinc-800/60 rounded px-1.5 py-0.5 first-letter:capitalize">
+                      {reason}
+                    </span>
+                  ))}
+                </div>
               )}
             </div>
 

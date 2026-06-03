@@ -19,6 +19,7 @@ from .models import recommendation_feedback
 from .models import listening_goal
 from .models import dedup_merge_log
 from .models import user_song_pref
+from .models import playlist_schedule
 from .routes import user_routes
 from .routes import playlist_routes
 from .routes import music_routes
