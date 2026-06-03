@@ -1,15 +1,14 @@
 # MusicIntelligence
 
-MusicIntelligence is a local music analytics and recommendation app built around Spotify listening history, Last.fm enrichment, a FastAPI backend, and a simple multi-page frontend.
+MusicIntelligence is a music analytics and recommendation platform built around Spotify OAuth, Last.fm enrichment, a FastAPI backend, and a PostgreSQL-backed data layer — designed to unify fragmented music data into a single queryable source for discovery and analytics.
 
-It lets you:
-- log into Spotify
-- sync your recent listening history
-- enrich songs with tags, genre, listeners, and playcount from Last.fm
-- browse your music library in table form
-- view dashboard analytics
-- generate Spotify playlists from your saved library
-- run feedback, goal, dedup, and reporting features
+**What it does:**
+- Spotify OAuth login and listening history sync
+- Last.fm enrichment for tags, genre, listener counts, and play counts
+- PostgreSQL-backed music library with filtering and querying
+- Dashboard analytics with date comparison and deduplication
+- Spotify playlist generation from saved library with quality controls and write-back
+- Feedback, goal tracking, dedup, and reporting features
 
 ## Project Structure
 
