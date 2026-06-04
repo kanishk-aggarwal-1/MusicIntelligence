@@ -92,6 +92,19 @@ function ImportSection() {
   const [error, setError]   = useState(null)
   const fileRef = useRef(null)
 
+  useEffect(() => {
+    const storedJobId = localStorage.getItem('musicintel:import-job-id')
+    if (!storedJobId) return
+    api.get(`/jobs/${storedJobId}`)
+      .then(existing => {
+        setJob(existing)
+        if (['succeeded', 'failed', 'cancelled'].includes(existing.status)) {
+          localStorage.removeItem('musicintel:import-job-id')
+        }
+      })
+      .catch(() => localStorage.removeItem('musicintel:import-job-id'))
+  }, [])
+
   // Poll job until done
   useEffect(() => {
     if (!job?.id || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return
@@ -99,7 +112,10 @@ function ImportSection() {
       try {
         const updated = await api.get(`/jobs/${job.id}`)
         setJob(updated)
-        if (['succeeded', 'failed', 'cancelled'].includes(updated.status)) clearInterval(t)
+        if (['succeeded', 'failed', 'cancelled'].includes(updated.status)) {
+          localStorage.removeItem('musicintel:import-job-id')
+          clearInterval(t)
+        }
       } catch { clearInterval(t) }
     }, 1500)
     return () => clearInterval(t)
@@ -115,6 +131,8 @@ function ImportSection() {
       form.append('file', file)
       const result = await api.postForm('/user/import-history/job', form)
       setJob(result)
+      localStorage.setItem('musicintel:import-job-id', result.id)
+      window.dispatchEvent(new CustomEvent('musicintel:job-started', { detail: { job: result } }))
     } catch (err) {
       setError(err.message || 'Upload failed')
     } finally {
@@ -143,6 +161,12 @@ function ImportSection() {
           </span>
         )}
       </div>
+
+      {job?.status === 'succeeded' && job.result?.next_step && (
+        <p className="text-zinc-400 text-sm bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2">
+          Next: {job.result.next_step} Upload the rest of your Spotify history files before enriching.
+        </p>
+      )}
 
       {error && <p className="text-red-400 text-sm">{error}</p>}
       <JobProgress job={job} onRetry={() => fileRef.current?.click()} />

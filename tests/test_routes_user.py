@@ -64,3 +64,42 @@ def test_sync_history_job_reuses_active_job(client_factory, db_session):
     assert payload["id"] == existing.id
     assert payload["message"] == "Already syncing"
     assert db_session.query(Job).filter_by(user_id="u1", job_type="sync_history").count() == 1
+
+
+def test_import_history_job_reports_incremental_progress(monkeypatch, db_session):
+    updates = []
+
+    class FakeProgress:
+        def update(self, **kwargs):
+            updates.append(kwargs)
+
+    monkeypatch.setattr(user_routes, "IMPORT_PROGRESS_BATCH_SIZE", 2)
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Import should not auto-enrich; dedup/enrichment happens after all files are imported.")
+
+    monkeypatch.setattr(user_routes, "backfill_missing_metadata", fail_if_called)
+
+    data = [
+        {
+            "master_metadata_track_name": f"Track {i}",
+            "master_metadata_album_artist_name": "Artist",
+            "spotify_track_uri": f"spotify:track:{i}",
+            "ts": f"2026-05-0{i + 1}T10:00:00Z",
+            "ms_played": 60_000,
+        }
+        for i in range(5)
+    ]
+
+    result = user_routes._run_import_history_job(db_session, FakeProgress(), user_id="u1", data=data)
+
+    messages = [item.get("message") for item in updates if item.get("message")]
+    assert "Importing 0 / 5 tracks into library" in messages
+    assert "Importing 2 / 5 tracks into library" in messages
+    assert "Importing 4 / 5 tracks into library" in messages
+    assert "Importing 5 / 5 tracks into library" in messages
+    assert "Import complete. Run deduplication, then metadata enrichment." in messages
+    assert result["valid_tracks"] == 5
+    assert result["enrichment_queued"] is False
+    assert result["next_step"] == "Run deduplication, then metadata enrichment."
+    assert result["progress_current"] == 5
+    assert result["progress_total"] == 5

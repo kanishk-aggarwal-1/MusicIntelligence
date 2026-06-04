@@ -1,0 +1,71 @@
+{
+  "title": "MusicIntelligence Live Metrics",
+  "uid": "musicintel-live",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Cache Hit Rate",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{"value": null, "color": "red"}, {"value": 50, "color": "yellow"}, {"value": 80, "color": "green"}] } } },
+      "targets": [{ "expr": "musicintel_cache_hit_rate_pct", "legendFormat": "Hit rate %" }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Tracks Synced",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "musicintel_tracks_synced_total", "legendFormat": "Synced" }]
+    },
+    {
+      "id": 3, "type": "stat", "title": "Tracks Enriched",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "musicintel_tracks_enriched_total", "legendFormat": "Enriched" }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Playlists Generated",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "musicintel_playlists_generated_total", "legendFormat": "Playlists" }]
+    },
+    {
+      "id": 5, "type": "stat", "title": "Playlist Resolution Rate",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{"value": null, "color": "red"}, {"value": 80, "color": "yellow"}, {"value": 95, "color": "green"}] } } },
+      "targets": [{ "expr": "musicintel_playlist_resolution_rate_pct", "legendFormat": "Resolution %" }]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Cache Hit Rate Over Time",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
+      "targets": [{ "expr": "musicintel_cache_hit_rate_pct", "legendFormat": "Hit rate %" }]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "External API Calls",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "musicintel_spotify_calls_total", "legendFormat": "Spotify" },
+        { "expr": "musicintel_lastfm_calls_total", "legendFormat": "Last.fm" }
+      ]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Cache Hits vs Misses",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "musicintel_cache_hits_total", "legendFormat": "Hits" },
+        { "expr": "musicintel_cache_misses_total", "legendFormat": "Misses" }
+      ]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Tracks Synced & Enriched",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "musicintel_tracks_synced_total", "legendFormat": "Synced" },
+        { "expr": "musicintel_tracks_enriched_total", "legendFormat": "Enriched" }
+      ]
+    }
+  ]
+}

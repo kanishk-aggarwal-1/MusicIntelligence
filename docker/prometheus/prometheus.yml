@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: musicintelligence
+    static_configs:
+      - targets:
+          # When running via docker-compose, the backend is reachable on the
+          # host network. Change to "backend:8000" if the backend is a compose service.
+          - host.docker.internal:8000
+    metrics_path: /metrics

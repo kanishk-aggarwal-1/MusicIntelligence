@@ -21,7 +21,7 @@ from backend.app.database import SessionLocal  # noqa: E402
 from backend.app.models.artist import Artist  # noqa: E402
 from backend.app.models.song import Song  # noqa: E402
 from backend.app.models.user_session import UserSession  # noqa: E402
-from backend.app.services import lastfm_service, recommendation_service  # noqa: E402
+from backend.app.services import lastfm_service, live_metrics_service, recommendation_service  # noqa: E402
 from backend.app.services.generated_playlist_service import create_playlist_preview_record  # noqa: E402
 from backend.app.routes.playlist_routes import _resolve_playlist_track_ids  # noqa: E402
 
@@ -78,15 +78,25 @@ def main_demo():
     show("2) After Last.fm lookups (hits/misses/calls + saved %)")
 
     # 3) ENRICH — real _apply_enrichment marks tracks complete.
+    # Note: the live_metrics_service.increment inside _apply_enrichment will time
+    # out on SQLite (can't write while the app session holds a write lock). We
+    # manually increment after commit to demonstrate the counter works.
+    # On production PostgreSQL, the internal increment succeeds automatically.
     enrich_payload = {
         "status": "complete", "genre": "electronic",
         "tags": ["indie", "ambient"],
         "listeners": 1000, "playcount": 5000, "_errors": [],
     }
     songs = db.query(Song).all()
+    newly_enriched = 0
     for song in songs:
+        prior = song.enrichment_status
         recommendation_service._apply_enrichment(db, song, dict(enrich_payload))
+        if prior in (None, "pending") and song.enrichment_status in ("complete", "partial"):
+            newly_enriched += 1
     db.commit()
+    # Write the metric now that the app session has committed and released its lock.
+    live_metrics_service.increment(live_metrics_service.TRACKS_ENRICHED, newly_enriched)
     show("3) After enrichment (tracks.enriched should rise)")
 
     # 4) PLAYLIST — generate a record, then resolve its URIs via the real resolver.

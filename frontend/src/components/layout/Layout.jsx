@@ -14,6 +14,7 @@ const PAGE_TITLES = {
   '/for-you':   'For You',
   '/playlists': 'Playlists',
   '/features':  'Tools',
+  '/stats':     'Stats',
   '/settings':  'Settings',
 }
 

@@ -5,8 +5,14 @@ from backend.app.routes import stats_routes
 
 
 def _use_test_db(monkeypatch, testing_session_local, test_engine):
+    # Point the metrics service at the test engine. We must patch both the
+    # module-level aliases (SessionLocal, engine) and the private names
+    # (_MetricSession, _metric_engine) because _upsert_increment uses the
+    # module-level `engine` for dialect detection.
     monkeypatch.setattr(lm, "SessionLocal", testing_session_local)
     monkeypatch.setattr(lm, "engine", test_engine)
+    monkeypatch.setattr(lm, "_MetricSession", testing_session_local)
+    monkeypatch.setattr(lm, "_metric_engine", test_engine)
 
 
 def test_counters_accumulate_atomically(monkeypatch, testing_session_local, test_engine):
