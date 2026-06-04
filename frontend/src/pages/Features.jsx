@@ -279,7 +279,7 @@ function ImportSection() {
 
 // 300 songs × ~500 ms/song (Last.fm) ≈ 150 s per batch — well under Render's
 // free-tier restart window.  The auto-restart loop chains batches until done.
-const ENRICH_BATCH = 300
+const ENRICH_BATCH = 150  // 150 × ~500 ms/song ≈ 75 s — finishes before Render restarts
 
 export default function Features() {
   const [backfillResult, setBackfillResult]     = useState(null)
@@ -352,7 +352,6 @@ export default function Features() {
           if (job.status === 'succeeded') {
             const processed = job.result?.total_candidates ?? 0
             setEnrichedSoFar(prev => prev + processed)
-
             api.get('/user/sync-status')
               .then(s => {
                 const remaining = s.pending_enrichment_count ?? 0
@@ -364,6 +363,26 @@ export default function Features() {
                 }
               })
               .catch(() => setAutoEnrich(false))
+
+          } else if (job.status === 'failed' && autoEnrich) {
+            // Job was killed by a server restart (stale auto-fail after 4 min).
+            // The previous code did setAutoEnrich(false) here — that caused the
+            // loop to silently stop after every Render free-tier restart.
+            // Instead, re-check pending count and kick off the next batch so
+            // enrichment self-heals without user interaction.
+            api.get('/user/sync-status')
+              .then(s => {
+                const remaining = s.pending_enrichment_count ?? 0
+                setPendingCount(remaining)
+                if (remaining > 0) {
+                  // Small delay so the new server instance is fully ready
+                  setTimeout(() => startBatch(remaining), 3000)
+                } else {
+                  setAutoEnrich(false)
+                }
+              })
+              .catch(() => setAutoEnrich(false))
+
           } else {
             setAutoEnrich(false)
           }
