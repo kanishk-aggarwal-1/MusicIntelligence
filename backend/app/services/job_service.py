@@ -14,6 +14,10 @@ from ..time_utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
 ACTIVE_JOB_MAX_AGE = timedelta(hours=2)
+# A running job that hasn't updated in 30 min is almost certainly stuck due to
+# a server restart. Auto-fail it the next time the frontend polls for it so
+# the UI clears instead of spinning forever.
+STALE_RUNNING_JOB_AGE = timedelta(minutes=30)
 
 
 class JobProgress:
@@ -74,7 +78,29 @@ def get_job(db: Session, *, job_id: str, user_id: str | None = None) -> Job | No
     query = db.query(Job).filter(Job.id == job_id)
     if user_id:
         query = query.filter(Job.user_id == user_id)
-    return query.first()
+    job = query.first()
+    # Auto-fail running jobs that haven't progressed in a long time — this
+    # happens when the server restarts mid-job and the thread is killed without
+    # ever updating the status.  The frontend polls this endpoint, so it will
+    # receive "failed" on the next tick and clear the stuck UI.
+    if job and job.status == "running":
+        anchor = job.started_at or job.created_at
+        if anchor and utcnow_naive() - anchor > STALE_RUNNING_JOB_AGE:
+            job.status = "failed"
+            job.error = "Server restarted while this job was running."
+            job.finished_at = utcnow_naive()
+            job.message = "Import interrupted — re-upload the file to continue."
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            logger.warning(
+                "job.stale_auto_failed job_id=%s user_id=%s job_type=%s age_minutes=%.0f",
+                job.id,
+                job.user_id,
+                job.job_type,
+                (utcnow_naive() - anchor).total_seconds() / 60,
+            )
+    return job
 
 
 def _job_age_anchor(job: Job):
