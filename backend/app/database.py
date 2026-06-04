@@ -342,8 +342,13 @@ def run_startup_migrations():
                         conn.execute(text("ALTER TABLE generated_playlists ADD COLUMN summary_json TEXT"))
 
     except SQLAlchemyError:
-        logger.exception("Startup migration failed")
-        raise
+        # Log but do NOT re-raise.  These are idempotent additive migrations
+        # that should already be applied on the production DB.  A transient
+        # Neon connection error at cold-start (Neon serverless wakes slowly)
+        # was propagating here → crashing the entire app import → Render
+        # restart loop.  The app can serve requests fine even if this pass
+        # failed; the next startup will retry.
+        logger.exception("Startup migration failed — continuing")
 
 
 def get_db():
