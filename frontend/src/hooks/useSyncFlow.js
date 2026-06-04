@@ -118,9 +118,13 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
       return
     }
     if (job.job_type === 'import_history') {
+      if (isDone(job)) {
+        localStorage.removeItem('musicintel:import-job-id')
+        return
+      }
       setImportJob(job)
       localStorage.setItem('musicintel:import-job-id', job.id)
-      if (!isDone(job)) startPolling('import', job.id)
+      startPolling('import', job.id)
     }
   }, [startPolling])
 

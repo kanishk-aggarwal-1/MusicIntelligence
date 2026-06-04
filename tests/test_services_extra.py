@@ -423,6 +423,51 @@ def test_backfill_missing_metadata_enriches_pending_songs(monkeypatch, db_sessio
     assert result["scanned"] >= 1
 
 
+def test_backfill_missing_metadata_reports_incremental_progress(monkeypatch, db_session):
+    db_session.add(_session("u1"))
+    artist = _artist(db_session, "Progress Artist")
+    songs = []
+    for i in range(6):
+        song = Song(
+            title=f"Progress Song {i}",
+            artist_id=artist.id,
+            enrichment_status="pending",
+            is_deleted=False,
+        )
+        db_session.add(song)
+        db_session.flush()
+        db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, i)))
+        songs.append(song)
+    db_session.commit()
+
+    monkeypatch.setattr(recommendation_service, "enrich_song", lambda song: {
+        "genre": "indie",
+        "listeners": 100,
+        "playcount": 200,
+        "tags": ["indie"],
+    })
+
+    updates = []
+
+    def progress_callback(**kwargs):
+        updates.append(kwargs)
+
+    result = backfill_missing_metadata(
+        db_session,
+        user_id="u1",
+        max_songs=10,
+        progress_callback=progress_callback,
+        progress_interval=2,
+    )
+
+    assert result["scanned"] == 6
+    assert result["processed"] == 6
+    assert result["total_candidates"] == 6
+    assert [item["current"] for item in updates] == [2, 4, 6]
+    assert all(item["total"] == 6 for item in updates)
+    assert updates[-1]["updated"] == 6
+
+
 def test_backfill_missing_metadata_skips_complete_songs(monkeypatch, db_session):
     db_session.add(_session("u1"))
     # _song_with_tag always creates with enrichment_status="complete"
