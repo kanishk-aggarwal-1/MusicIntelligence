@@ -9,7 +9,38 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+# Neon's serverless PostgreSQL aggressively closes idle SSL connections.
+# pool_pre_ping=True checks connections on checkout but can't save a
+# connection that drops MID-query (OperationalError: SSL connection has
+# been closed unexpectedly).
+#
+# TCP keepalives prevent the network layer from silently dropping the
+# connection after a period of inactivity:
+#   keepalives_idle   – send first keepalive probe after 30 s of silence
+#   keepalives_interval – retry probe every 10 s
+#   keepalives_count    – give up after 5 missed probes (= 80 s total)
+#
+# pool_recycle=300 discards connections older than 5 min so the pool
+# never holds a connection that Neon has already hard-closed server-side.
+_is_postgres = settings.DATABASE_URL.startswith("postgres")
+_connect_args = (
+    {
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+        "connect_timeout": 10,
+    }
+    if _is_postgres
+    else {}
+)
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args=_connect_args,
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
