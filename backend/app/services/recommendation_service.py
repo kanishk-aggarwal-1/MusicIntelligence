@@ -74,9 +74,25 @@ def _ensure_song_tags(db, song, tag_names):
     for tag_name in normalized_names:
         tag = db.query(Tag).filter(Tag.name == tag_name).first()
         if not tag:
-            tag = Tag(name=tag_name)
-            db.add(tag)
-            db.flush()  # get tag.id
+            if is_postgres:
+                # Two concurrent enrichment threads can both find the tag
+                # missing and both try to INSERT — second one hits
+                # tags_name_key UniqueViolation.  Use ON CONFLICT DO NOTHING
+                # then re-fetch so we always get the tag.id safely.
+                db.execute(
+                    postgres_insert(Tag.__table__)
+                    .values(name=tag_name)
+                    .on_conflict_do_nothing(index_elements=["name"])
+                )
+                db.flush()
+                tag = db.query(Tag).filter(Tag.name == tag_name).first()
+            else:
+                tag = Tag(name=tag_name)
+                db.add(tag)
+                db.flush()
+
+        if not tag:
+            continue  # shouldn't happen, but skip rather than crash
 
         if is_postgres:
             result = db.execute(
