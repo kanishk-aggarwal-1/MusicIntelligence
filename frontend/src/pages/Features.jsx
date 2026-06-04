@@ -277,12 +277,18 @@ function ImportSection() {
   )
 }
 
+const ENRICH_BATCH = 2000   // songs per job — large enough to make progress,
+                             // small enough that a Render restart loses < 2 k
+
 export default function Features() {
-  const [backfillResult, setBackfillResult] = useState(null)
-  const [backfillLoading, setBackfillLoading] = useState(false)
-  const [backfillPoll, setBackfillPoll] = useState(null)
-  const [retryFailed, setRetryFailed] = useState(false)
-  const [retryPartial, setRetryPartial] = useState(false)
+  const [backfillResult, setBackfillResult]     = useState(null)
+  const [backfillLoading, setBackfillLoading]   = useState(false)
+  const [backfillPoll, setBackfillPoll]         = useState(null)
+  const [retryFailed, setRetryFailed]           = useState(false)
+  const [retryPartial, setRetryPartial]         = useState(false)
+  const [pendingCount, setPendingCount]         = useState(null)
+  const [enrichedSoFar, setEnrichedSoFar]       = useState(0)
+  const [autoEnrich, setAutoEnrich]             = useState(false)
 
   const [qualityResult, setQualityResult] = useState(null)
   const [qualityLoading, setQualityLoading] = useState(false)
@@ -295,6 +301,14 @@ export default function Features() {
   const [cacheClearing, setCacheClearing] = useState(false)
   const [cacheResult, setCacheResult] = useState(null)
 
+  // Fetch pending count once on mount so the button label is informative
+  useEffect(() => {
+    api.get('/user/sync-status')
+      .then(s => setPendingCount(s.pending_enrichment_count ?? null))
+      .catch(() => {})
+  }, [])
+
+  // Poll the active backfill job; auto-restart if autoEnrich is on and more remain
   useEffect(() => {
     if (!backfillResult?.id || ['succeeded', 'failed', 'cancelled'].includes(backfillResult.status)) return
 
@@ -305,6 +319,27 @@ export default function Features() {
         if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
           clearInterval(timer)
           setBackfillPoll(null)
+
+          if (job.status === 'succeeded') {
+            const processed = job.result?.total_candidates ?? 0
+            setEnrichedSoFar(prev => prev + processed)
+
+            // Re-fetch pending count so the label stays accurate
+            api.get('/user/sync-status')
+              .then(s => {
+                const remaining = s.pending_enrichment_count ?? 0
+                setPendingCount(remaining)
+                // Auto-continue if there are still songs to enrich
+                if (autoEnrich && remaining > 0) {
+                  startBatch(remaining)
+                } else {
+                  setAutoEnrich(false)
+                }
+              })
+              .catch(() => setAutoEnrich(false))
+          } else {
+            setAutoEnrich(false)
+          }
         }
       } catch (e) {
         setBackfillPoll({ error: e.message })
@@ -313,19 +348,29 @@ export default function Features() {
 
     setBackfillPoll({ active: true })
     return () => clearInterval(timer)
-  }, [backfillResult?.id, backfillResult?.status])
+  }, [backfillResult?.id, backfillResult?.status, autoEnrich])
 
-  async function handleBackfill() {
+  async function startBatch(overrideLimit) {
     setBackfillLoading(true)
     setBackfillPoll(null)
+    const limit = Math.min(overrideLimit ?? pendingCount ?? ENRICH_BATCH, ENRICH_BATCH)
     try {
-      const job = await api.post(`/user/backfill-metadata/job?limit=500&retry_partial=${retryPartial}&retry_failed=${retryFailed}`)
+      const job = await api.post(
+        `/user/backfill-metadata/job?limit=${limit}&retry_partial=${retryPartial}&retry_failed=${retryFailed}`
+      )
       setBackfillResult(job)
     } catch (e) {
       setBackfillResult({ error: e.message })
+      setAutoEnrich(false)
     } finally {
       setBackfillLoading(false)
     }
+  }
+
+  async function handleBackfill() {
+    setEnrichedSoFar(0)
+    setAutoEnrich(true)   // enable auto-restart for subsequent batches
+    await startBatch(pendingCount)
   }
 
   async function handleQuality() {
@@ -391,7 +436,10 @@ export default function Features() {
         <ImportSection />
       </Section>
 
-      <Section title="Metadata Enrichment" description="Fetch Last.fm tags and genre data for songs in your library.">
+      <Section
+        title="Metadata Enrichment"
+        description="Fetch Last.fm tags and genre data for songs in your library."
+      >
         <div className="flex items-center gap-4 flex-wrap">
           <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
             <input type="checkbox" checked={retryPartial} onChange={e => setRetryPartial(e.target.checked)} className="accent-brand" />
@@ -401,8 +449,28 @@ export default function Features() {
             <input type="checkbox" checked={retryFailed} onChange={e => setRetryFailed(e.target.checked)} className="accent-brand" />
             Retry failed
           </label>
-          <ActionButton onClick={handleBackfill} loading={backfillLoading} icon={RefreshCw} label="Run Backfill" variant="primary" />
+          <ActionButton
+            onClick={handleBackfill}
+            loading={backfillLoading}
+            icon={RefreshCw}
+            label={
+              pendingCount > 0
+                ? `Enrich ${pendingCount.toLocaleString()} songs`
+                : 'Run Enrichment'
+            }
+            variant="primary"
+          />
         </div>
+
+        {/* Overall multi-batch progress */}
+        {autoEnrich && (pendingCount ?? 0) > 0 && (
+          <p className="text-zinc-400 text-xs">
+            Auto-running in {ENRICH_BATCH.toLocaleString()}-song batches
+            {enrichedSoFar > 0 && ` · ${enrichedSoFar.toLocaleString()} enriched so far`}
+            {pendingCount > 0 && ` · ${pendingCount.toLocaleString()} remaining`}
+          </p>
+        )}
+
         <JobProgress job={backfillResult} onRetry={handleBackfill} />
         {backfillPoll?.error && <p className="text-red-400 text-sm">{backfillPoll.error}</p>}
       </Section>
