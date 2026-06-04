@@ -331,11 +331,43 @@ export default function Features() {
   }, [pendingCount, retryPartial, retryFailed])
 
   // Keep the Render free-tier server awake while enrichment is in progress.
+  // Ping every 20 s (browsers throttle hidden-tab timers to ~1 min, so use
+  // a short base interval to still fire every ~1 min when backgrounded).
   useEffect(() => {
     if (!autoEnrich) return
-    const hb = setInterval(() => api.get('/stats').catch(() => {}), 60_000)
+    const hb = setInterval(() => api.get('/stats').catch(() => {}), 20_000)
     return () => clearInterval(hb)
   }, [autoEnrich])
+
+  // Page Visibility API: when the user switches back to this tab, immediately
+  // re-check the job. Browsers throttle timers when tabs are hidden, so the
+  // 1.5 s poll can slow to 1 min+. If the job died while the tab was in the
+  // background we'd wait up to 1 min to notice — this fires instantly.
+  useEffect(() => {
+    if (!autoEnrich) return
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!backfillResult?.id) return
+      api.get(`/jobs/${backfillResult.id}`)
+        .then(job => {
+          setBackfillResult(job)
+          // If the job died while hidden, kick off the next batch right away
+          if (['failed', 'cancelled'].includes(job.status) && autoEnrich) {
+            api.get('/user/sync-status')
+              .then(s => {
+                const remaining = s.pending_enrichment_count ?? 0
+                setPendingCount(remaining)
+                if (remaining > 0) startBatch(remaining)
+                else setAutoEnrich(false)
+              })
+              .catch(() => setAutoEnrich(false))
+          }
+        })
+        .catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [autoEnrich, backfillResult?.id, startBatch])
 
   // Poll the active backfill job; auto-restart if autoEnrich is on and more remain
   useEffect(() => {
