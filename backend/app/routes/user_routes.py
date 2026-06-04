@@ -7,11 +7,13 @@ from html import escape
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 import spotipy
 
-from ..database import get_db
+from ..database import get_db, engine as _db_engine
 from ..config import settings
+from ..models.artist import Artist
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.job import Job
 from ..models.listening_goal import ListeningGoal
@@ -21,6 +23,7 @@ from ..models.song import Song
 from ..models.user_session import UserSession
 from ..services.job_service import create_job, get_active_job, run_job, serialize_job
 from ..services.rate_limit_service import enforce_rate_limit
+from ..services import live_metrics_service
 from ..services.spotify_service import (
     SESSION_COOKIE_NAME,
     clear_user_session,
@@ -36,7 +39,11 @@ from ..services.spotify_service import (
     read_session_cookie_value,
     save_user_session,
 )
-from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
+from ..services.recommendation_service import (
+    backfill_missing_metadata,
+    sync_listening_history,
+    _parse_played_at,
+)
 
 router = APIRouter(prefix="/user", tags=["User"])
 logger = logging.getLogger(__name__)
@@ -520,6 +527,216 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
     }
 
 
+_BULK_CHUNK = 500  # max items per IN-clause batch
+
+
+def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> dict:
+    """Bulk-optimised track import for large history files.
+
+    Instead of the per-track query loop in sync_listening_history (designed for
+    ≤50 tracks), this function minimises round-trips by:
+      Phase 1 – batch-upsert artists   (~1–3 queries regardless of file size)
+      Phase 2 – batch-upsert songs     (~10–30 queries for a 10k-track file)
+      Phase 3 – bulk-insert history    (~20 queries for a 10k-track file, with
+                                        ON CONFLICT DO NOTHING on Postgres)
+
+    On SQLite (tests) it falls back to individual inserts for the history phase.
+    """
+    is_postgres = _db_engine.dialect.name == "postgresql"
+    total = len(tracks)
+    new_songs = 0
+    new_history_rows = 0
+
+    # ── Phase 1: Artists ─────────────────────────────────────────────────────
+    progress.update(message=f"Syncing artists for {total:,} tracks…")
+
+    unique_artist_names: set[str] = {
+        t["artist"] for t in tracks if t.get("artist")
+    }
+    artist_map: dict[str, int] = {}  # name → artist_id
+
+    name_list = list(unique_artist_names)
+    for i in range(0, len(name_list), _BULK_CHUNK):
+        chunk = name_list[i : i + _BULK_CHUNK]
+        rows = db.query(Artist.name, Artist.id).filter(Artist.name.in_(chunk)).all()
+        artist_map.update(rows)
+
+    missing_names = unique_artist_names - artist_map.keys()
+    new_artist_objs: list[Artist] = []
+    for name in missing_names:
+        a = Artist(name=name)
+        db.add(a)
+        new_artist_objs.append(a)
+
+    if new_artist_objs:
+        db.flush()  # populates .id on each new Artist in-memory
+        for a in new_artist_objs:
+            artist_map[a.name] = a.id
+
+    db.commit()
+
+    # ── Phase 2: Songs ───────────────────────────────────────────────────────
+    progress.update(message=f"Checking library for {total:,} tracks…")
+
+    # Maps used for resolution later
+    spotify_song_map: dict[str, int] = {}        # spotify_id  → song_id
+    title_song_map: dict[tuple, int] = {}        # (title, artist_id) → song_id
+
+    # 2a — look up existing songs by spotify_id
+    spotify_ids = [t["spotify_id"] for t in tracks if t.get("spotify_id")]
+    for i in range(0, len(spotify_ids), _BULK_CHUNK):
+        chunk = spotify_ids[i : i + _BULK_CHUNK]
+        rows = db.query(Song.spotify_id, Song.id, Song.title, Song.artist_id).filter(
+            Song.spotify_id.in_(chunk),
+            Song.is_deleted.is_(False),
+        ).all()
+        for sid, song_id, title, artist_id in rows:
+            spotify_song_map[sid] = song_id
+            title_song_map[(title, artist_id)] = song_id
+
+    # 2b — look up remaining songs by (title, artist_id)
+    need_by_title: dict[int, list[str]] = {}  # artist_id → [title, ...]
+    for t in tracks:
+        aid = artist_map.get(t.get("artist"))
+        if not aid:
+            continue
+        sid = t.get("spotify_id")
+        if sid and sid in spotify_song_map:
+            continue
+        title = t.get("title") or ""
+        if (title, aid) in title_song_map:
+            continue
+        need_by_title.setdefault(aid, []).append(title)
+
+    for aid, titles in need_by_title.items():
+        unique_titles = list(set(titles))
+        for i in range(0, len(unique_titles), _BULK_CHUNK):
+            chunk = unique_titles[i : i + _BULK_CHUNK]
+            rows = db.query(Song.title, Song.id).filter(
+                Song.artist_id == aid,
+                Song.title.in_(chunk),
+                Song.is_deleted.is_(False),
+            ).all()
+            for title, song_id in rows:
+                title_song_map[(title, aid)] = song_id
+
+    # 2c — create songs that still don't exist
+    seen_song_keys: set[tuple] = set()
+    new_song_meta: list[tuple[Song, str, int]] = []  # (obj, title, artist_id)
+
+    for t in tracks:
+        aid = artist_map.get(t.get("artist"))
+        if not aid:
+            continue
+        sid = t.get("spotify_id")
+        title = t.get("title") or ""
+        key = (title, aid)
+
+        if (sid and sid in spotify_song_map) or key in title_song_map:
+            continue
+        if key in seen_song_keys:
+            continue
+        seen_song_keys.add(key)
+
+        song = Song(
+            title=title,
+            artist_id=aid,
+            spotify_id=sid or None,
+            image_url=t.get("image_url"),
+            preview_url=t.get("preview_url"),
+            discovery_source="history_sync",
+            discovery_confidence=1.0,
+            enrichment_status="pending",
+            is_deleted=False,
+        )
+        db.add(song)
+        new_song_meta.append((song, title, aid))
+        new_songs += 1
+
+    if new_song_meta:
+        db.flush()  # populates .id on every new Song object in-memory
+        for song, title, aid in new_song_meta:
+            title_song_map[(title, aid)] = song.id
+            if song.spotify_id:
+                spotify_song_map[song.spotify_id] = song.id
+
+    db.commit()
+    progress.update(message=f"Added {new_songs:,} new songs. Importing listening history…")
+
+    # ── Phase 3: Listening history ───────────────────────────────────────────
+    rows_to_insert: list[dict] = []
+    seen_history: set[tuple] = set()
+
+    for t in tracks:
+        aid = artist_map.get(t.get("artist"))
+        if not aid:
+            continue
+        sid = t.get("spotify_id")
+        title = t.get("title") or ""
+
+        song_id = spotify_song_map.get(sid) if sid else None
+        if not song_id:
+            song_id = title_song_map.get((title, aid))
+        if not song_id:
+            continue
+
+        played_at = _parse_played_at(t.get("played_at"))
+        key = (song_id, played_at)
+        if key in seen_history:
+            continue
+        seen_history.add(key)
+
+        rows_to_insert.append({
+            "user_id": user_id,
+            "song_id": song_id,
+            "played_at": played_at,
+        })
+
+    total_to_insert = len(rows_to_insert)
+    for i in range(0, total_to_insert, _BULK_CHUNK):
+        chunk = rows_to_insert[i : i + _BULK_CHUNK]
+
+        if is_postgres:
+            result = db.execute(
+                pg_insert(ListeningHistory.__table__)
+                .values(chunk)
+                .on_conflict_do_nothing(
+                    index_elements=["user_id", "song_id", "played_at"]
+                )
+            )
+            new_history_rows += result.rowcount or 0
+        else:
+            # SQLite fallback used in tests — small data, correctness over speed
+            for row in chunk:
+                existing = (
+                    db.query(ListeningHistory.id)
+                    .filter_by(user_id=row["user_id"], song_id=row["song_id"], played_at=row["played_at"])
+                    .first()
+                )
+                if not existing:
+                    db.add(ListeningHistory(**row))
+                    new_history_rows += 1
+
+        db.commit()
+
+        imported = min(i + len(chunk), total)
+        progress.update(
+            current=imported,
+            total=total,
+            message=f"Importing {imported:,} / {total:,} tracks into history…",
+        )
+
+    if new_history_rows:
+        live_metrics_service.increment(live_metrics_service.TRACKS_SYNCED, new_history_rows)
+
+    existing_history_rows = total_to_insert - new_history_rows
+    return {
+        "new_songs": new_songs,
+        "new_history_rows": new_history_rows,
+        "existing_history_rows": existing_history_rows,
+    }
+
+
 def _parse_extended_history(data: list) -> list:
     """Convert Spotify extended streaming history entries into sync-compatible track dicts."""
     tracks = []
@@ -551,37 +768,34 @@ def _parse_extended_history(data: list) -> list:
     return tracks
 
 
-IMPORT_PROGRESS_BATCH_SIZE = 500
-
-
 def _run_import_history_job(db, progress, *, user_id: str, data: list):
-    progress.update(total=3, current=0, message="Parsing tracks from Spotify history file")
+    # Step 1: parse the raw JSON entries (CPU-only, fast)
+    progress.update(total=3, current=0, message="Parsing tracks from Spotify history file…")
     tracks = _parse_extended_history(data)
 
     total_tracks = len(tracks)
     progress_total = max(1, total_tracks)
+
+    # Step 2: bulk-import — progress is updated inside _bulk_import_tracks
+    # per chunk so the bar moves smoothly even for 10 k-track files.
+    # enrich_inline is intentionally NOT called here; the user must run
+    # deduplication first, then trigger enrichment manually from Library Tools.
     progress.update(
         total=progress_total,
         current=0,
-        message=f"Importing 0 / {total_tracks:,} tracks into library",
+        message=f"Starting bulk import of {total_tracks:,} tracks…",
     )
+    result = _bulk_import_tracks(db, user_id, tracks, progress)
 
-    result = {"new_songs": 0, "new_history_rows": 0, "existing_history_rows": 0}
-    for start in range(0, total_tracks, IMPORT_PROGRESS_BATCH_SIZE):
-        chunk = tracks[start:start + IMPORT_PROGRESS_BATCH_SIZE]
-        chunk_result = sync_listening_history(db, user_id, chunk, enrich_inline=False)
-        for key in result:
-            result[key] += int(chunk_result.get(key) or 0)
-
-        imported = min(start + len(chunk), total_tracks)
-        progress.update(
-            current=imported,
-            message=f"Importing {imported:,} / {total_tracks:,} tracks into library",
-        )
-
+    # Step 3: finalise
     progress.update(
         current=progress_total,
-        message="Import complete. Run deduplication, then metadata enrichment.",
+        total=progress_total,
+        message=(
+            f"Done — {result['new_history_rows']:,} new history rows, "
+            f"{result['new_songs']:,} new songs. "
+            "Next: run Deduplication, then Metadata Enrichment."
+        ),
     )
 
     return {
@@ -589,9 +803,9 @@ def _run_import_history_job(db, progress, *, user_id: str, data: list):
         "progress_current": progress_total,
         "progress_total": progress_total,
         "enrichment_queued": False,
-        "next_step": "Run deduplication, then metadata enrichment.",
+        "next_step": "Run Deduplication → then Metadata Enrichment from Library Tools.",
         "entries_in_file": len(data),
-        "valid_tracks": len(tracks),
+        "valid_tracks": total_tracks,
         **result,
     }
 

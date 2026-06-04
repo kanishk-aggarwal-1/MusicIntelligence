@@ -24,6 +24,19 @@ function Result({ data }) {
   )
 }
 
+// Keys shown in the summary grid, tailored per job type.
+const JOB_RESULT_KEYS = {
+  import_history:    ['new_history_rows', 'new_songs', 'valid_tracks'],
+  backfill_metadata: ['scanned', 'updated', 'new_songs'],
+}
+const RESULT_KEY_LABELS = {
+  new_history_rows: 'history rows added',
+  new_songs:        'new songs',
+  valid_tracks:     'tracks in file',
+  scanned:          'scanned',
+  updated:          'updated',
+}
+
 function JobProgress({ job, onRetry }) {
   if (!job) return null
   const failed = job.status === 'failed'
@@ -32,14 +45,15 @@ function JobProgress({ job, onRetry }) {
   const current = Number(job.progress_current || 0)
   const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0
   const result = job.result || null
+  const resultKeys = JOB_RESULT_KEYS[job.job_type] || ['scanned', 'updated', 'new_songs']
 
   return (
     <div className={`rounded-lg border p-3 space-y-2 ${failed ? 'bg-red-950/20 border-red-900/50' : 'bg-zinc-950 border-zinc-800'}`}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-white text-sm capitalize">{job.status}</p>
-          <p className={failed ? 'text-red-300 text-xs mt-0.5 line-clamp-2' : 'text-zinc-500 text-xs mt-0.5 truncate'}>
-            {failed ? (job.error || job.message || 'Job failed') : (job.message || 'Working')}
+          <p className={failed ? 'text-red-300 text-xs mt-0.5 line-clamp-2' : 'text-zinc-500 text-xs mt-0.5 line-clamp-2'}>
+            {failed ? (job.error || job.message || 'Job failed') : (job.message || 'Working…')}
           </p>
         </div>
         {failed && (
@@ -53,16 +67,26 @@ function JobProgress({ job, onRetry }) {
         )}
       </div>
       {total > 0 && (
-        <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-          <div className={`h-full rounded-full transition-all ${failed ? 'bg-red-400' : 'bg-brand'}`} style={{ width: `${pct}%` }} />
-        </div>
+        <>
+          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${failed ? 'bg-red-400' : 'bg-brand'}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          {!done && total > 1 && (
+            <p className="text-zinc-600 text-[11px] tabular-nums">
+              {current.toLocaleString()} / {total.toLocaleString()}
+            </p>
+          )}
+        </>
       )}
       {done && result && (
         <div className="grid grid-cols-3 gap-2 pt-1">
-          {['scanned', 'updated', 'new_songs'].map(key => result[key] !== undefined && (
+          {resultKeys.map(key => result[key] !== undefined && (
             <div key={key} className="bg-zinc-900 rounded-md p-2">
-              <p className="text-zinc-500 text-[11px]">{key.replace(/_/g, ' ')}</p>
-              <p className="text-white text-sm font-semibold">{result[key]}</p>
+              <p className="text-zinc-500 text-[11px]">{RESULT_KEY_LABELS[key] || key.replace(/_/g, ' ')}</p>
+              <p className="text-white text-sm font-semibold">{Number(result[key]).toLocaleString()}</p>
             </div>
           ))}
         </div>
@@ -175,10 +199,17 @@ function ImportSection() {
         )}
       </div>
 
-      {job?.status === 'succeeded' && job.result?.next_step && (
-        <p className="text-zinc-400 text-sm bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2">
-          Next: {job.result.next_step} Upload the rest of your Spotify history files before enriching.
-        </p>
+      {job?.status === 'succeeded' && (
+        <div className="bg-zinc-950 border border-zinc-700 rounded-lg px-4 py-3 space-y-1.5">
+          <p className="text-zinc-300 text-sm font-medium">Import complete ✓</p>
+          <p className="text-zinc-400 text-xs">
+            Upload any remaining Spotify history files above, then follow these steps in order:
+          </p>
+          <ol className="text-xs text-zinc-400 list-decimal list-inside space-y-1 marker:text-zinc-600">
+            <li><span className="text-zinc-300">Deduplication</span> — merge duplicate tracks below</li>
+            <li><span className="text-zinc-300">Metadata Enrichment</span> — fetch Last.fm tags &amp; genres below</li>
+          </ol>
+        </div>
       )}
 
       {error && <p className="text-red-400 text-sm">{error}</p>}
