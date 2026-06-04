@@ -1,0 +1,44 @@
+version: "3.9"
+
+# Run with:
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# Prerequisites:
+#   - Backend running locally on port 8000 (npm run dev / uvicorn)
+#   - Docker Desktop running
+#
+# Grafana: http://localhost:3000  (admin / admin)
+# Prometheus: http://localhost:9090
+#
+# The provisioned dashboard "MusicIntelligence Live Metrics" appears
+# automatically in Grafana — no manual import needed.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Allow prometheus to reach the backend running on the host.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:10.4.2
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  grafana_data:

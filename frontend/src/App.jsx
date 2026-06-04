@@ -29,13 +29,19 @@ function ProtectedRoute({ children }) {
   return <Layout>{children}</Layout>
 }
 
+function OptionalLayoutRoute({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) return <PageLoading />
+  return user ? <Layout>{children}</Layout> : children
+}
+
 export default function App() {
   return (
     <Suspense fallback={<PageLoading />}>
       <Routes>
         <Route path="/login" element={<Login />} />
         {/* Public — shareable live metrics, no login required. */}
-        <Route path="/stats" element={<Stats />} />
+        <Route path="/stats" element={<OptionalLayoutRoute><Stats /></OptionalLayoutRoute>} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/songs"     element={<ProtectedRoute><Songs /></ProtectedRoute>} />
         <Route path="/browse"    element={<ProtectedRoute><Browse /></ProtectedRoute>} />

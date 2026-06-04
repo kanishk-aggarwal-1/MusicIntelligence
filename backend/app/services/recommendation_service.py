@@ -143,9 +143,9 @@ def _apply_enrichment(db, song, data):
         song.enrichment_error = "; ".join(errors[:2]) if errors else "No useful metadata found"
 
     # Count a track as "enriched" the first time real metadata moves it out of
-    # "pending" into complete/partial. Tied to the transition (not the final
-    # state) so re-enriching an already-enriched song isn't double counted, and
-    # so the count is robust to the complete-vs-partial timing within a pass.
+    # "pending". On PostgreSQL this metric write succeeds immediately in its own
+    # connection. On SQLite it times out silently (SQLite allows only one writer
+    # at a time; the fail-open timeout in live_metrics_service handles this).
     if prior_status in (None, "pending") and song.enrichment_status in ("complete", "partial"):
         live_metrics_service.increment(live_metrics_service.TRACKS_ENRICHED)
 

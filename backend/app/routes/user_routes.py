@@ -551,20 +551,45 @@ def _parse_extended_history(data: list) -> list:
     return tracks
 
 
+IMPORT_PROGRESS_BATCH_SIZE = 500
+
+
 def _run_import_history_job(db, progress, *, user_id: str, data: list):
     progress.update(total=3, current=0, message="Parsing tracks from Spotify history file")
     tracks = _parse_extended_history(data)
 
-    progress.update(current=1, message=f"Importing {len(tracks):,} tracks into library")
-    result = sync_listening_history(db, user_id, tracks, enrich_inline=False)
+    total_tracks = len(tracks)
+    progress_total = max(1, total_tracks)
+    progress.update(
+        total=progress_total,
+        current=0,
+        message=f"Importing 0 / {total_tracks:,} tracks into library",
+    )
 
-    progress.update(current=2, message="Backfilling Last.fm metadata for new songs")
-    new_songs = result.get("new_songs", 0)
-    if new_songs > 0:
-        backfill_missing_metadata(db, user_id=user_id, max_songs=new_songs + 50)
+    result = {"new_songs": 0, "new_history_rows": 0, "existing_history_rows": 0}
+    for start in range(0, total_tracks, IMPORT_PROGRESS_BATCH_SIZE):
+        chunk = tracks[start:start + IMPORT_PROGRESS_BATCH_SIZE]
+        chunk_result = sync_listening_history(db, user_id, chunk, enrich_inline=False)
+        for key in result:
+            result[key] += int(chunk_result.get(key) or 0)
+
+        imported = min(start + len(chunk), total_tracks)
+        progress.update(
+            current=imported,
+            message=f"Importing {imported:,} / {total_tracks:,} tracks into library",
+        )
+
+    progress.update(
+        current=progress_total,
+        message="Import complete. Run deduplication, then metadata enrichment.",
+    )
 
     return {
-        "message": "Import complete",
+        "message": "Import complete. Run deduplication, then metadata enrichment.",
+        "progress_current": progress_total,
+        "progress_total": progress_total,
+        "enrichment_queued": False,
+        "next_step": "Run deduplication, then metadata enrichment.",
         "entries_in_file": len(data),
         "valid_tracks": len(tracks),
         **result,

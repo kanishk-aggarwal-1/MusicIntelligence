@@ -5,10 +5,17 @@ function isDone(job) {
   return ['succeeded', 'failed', 'cancelled'].includes(job?.status)
 }
 
+function setterForKind(kind, setters) {
+  if (kind === 'enrichment') return setters.setEnrichmentJob
+  if (kind === 'import') return setters.setImportJob
+  return setters.setSyncJob
+}
+
 export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
   const [syncing, setSyncing] = useState(false)
   const [syncJob, setSyncJob] = useState(null)
   const [enrichmentJob, setEnrichmentJob] = useState(null)
+  const [importJob, setImportJob] = useState(null)
   const [syncStatus, setSyncStatus] = useState(null)
   const [syncError, setSyncError] = useState(null)
   const [syncAtLimit, setSyncAtLimit] = useState(false)
@@ -34,7 +41,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
   }, [])
 
   const startPolling = useCallback((kind, jobId) => {
-    const setter = kind === 'enrichment' ? setEnrichmentJob : setSyncJob
+    const setter = setterForKind(kind, { setSyncJob, setEnrichmentJob, setImportJob })
     clearTimer(kind)
     failuresRef.current[kind] = 0
     timersRef.current[kind] = setInterval(async () => {
@@ -66,6 +73,10 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
             setEnrichmentJob(queued)
             startPolling('enrichment', result.enrichment_job_id)
           }
+        } else if (kind === 'import') {
+          if (job.status === 'succeeded') {
+            localStorage.removeItem('musicintel:import-job-id')
+          }
         } else {
           onEnrichmentFinished?.(job)
         }
@@ -80,6 +91,25 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
       }
     }, 1500)
   }, [clearTimer, onEnrichmentFinished, onSyncFinished, refreshSyncStatus])
+
+  const resumeJob = useCallback((job) => {
+    if (!job?.id) return
+    if (job.job_type === 'sync_history') {
+      setSyncJob(job)
+      if (!isDone(job)) startPolling('sync', job.id)
+      return
+    }
+    if (job.job_type === 'backfill_metadata') {
+      setEnrichmentJob(job)
+      if (!isDone(job)) startPolling('enrichment', job.id)
+      return
+    }
+    if (job.job_type === 'import_history') {
+      setImportJob(job)
+      localStorage.setItem('musicintel:import-job-id', job.id)
+      if (!isDone(job)) startPolling('import', job.id)
+    }
+  }, [startPolling])
 
   async function startSync() {
     setSyncing(true)
@@ -107,16 +137,35 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
 
   useEffect(() => {
     refreshSyncStatus()
+    api.get('/jobs', { limit: 10 })
+      .then(data => {
+        const active = (data.items || []).filter(job => !isDone(job))
+        active.forEach(resumeJob)
+      })
+      .catch(() => {})
+
+    const storedImportJobId = localStorage.getItem('musicintel:import-job-id')
+    if (storedImportJobId) {
+      api.get(`/jobs/${storedImportJobId}`)
+        .then(resumeJob)
+        .catch(() => localStorage.removeItem('musicintel:import-job-id'))
+    }
+
+    const onJobStarted = (event) => resumeJob(event.detail?.job)
+    window.addEventListener('musicintel:job-started', onJobStarted)
     return () => {
       clearTimer('sync')
       clearTimer('enrichment')
+      clearTimer('import')
+      window.removeEventListener('musicintel:job-started', onJobStarted)
     }
-  }, [clearTimer, refreshSyncStatus])
+  }, [clearTimer, refreshSyncStatus, resumeJob])
 
   return {
     syncing,
     syncJob,
     enrichmentJob,
+    importJob,
     syncStatus,
     syncError,
     syncAtLimit,

@@ -76,7 +76,7 @@ function JobToast({ job, label, onRetry }) {
 export default function Sidebar({ onNavigate }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const { syncing, syncJob, enrichmentJob, syncStatus, syncAtLimit, startSync, startEnrichment } = useSyncFlow()
+  const { syncing, syncJob, enrichmentJob, importJob, syncStatus, syncAtLimit, startSync, startEnrichment } = useSyncFlow()
 
   async function handleSync() {
     try {
@@ -166,6 +166,7 @@ export default function Sidebar({ onNavigate }) {
 
         <div className="space-y-2">
           <JobToast job={syncJob} label="Syncing history" onRetry={handleSync} />
+          <JobToast job={importJob} label="Importing history" />
           <JobToast job={enrichmentJob} label="Enriching tags" onRetry={handleEnrichmentRetry} />
           {syncAtLimit && !syncJob && (
             <p className="mx-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-xs text-zinc-400 leading-snug">

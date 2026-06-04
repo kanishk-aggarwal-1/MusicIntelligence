@@ -9,11 +9,33 @@ Only non-sensitive aggregates are stored — counts, never tokens or PII.
 """
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
-from ..database import SessionLocal, engine
+from ..config import settings
 from ..models.metric_counter import MetricCounter
 from ..time_utils import utcnow_naive
+
+# Metrics writes must be completely independent from the request's DB session.
+# Using NullPool ensures each increment() call gets its own real connection so
+# on PostgreSQL (production) the metric write is a genuinely separate transaction.
+#
+# On SQLite (tests/CI) NullPool still causes "database is locked" when the app
+# session holds a write lock — that's a SQLite-only limitation, not a production
+# concern. We set connect_args={"timeout": 1} so the metrics write times out
+# quickly and fails open rather than hanging, and we enable WAL mode so reads
+# don't block writes.  Production Postgres is unaffected by these settings.
+_connect_args: dict = {}
+if settings.DATABASE_URL and settings.DATABASE_URL.startswith("sqlite"):
+    _connect_args = {"timeout": 1}
+
+_metric_engine = create_engine(settings.DATABASE_URL, poolclass=NullPool, connect_args=_connect_args)
+_MetricSession = sessionmaker(autocommit=False, autoflush=False, bind=_metric_engine)
+
+# Expose engine for monkeypatching in tests.
+engine = _metric_engine
+SessionLocal = _MetricSession
 
 logger = logging.getLogger(__name__)
 
