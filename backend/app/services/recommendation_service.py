@@ -19,6 +19,7 @@ from ..models.song_tag import SongTag
 from ..models.tag import Tag
 from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
 
+from . import live_metrics_service
 from .discovery_service import discover_songs_from_artist
 from .enrichment_service import enrich_song
 from .ml_recommendation_service import ALGORITHM_VERSION as ML_ALGORITHM_VERSION
@@ -99,6 +100,7 @@ def _apply_enrichment(db, song, data):
         song.enrichment_error = "No enrichment payload"
         return 0
 
+    prior_status = song.enrichment_status
     changed = 0
 
     if not song.genre and data.get("genre"):
@@ -139,6 +141,13 @@ def _apply_enrichment(db, song, data):
     else:
         song.enrichment_status = "failed"
         song.enrichment_error = "; ".join(errors[:2]) if errors else "No useful metadata found"
+
+    # Count a track as "enriched" the first time real metadata moves it out of
+    # "pending" into complete/partial. Tied to the transition (not the final
+    # state) so re-enriching an already-enriched song isn't double counted, and
+    # so the count is robust to the complete-vs-partial timing within a pass.
+    if prior_status in (None, "pending") and song.enrichment_status in ("complete", "partial"):
+        live_metrics_service.increment(live_metrics_service.TRACKS_ENRICHED)
 
     return changed
 
@@ -300,6 +309,9 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
     except IntegrityError:
         db.rollback()
         raise
+
+    if new_history_rows:
+        live_metrics_service.increment(live_metrics_service.TRACKS_SYNCED, new_history_rows)
 
     return {
         "new_songs": new_songs,

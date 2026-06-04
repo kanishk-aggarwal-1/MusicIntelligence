@@ -35,6 +35,7 @@ from ..services.playlist_schedule_service import (
     mark_ran,
     serialize_schedule,
 )
+from ..services import live_metrics_service
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import recommend_songs
 from ..services.spotify_service import (
@@ -357,7 +358,15 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
     if resolved_now:
         db.commit()
 
-    return _dedupe_keep_order(track_ids), resolved_now, rate_limited
+    deduped = _dedupe_keep_order(track_ids)
+    # Playlist resolution rate = resolved Spotify URIs / tracks requested.
+    requested = sum(1 for t in sorted_tracks if t.song)
+    live_metrics_service.increment_many({
+        live_metrics_service.PLAYLIST_TRACKS_REQUESTED: requested,
+        live_metrics_service.PLAYLIST_TRACKS_RESOLVED: len(deduped),
+    })
+
+    return deduped, resolved_now, rate_limited
 
 
 def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):

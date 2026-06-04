@@ -31,6 +31,7 @@ from backend.app.models import (  # noqa: F401, E402
     job,
     listening_goal,
     listening_history,
+    metric_counter,
     playlist_schedule,
     recommendation_feedback,
     song,

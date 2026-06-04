@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.user_session import UserSession
 from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow_naive
+from . import live_metrics_service
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +349,7 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
     while len(tracks) < max_tracks:
         batch_size = min(50, max_tracks - len(tracks))
         data = sp.current_user_recently_played(limit=batch_size, before=before)
+        live_metrics_service.increment(live_metrics_service.SPOTIFY_CALLS)
         items = data.get("items", [])
 
         if not items:
@@ -417,14 +419,20 @@ def resolve_track_id(sp, title: str, artist: str | None = None):
     if artist:
         queries.append((f"artist:{artist}", 5))
 
-    for query, limit in queries:
-        result = sp.search(q=query, type="track", limit=limit)
-        items = result.get("tracks", {}).get("items", [])
-        track_id = _pick_track_id(items, artist=artist)
-        if track_id:
-            return track_id
-
-    return None
+    calls = 0
+    try:
+        for query, limit in queries:
+            calls += 1
+            result = sp.search(q=query, type="track", limit=limit)
+            items = result.get("tracks", {}).get("items", [])
+            track_id = _pick_track_id(items, artist=artist)
+            if track_id:
+                return track_id
+        return None
+    finally:
+        # Count the real Spotify search calls made (even on early return/raise).
+        if calls:
+            live_metrics_service.increment(live_metrics_service.SPOTIFY_CALLS, calls)
 
 
 def search_track(sp, title: str, artist: str):
