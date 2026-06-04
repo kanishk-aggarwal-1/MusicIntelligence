@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { RefreshCw, Trash2, BarChart2, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
@@ -348,9 +348,9 @@ export default function Features() {
 
     setBackfillPoll({ active: true })
     return () => clearInterval(timer)
-  }, [backfillResult?.id, backfillResult?.status, autoEnrich])
+  }, [backfillResult?.id, backfillResult?.status, autoEnrich, startBatch])
 
-  async function startBatch(overrideLimit) {
+  const startBatch = useCallback(async (overrideLimit) => {
     setBackfillLoading(true)
     setBackfillPoll(null)
     const limit = Math.min(overrideLimit ?? pendingCount ?? ENRICH_BATCH, ENRICH_BATCH)
@@ -365,7 +365,7 @@ export default function Features() {
     } finally {
       setBackfillLoading(false)
     }
-  }
+  }, [pendingCount, retryPartial, retryFailed])
 
   async function handleBackfill() {
     setEnrichedSoFar(0)
