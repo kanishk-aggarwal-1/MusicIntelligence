@@ -57,7 +57,14 @@ app.add_middleware(
 # - Alembic is the migration path going forward; run_startup_migrations() is
 #   legacy/frozen and should not grow further.
 run_startup_migrations()
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception:
+    # Transient DB connection error at cold-start — same pattern as
+    # run_startup_migrations().  Tables already exist on production; don't
+    # crash the import and trigger a Render restart loop.
+    import logging as _logging
+    _logging.getLogger(__name__).exception("create_all failed at startup — continuing")
 app.include_router(user_routes.router)
 app.include_router(playlist_routes.router)
 app.include_router(music_routes.router)
