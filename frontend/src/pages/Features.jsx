@@ -66,17 +66,23 @@ function JobProgress({ job, onRetry }) {
           </button>
         )}
       </div>
-      {total > 0 && (
+      {(total > 0 || !done) && (
         <>
-          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${failed ? 'bg-red-400' : 'bg-brand'}`}
-              style={{ width: `${pct}%` }}
-            />
+          <div className="h-2.5 bg-zinc-800 rounded-full overflow-hidden">
+            {pct === 0 && !done ? (
+              <div className="h-full w-1/3 rounded-full bg-brand/60 animate-pulse" />
+            ) : (
+              <div
+                className={`h-full rounded-full transition-all duration-700 ${failed ? 'bg-red-400' : 'bg-brand'}`}
+                style={{ width: `${Math.max(pct, done ? 0 : 2)}%` }}
+              />
+            )}
           </div>
-          {!done && total > 1 && (
-            <p className="text-zinc-600 text-[11px] tabular-nums">
-              {current.toLocaleString()} / {total.toLocaleString()}
+          {!done && (
+            <p className="text-zinc-300 text-sm font-medium tabular-nums">
+              {total > 1
+                ? `${current.toLocaleString()} / ${total.toLocaleString()} tracks`
+                : job?.message || 'Working…'}
             </p>
           )}
         </>
@@ -130,7 +136,7 @@ function ImportSection() {
       .catch(() => localStorage.removeItem('musicintel:import-job-id'))
   }, [])
 
-  // Poll job until done
+  // Poll job until done — 800 ms so the "X / Y tracks" counter visibly counts up
   useEffect(() => {
     if (!job?.id || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return
     const t = setInterval(async () => {
@@ -154,7 +160,7 @@ function ImportSection() {
         } : prev)
         if (!transient || pollFailuresRef.current >= 40) clearInterval(t)
       }
-    }, 1500)
+    }, 800)
     return () => clearInterval(t)
   }, [job?.id, job?.status])
 
@@ -163,6 +169,12 @@ function ImportSection() {
     if (!file) return
     setLoading(true)
     setError(null)
+    // Clear any previous job immediately so its polling interval is stopped
+    // (via effect cleanup) before the new job arrives. Without this the old
+    // interval can fire after setJob(newJob) and overwrite the state back to
+    // the old job, making the UI appear stuck on the previous import message.
+    setJob(null)
+    localStorage.removeItem('musicintel:import-job-id')
     try {
       const form = new FormData()
       form.append('file', file)
