@@ -48,10 +48,18 @@ def _parse_played_at(value):
 
 
 def _ensure_song_tags(db, song, tag_names):
-    added = 0
-    normalized_names = []
-    seen_names = set()
+    """Upsert tags for a song.
 
+    Uses INSERT … ON CONFLICT DO NOTHING at the SQL level instead of a
+    Python-level pre-check.  The pre-check approach was fragile: it could
+    miss tags already committed by a previous enrichment pass (e.g. when
+    retry_partial=True re-processes partially-enriched songs), causing a
+    UniqueViolation on song_tags_song_id_tag_id_key.
+    """
+    is_postgres = _db_engine.dialect.name == "postgresql"
+
+    normalized_names = []
+    seen_names: set[str] = set()
     for raw_name in tag_names or []:
         tag_name = (raw_name or "").strip()
         if not tag_name:
@@ -62,31 +70,29 @@ def _ensure_song_tags(db, song, tag_names):
         seen_names.add(tag_key)
         normalized_names.append(tag_name)
 
-    existing_tag_ids = {
-        row[0]
-        for row in db.query(SongTag.tag_id).filter(SongTag.song_id == song.id).all()
-        if row[0] is not None
-    }
-    existing_tag_ids.update(
-        obj.tag_id
-        for obj in db.new
-        if isinstance(obj, SongTag) and obj.song_id == song.id and obj.tag_id is not None
-    )
-
+    added = 0
     for tag_name in normalized_names:
         tag = db.query(Tag).filter(Tag.name == tag_name).first()
-
         if not tag:
             tag = Tag(name=tag_name)
             db.add(tag)
-            db.flush()
+            db.flush()  # get tag.id
 
-        if tag.id in existing_tag_ids:
-            continue
-
-        db.add(SongTag(song_id=song.id, tag_id=tag.id))
-        existing_tag_ids.add(tag.id)
-        added += 1
+        if is_postgres:
+            result = db.execute(
+                postgres_insert(SongTag.__table__)
+                .values(song_id=song.id, tag_id=tag.id)
+                .on_conflict_do_nothing(index_elements=["song_id", "tag_id"])
+            )
+            added += result.rowcount or 0
+        else:
+            # SQLite fallback (tests) — check then insert
+            exists = db.query(SongTag).filter_by(
+                song_id=song.id, tag_id=tag.id
+            ).first()
+            if not exists:
+                db.add(SongTag(song_id=song.id, tag_id=tag.id))
+                added += 1
 
     if added:
         db.flush()
