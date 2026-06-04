@@ -552,20 +552,21 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
     }
 
 
-_BULK_CHUNK = 500  # max items per IN-clause batch
+_BULK_CHUNK = 500        # max items per IN-clause / artist batch
+_HISTORY_CHUNK = 1000   # rows per bulk history INSERT (safe Postgres limit)
 
 
 def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> dict:
     """Bulk-optimised track import for large history files.
 
-    Instead of the per-track query loop in sync_listening_history (designed for
-    ≤50 tracks), this function minimises round-trips by:
-      Phase 1 – batch-upsert artists   (~1–3 queries regardless of file size)
-      Phase 2 – batch-upsert songs     (~10–30 queries for a 10k-track file)
-      Phase 3 – bulk-insert history    (~20 queries for a 10k-track file, with
-                                        ON CONFLICT DO NOTHING on Postgres)
+    Round-trip budget (10 k-track file, ~500 unique artists):
+      Phase 1 – artists    : ceil(artists / 500)  ≈  1–3 queries
+      Phase 2 – songs      : ceil(artists / 500)  ≈  1–3 queries   ← was 500+
+      Phase 3 – history    : ceil(tracks  / 1000) ≈ 10 queries
 
-    On SQLite (tests) it falls back to individual inserts for the history phase.
+    Old Phase 2 fired ONE query per unique artist (O(artists) round-trips).
+    New Phase 2 loads all songs for all artists-in-the-file in bulk
+    (O(artists/500) round-trips) and does the title/spotify matching in Python.
     """
     is_postgres = _db_engine.dialect.name == "postgresql"
     total = len(tracks)
@@ -601,49 +602,26 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
     db.commit()
 
     # ── Phase 2: Songs ───────────────────────────────────────────────────────
+    # Load ALL songs for every artist present in the file using bulk
+    # artist_id IN queries.  This replaces the old two-pass approach that fired
+    # one query per unique artist for title-matching (O(artists) round-trips)
+    # with O(ceil(artists/500)) round-trips and Python-side matching.
     progress.update(message=f"Checking library for {total:,} tracks…")
 
-    # Maps used for resolution later
-    spotify_song_map: dict[str, int] = {}        # spotify_id  → song_id
-    title_song_map: dict[tuple, int] = {}        # (title, artist_id) → song_id
+    spotify_song_map: dict[str, int] = {}   # spotify_id       → song_id
+    title_song_map:  dict[tuple, int] = {}  # (title, artist_id) → song_id
 
-    # 2a — look up existing songs by spotify_id
-    spotify_ids = [t["spotify_id"] for t in tracks if t.get("spotify_id")]
-    for i in range(0, len(spotify_ids), _BULK_CHUNK):
-        chunk = spotify_ids[i : i + _BULK_CHUNK]
+    all_artist_ids = list(artist_map.values())
+    for i in range(0, len(all_artist_ids), _BULK_CHUNK):
+        chunk_aids = all_artist_ids[i : i + _BULK_CHUNK]
         rows = db.query(Song.spotify_id, Song.id, Song.title, Song.artist_id).filter(
-            Song.spotify_id.in_(chunk),
+            Song.artist_id.in_(chunk_aids),
             Song.is_deleted.is_(False),
         ).all()
-        for sid, song_id, title, artist_id in rows:
-            spotify_song_map[sid] = song_id
-            title_song_map[(title, artist_id)] = song_id
-
-    # 2b — look up remaining songs by (title, artist_id)
-    need_by_title: dict[int, list[str]] = {}  # artist_id → [title, ...]
-    for t in tracks:
-        aid = artist_map.get(t.get("artist"))
-        if not aid:
-            continue
-        sid = t.get("spotify_id")
-        if sid and sid in spotify_song_map:
-            continue
-        title = t.get("title") or ""
-        if (title, aid) in title_song_map:
-            continue
-        need_by_title.setdefault(aid, []).append(title)
-
-    for aid, titles in need_by_title.items():
-        unique_titles = list(set(titles))
-        for i in range(0, len(unique_titles), _BULK_CHUNK):
-            chunk = unique_titles[i : i + _BULK_CHUNK]
-            rows = db.query(Song.title, Song.id).filter(
-                Song.artist_id == aid,
-                Song.title.in_(chunk),
-                Song.is_deleted.is_(False),
-            ).all()
-            for title, song_id in rows:
-                title_song_map[(title, aid)] = song_id
+        for sid, song_id, title, aid in rows:
+            title_song_map[(title, aid)] = song_id
+            if sid:
+                spotify_song_map[sid] = song_id
 
     # 2c — create songs that still don't exist
     seen_song_keys: set[tuple] = set()
@@ -718,8 +696,8 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
         })
 
     total_to_insert = len(rows_to_insert)
-    for i in range(0, total_to_insert, _BULK_CHUNK):
-        chunk = rows_to_insert[i : i + _BULK_CHUNK]
+    for i in range(0, total_to_insert, _HISTORY_CHUNK):
+        chunk = rows_to_insert[i : i + _HISTORY_CHUNK]
 
         if is_postgres:
             result = db.execute(
@@ -742,9 +720,11 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
                     db.add(ListeningHistory(**row))
                     new_history_rows += 1
 
-        db.commit()
-
         imported = min(i + len(chunk), total)
+        # No explicit db.commit() here — the INSERT is still in the open
+        # transaction.  progress.update() calls db.commit() once, which flushes
+        # both the INSERT rows and the progress fields in a single round-trip
+        # (vs the old pattern of two separate commits per chunk).
         progress.update(
             current=imported,
             total=total,
