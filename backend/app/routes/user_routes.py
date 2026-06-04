@@ -773,18 +773,17 @@ def _parse_extended_history(data: list) -> list:
     return tracks
 
 
-def _run_import_history_job(db, progress, *, user_id: str, data: list):
-    # Step 1: parse the raw JSON entries (CPU-only, fast)
-    progress.update(total=3, current=0, message="Parsing tracks from Spotify history file…")
-    tracks = _parse_extended_history(data)
+def _run_import_history_job(db, progress, *, user_id: str, tracks: list, entry_count: int = 0):
+    """Run a bulk import for pre-parsed track dicts.
 
+    ``tracks``      — output of _parse_extended_history (or equivalent
+                      client-side logic): list of dicts with keys
+                      title / artist / spotify_id / played_at / ms_played / skipped.
+    ``entry_count`` — original number of raw entries (for reporting).
+    """
     total_tracks = len(tracks)
     progress_total = max(1, total_tracks)
 
-    # Step 2: bulk-import — progress is updated inside _bulk_import_tracks
-    # per chunk so the bar moves smoothly even for 10 k-track files.
-    # enrich_inline is intentionally NOT called here; the user must run
-    # deduplication first, then trigger enrichment manually from Library Tools.
     progress.update(
         total=progress_total,
         current=0,
@@ -792,7 +791,6 @@ def _run_import_history_job(db, progress, *, user_id: str, data: list):
     )
     result = _bulk_import_tracks(db, user_id, tracks, progress)
 
-    # Step 3: finalise
     progress.update(
         current=progress_total,
         total=progress_total,
@@ -809,7 +807,7 @@ def _run_import_history_job(db, progress, *, user_id: str, data: list):
         "progress_total": progress_total,
         "enrichment_queued": False,
         "next_step": "Run Deduplication → then Metadata Enrichment from Library Tools.",
-        "entries_in_file": len(data),
+        "entries_in_file": entry_count or total_tracks,
         "valid_tracks": total_tracks,
         **result,
     }
@@ -863,13 +861,24 @@ def _clear_previous_import_requests(db: Session, user_id: str):
 async def import_history_job(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
     db=Depends(get_db),
 ):
-    """Upload a Spotify Extended Streaming History JSON file to bulk-import listening history.
+    """Accept pre-processed tracks as a JSON body (preferred) or a raw
+    Spotify history file as multipart/form-data (legacy).
 
-    Download your data at: https://www.spotify.com/account/privacy/
-    Upload any of the StreamingHistory_music_*.json files.
+    JSON body path (new, used by the frontend):
+      POST /user/import-history/job
+      Content-Type: application/json
+      Body: [{title, artist, spotify_id, played_at, ms_played, skipped}, ...]
+
+      The browser runs _parse_extended_history logic client-side before
+      sending, cutting the payload from ~12 MB to ~1 MB and avoiding
+      Render's proxy connection limit on large multipart bodies.
+
+    Multipart path (legacy, kept for backward compatibility):
+      POST /user/import-history/job
+      Content-Type: multipart/form-data
+      Field: file — any StreamingHistory_music_*.json from Spotify
     """
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
@@ -879,32 +888,58 @@ async def import_history_job(
     cleanup = _clear_previous_import_requests(db, user_id)
     enforce_rate_limit(request, namespace=IMPORT_RATE_LIMIT_NAMESPACE, user_id=user_id, limit=20, window_seconds=600)
 
-    if file.content_type not in ("application/json", "text/plain", "application/octet-stream"):
-        raise HTTPException(status_code=400, detail="Expected a JSON file")
+    content_type = request.headers.get("content-type", "")
 
-    content = await file.read()
-    if len(content) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    if "application/json" in content_type:
+        # ── New path: browser pre-processed tracks ───────────────────────────
+        body = await request.body()
+        if len(body) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Payload too large (max 50 MB)")
+        try:
+            tracks = json.loads(body)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not parse JSON body")
+        if not isinstance(tracks, list):
+            raise HTTPException(status_code=400, detail="Expected a JSON array of track objects")
+        entry_count = len(tracks)
 
-    try:
-        data = json.loads(content)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not parse JSON file")
+    elif "multipart/form-data" in content_type:
+        # ── Legacy path: raw Spotify file upload ─────────────────────────────
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(status_code=400, detail="No file provided")
+        if file.content_type not in ("application/json", "text/plain", "application/octet-stream"):
+            raise HTTPException(status_code=400, detail="Expected a JSON file")
+        content = await file.read()
+        if len(content) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+        try:
+            data = json.loads(content)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not parse JSON file")
+        if not isinstance(data, list):
+            raise HTTPException(status_code=400, detail="Expected a JSON array of history entries")
+        entry_count = len(data)
+        tracks = _parse_extended_history(data)
 
-    if not isinstance(data, list):
-        raise HTTPException(status_code=400, detail="Expected a JSON array of history entries")
+    else:
+        raise HTTPException(
+            status_code=415,
+            detail="Expected application/json body or multipart/form-data file upload",
+        )
 
     job = create_job(
         db,
         user_id=user_id,
         job_type="import_history",
-        message=f"Queued import of {len(data):,} history entries",
-        progress_total=3,
+        message=f"Queued import of {len(tracks):,} tracks",
+        progress_total=max(1, len(tracks)),
     )
     background_tasks.add_task(
         run_job,
         job.id,
-        partial(_run_import_history_job, user_id=user_id, data=data),
+        partial(_run_import_history_job, user_id=user_id, tracks=tracks, entry_count=entry_count),
     )
     payload = serialize_job(job)
     payload["cleanup"] = cleanup

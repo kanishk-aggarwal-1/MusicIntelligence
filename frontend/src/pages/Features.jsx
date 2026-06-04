@@ -177,19 +177,13 @@ function ImportSection() {
     setJob(null)
     localStorage.removeItem('musicintel:import-job-id')
     try {
-      // Strip unused fields before uploading.
-      // Spotify's extended history has ~25 fields per entry; the backend only
-      // reads 7.  A 12 MB file shrinks to ~2–3 MB, avoiding Render's proxy
-      // connection reset on large multipart bodies.
-      const KEEP = new Set([
-        'ts',
-        'master_metadata_track_name',
-        'master_metadata_album_artist_name',
-        'spotify_track_uri',
-        'ms_played',
-        'reason_end',
-        'episode_name',
-      ])
+      // Parse and pre-process the file entirely in the browser before sending.
+      //
+      // Spotify's extended history has ~25 fields per entry but the backend
+      // only needs 6, and many entries (podcasts, <30 s plays) are discarded.
+      // Doing this client-side reduces a typical 12 MB file to ~1 MB and lets
+      // us send plain JSON instead of multipart — avoiding the Render proxy
+      // body-size limit that was dropping the connection at ~4 MB.
       const raw = await file.text()
       let parsed
       try {
@@ -197,18 +191,40 @@ function ImportSection() {
       } catch {
         throw new Error('Could not parse file — make sure it is a Spotify history JSON file.')
       }
-      const stripped = Array.isArray(parsed)
-        ? parsed.map(entry =>
-            Object.fromEntries(Object.entries(entry).filter(([k]) => KEEP.has(k)))
-          )
-        : parsed
-      const blob = new Blob([JSON.stringify(stripped)], { type: 'application/json' })
-      const uploadFile = new File([blob], file.name, { type: 'application/json' })
-      setLoadingMsg('Uploading…')
+      if (!Array.isArray(parsed)) {
+        throw new Error('Unexpected file format — expected a JSON array.')
+      }
 
-      const form = new FormData()
-      form.append('file', uploadFile)
-      const result = await api.postForm('/user/import-history/job', form)
+      setLoadingMsg('Processing…')
+
+      // Mirror backend _parse_extended_history logic exactly
+      const tracks = parsed
+        .filter(e =>
+          !e.episode_name &&
+          e.master_metadata_track_name &&
+          (e.ms_played || 0) >= 30_000
+        )
+        .map(e => {
+          const uri = e.spotify_track_uri || ''
+          const reason = (e.reason_end || '').toLowerCase()
+          return {
+            title:      e.master_metadata_track_name,
+            artist:     e.master_metadata_album_artist_name || '',
+            spotify_id: uri.startsWith('spotify:track:') ? uri.split(':').pop() : null,
+            played_at:  e.ts || null,
+            ms_played:  e.ms_played || 0,
+            skipped:    reason === 'fwdbtn' || reason === 'endplay',
+          }
+        })
+
+      if (tracks.length === 0) {
+        throw new Error('No playable tracks found in this file. Make sure it is a StreamingHistory_music_*.json file.')
+      }
+
+      setLoadingMsg(`Uploading ${tracks.length.toLocaleString()} tracks…`)
+
+      // Send as application/json — no multipart overhead, ~1 MB instead of ~12 MB
+      const result = await api.post('/user/import-history/job', tracks)
       setJob(result)
       localStorage.setItem('musicintel:import-job-id', result.id)
       window.dispatchEvent(new CustomEvent('musicintel:job-started', { detail: { job: result } }))

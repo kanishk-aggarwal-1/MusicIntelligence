@@ -94,7 +94,11 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
         for i in range(5)
     ]
 
-    result = user_routes._run_import_history_job(db_session, FakeProgress(), user_id="u1", data=data)
+    # Pre-parse client-side (as the frontend now does) before handing to the job
+    tracks = user_routes._parse_extended_history(data)
+    result = user_routes._run_import_history_job(
+        db_session, FakeProgress(), user_id="u1", tracks=tracks, entry_count=len(data)
+    )
 
     messages = [item.get("message") for item in updates if item.get("message")]
     # Bulk flow emits phase messages then per-chunk history progress.
