@@ -119,9 +119,10 @@ function ActionButton({ onClick, loading, icon: Icon, label, variant = 'default'
 }
 
 function ImportSection() {
-  const [job, setJob]       = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError]   = useState(null)
+  const [job, setJob]           = useState(null)
+  const [loading, setLoading]   = useState(false)
+  const [loadingMsg, setLoadingMsg] = useState('')
+  const [error, setError]       = useState(null)
   const fileRef = useRef(null)
   const pollFailuresRef = useRef(0)
 
@@ -171,16 +172,42 @@ function ImportSection() {
     const file = e.target.files?.[0]
     if (!file) return
     setLoading(true)
+    setLoadingMsg('Reading file…')
     setError(null)
-    // Clear any previous job immediately so its polling interval is stopped
-    // (via effect cleanup) before the new job arrives. Without this the old
-    // interval can fire after setJob(newJob) and overwrite the state back to
-    // the old job, making the UI appear stuck on the previous import message.
     setJob(null)
     localStorage.removeItem('musicintel:import-job-id')
     try {
+      // Strip unused fields before uploading.
+      // Spotify's extended history has ~25 fields per entry; the backend only
+      // reads 7.  A 12 MB file shrinks to ~2–3 MB, avoiding Render's proxy
+      // connection reset on large multipart bodies.
+      const KEEP = new Set([
+        'ts',
+        'master_metadata_track_name',
+        'master_metadata_album_artist_name',
+        'spotify_track_uri',
+        'ms_played',
+        'reason_end',
+        'episode_name',
+      ])
+      const raw = await file.text()
+      let parsed
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        throw new Error('Could not parse file — make sure it is a Spotify history JSON file.')
+      }
+      const stripped = Array.isArray(parsed)
+        ? parsed.map(entry =>
+            Object.fromEntries(Object.entries(entry).filter(([k]) => KEEP.has(k)))
+          )
+        : parsed
+      const blob = new Blob([JSON.stringify(stripped)], { type: 'application/json' })
+      const uploadFile = new File([blob], file.name, { type: 'application/json' })
+      setLoadingMsg('Uploading…')
+
       const form = new FormData()
-      form.append('file', file)
+      form.append('file', uploadFile)
       const result = await api.postForm('/user/import-history/job', form)
       setJob(result)
       localStorage.setItem('musicintel:import-job-id', result.id)
@@ -189,6 +216,7 @@ function ImportSection() {
       setError(err.message || 'Upload failed')
     } finally {
       setLoading(false)
+      setLoadingMsg('')
       if (fileRef.current) fileRef.current.value = ''
     }
   }
@@ -204,7 +232,7 @@ function ImportSection() {
       <div className="flex items-center gap-3 flex-wrap">
         <label className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors ${loading ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed' : 'bg-brand text-black hover:bg-green-400'}`}>
           {loading ? <Spinner size="sm" /> : <Upload className="w-4 h-4" />}
-          {loading ? 'Uploading…' : 'Choose JSON file'}
+          {loading ? (loadingMsg || 'Working…') : 'Choose JSON file'}
           <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={handleFile} disabled={loading} />
         </label>
         {job?.status === 'succeeded' && (
