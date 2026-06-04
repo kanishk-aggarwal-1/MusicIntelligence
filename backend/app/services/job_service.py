@@ -212,21 +212,46 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
         db.commit()
         record_job("succeeded", job.job_type)
     except Exception as exc:
-        db.rollback()
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            metric_job_type = job.job_type
-            logger.exception("job.failed job_id=%s user_id=%s job_type=%s", job.id, job.user_id, job.job_type)
-            job.status = "failed"
-            job.error = str(exc)
-            job.finished_at = utcnow_naive()
-            db.add(job)
-            db.commit()
-        record_job("failed", metric_job_type)
-        record_job_failure(metric_job_type, type(exc).__name__)
+        # Each step here is wrapped individually.  If rollback/re-query fail
+        # (e.g. Neon dropped the SSL connection mid-job), a bare `raise` would
+        # propagate out of the background task thread → uvicorn crash → Render
+        # restart.  We must never let exceptions escape run_job.
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("job.rollback_failed job_id=%s", job_id)
+
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                metric_job_type = job.job_type
+                logger.exception(
+                    "job.failed job_id=%s user_id=%s job_type=%s",
+                    job.id, job.user_id, job.job_type,
+                )
+                job.status = "failed"
+                job.error = str(exc)
+                job.finished_at = utcnow_naive()
+                db.add(job)
+                db.commit()
+        except Exception:
+            logger.exception("job.mark_failed_error job_id=%s", job_id)
+
+        try:
+            record_job("failed", metric_job_type)
+            record_job_failure(metric_job_type, type(exc).__name__)
+        except Exception:
+            pass
+
     finally:
         # Only record timing for real job types; skip the "unknown" sentinel
         # that means the job_id wasn't found in the DB (no work was done).
-        if metric_job_type != "unknown":
-            record_timing(f"job.{metric_job_type}", time.perf_counter() - started_perf)
-        db.close()
+        try:
+            if metric_job_type != "unknown":
+                record_timing(f"job.{metric_job_type}", time.perf_counter() - started_perf)
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
