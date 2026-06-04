@@ -1,9 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from backend.app.models.api_cache import ApiCache
 from backend.app.models.job import Job
 from backend.app.models.user_session import UserSession
 from backend.app.routes import user_routes
 from backend.app.services.job_service import create_job
+from backend.app.time_utils import utcnow_naive
 
 
 def _session(user_id: str):
@@ -109,3 +111,52 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
     assert result["progress_total"] == 5
     assert result["new_songs"] == 5           # all 5 tracks are brand-new
     assert result["new_history_rows"] == 5    # all 5 inserted
+
+
+def test_new_import_clears_previous_import_jobs_and_rate_limit(db_session):
+    now = utcnow_naive()
+    db_session.add_all([
+        Job(
+            id="old-running",
+            user_id="u1",
+            job_type="import_history",
+            status="running",
+            progress_current=10,
+            progress_total=100,
+            created_at=now,
+        ),
+        Job(
+            id="old-failed",
+            user_id="u1",
+            job_type="import_history",
+            status="failed",
+            progress_current=5,
+            progress_total=100,
+            created_at=now,
+        ),
+        Job(
+            id="other-job",
+            user_id="u1",
+            job_type="sync_history",
+            status="running",
+            created_at=now,
+        ),
+        ApiCache(
+            provider="rate_limit",
+            cache_key=f"rate_limit:{user_routes.IMPORT_RATE_LIMIT_NAMESPACE}:u1",
+            response_json="[1,2,3]",
+            status_code=200,
+            fetched_at=now,
+            expires_at=now + timedelta(minutes=10),
+        ),
+    ])
+    db_session.commit()
+
+    cleanup = user_routes._clear_previous_import_requests(db_session, "u1")
+
+    assert cleanup["cancelled_active_imports"] == 1
+    assert cleanup["deleted_previous_imports"] == 2
+    assert cleanup["cleared_import_rate_limits"] == 1
+    assert db_session.query(Job).filter_by(user_id="u1", job_type="import_history").count() == 0
+    assert db_session.query(Job).filter_by(id="other-job").count() == 1
+    assert db_session.query(ApiCache).filter_by(provider="rate_limit").count() == 0

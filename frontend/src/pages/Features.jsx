@@ -27,12 +27,14 @@ function Result({ data }) {
 // Keys shown in the summary grid, tailored per job type.
 const JOB_RESULT_KEYS = {
   import_history:    ['new_history_rows', 'new_songs', 'valid_tracks'],
-  backfill_metadata: ['scanned', 'updated', 'new_songs'],
+  backfill_metadata: ['processed', 'total_candidates', 'scanned', 'updated'],
 }
 const RESULT_KEY_LABELS = {
   new_history_rows: 'history rows added',
   new_songs:        'new songs',
   valid_tracks:     'tracks in file',
+  processed:        'processed',
+  total_candidates: 'candidates',
   scanned:          'scanned',
   updated:          'updated',
 }
@@ -128,10 +130,11 @@ function ImportSection() {
     if (!storedJobId) return
     api.get(`/jobs/${storedJobId}`)
       .then(existing => {
-        setJob(existing)
         if (['succeeded', 'failed', 'cancelled'].includes(existing.status)) {
           localStorage.removeItem('musicintel:import-job-id')
+          return
         }
+        setJob(existing)
       })
       .catch(() => localStorage.removeItem('musicintel:import-job-id'))
   }, [])

@@ -327,9 +327,9 @@ def run_startup_migrations():
 
             if "jobs" in table_names:
                 cols = _column_type_map(inspector, "jobs")
-                if dialect == "postgresql":
+                if dialect == "postgresql" and "result_json" not in cols:
                     conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS result_json TEXT"))
-                else:
+                elif dialect != "postgresql":
                     if "result_json" not in cols:
                         conn.execute(text("ALTER TABLE jobs ADD COLUMN result_json TEXT"))
 

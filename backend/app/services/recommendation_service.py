@@ -320,7 +320,16 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
     }
 
 
-def backfill_missing_metadata(db, user_id: str | None = None, max_songs=1000, include_partial=False, include_failed=False, commit_batch_size=50):
+def backfill_missing_metadata(
+    db,
+    user_id: str | None = None,
+    max_songs=1000,
+    include_partial=False,
+    include_failed=False,
+    commit_batch_size=50,
+    progress_callback=None,
+    progress_interval=5,
+):
     query = (
         db.query(Song)
         .join(Artist, Song.artist_id == Artist.id)
@@ -349,11 +358,23 @@ def backfill_missing_metadata(db, user_id: str | None = None, max_songs=1000, in
 
     updated = 0
     scanned = 0
+    processed = 0
+    total_candidates = len(songs)
+    report_every = max(1, int(progress_interval or 1))
 
     for song in songs:
+        processed += 1
         if not _needs_enrichment(song, include_partial=include_partial, include_failed=include_failed):
             if _normalize_enrichment_status(song):
                 updated += 1
+            if progress_callback and (processed == total_candidates or processed % report_every == 0):
+                progress_callback(
+                    current=processed,
+                    total=total_candidates,
+                    scanned=scanned,
+                    updated=updated,
+                    song=song,
+                )
             continue
 
         scanned += 1
@@ -365,11 +386,25 @@ def backfill_missing_metadata(db, user_id: str | None = None, max_songs=1000, in
         if scanned % max(1, commit_batch_size) == 0:
             db.commit()
 
+        if progress_callback and (processed == total_candidates or processed % report_every == 0):
+            progress_callback(
+                current=processed,
+                total=total_candidates,
+                scanned=scanned,
+                updated=updated,
+                song=song,
+            )
+
     db.commit()
+
+    if progress_callback and total_candidates == 0:
+        progress_callback(current=0, total=0, scanned=scanned, updated=updated, song=None)
 
     return {
         "scanned": scanned,
         "updated": updated,
+        "processed": processed,
+        "total_candidates": total_candidates,
         "remaining_hint": "Use retry modes to include partial or failed songs when needed."
     }
 

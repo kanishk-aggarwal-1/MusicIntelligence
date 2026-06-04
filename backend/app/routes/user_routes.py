@@ -14,6 +14,7 @@ import spotipy
 from ..database import get_db, engine as _db_engine
 from ..config import settings
 from ..models.artist import Artist
+from ..models.api_cache import ApiCache
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.job import Job
 from ..models.listening_goal import ListeningGoal
@@ -21,6 +22,7 @@ from ..models.listening_history import ListeningHistory
 from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.user_session import UserSession
+from ..time_utils import utcnow_naive
 from ..services.job_service import create_job, get_active_job, run_job, serialize_job
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services import live_metrics_service
@@ -47,6 +49,8 @@ from ..services.recommendation_service import (
 
 router = APIRouter(prefix="/user", tags=["User"])
 logger = logging.getLogger(__name__)
+
+IMPORT_RATE_LIMIT_NAMESPACE = "import_history_job"
 
 
 def _allowed_frontend_origin(origin: str | None):
@@ -503,17 +507,38 @@ def backfill_metadata(
 
 def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_partial: bool, retry_failed: bool):
     progress.update(total=max(1, int(limit)), current=0, message="Scanning songs for metadata backfill")
+
+    def _report_backfill_progress(*, current: int, total: int, scanned: int, updated: int, song):
+        if song is not None:
+            artist_name = song.artist.name if song.artist else "Unknown artist"
+            song_label = f"{song.title} - {artist_name}"
+            message = f"Enriching {current:,} / {max(1, total):,}: {song_label} ({updated:,} updated)"
+        elif total <= 0:
+            message = "No songs need metadata backfill"
+        else:
+            message = f"Enriching {current:,} / {max(1, total):,} ({updated:,} updated)"
+
+        progress.update(
+            current=int(current),
+            total=max(1, int(total or 1)),
+            message=message,
+        )
+
     result = backfill_missing_metadata(
         db,
         user_id=user_id,
         max_songs=limit,
         include_partial=retry_partial,
         include_failed=retry_failed,
+        progress_callback=_report_backfill_progress,
+        progress_interval=5,
     )
+    processed = int(result.get("processed") or result.get("total_candidates") or result.get("scanned") or 0)
+    total = max(1, int(result.get("total_candidates") or processed or limit or 1))
     progress.update(
-        current=int(result.get("scanned") or 0),
-        total=max(1, int(result.get("scanned") or limit or 1)),
-        message="Backfill finished",
+        current=processed,
+        total=total,
+        message=f"Backfill finished: {int(result.get('updated') or 0):,} updated",
     )
     return {
         "message": "Metadata backfill completed",
@@ -521,8 +546,8 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
             "retry_partial": retry_partial,
             "retry_failed": retry_failed,
         },
-        "progress_current": int(result.get("scanned") or 0),
-        "progress_total": max(1, int(result.get("scanned") or limit or 1)),
+        "progress_current": processed,
+        "progress_total": total,
         **result,
     }
 
@@ -810,6 +835,50 @@ def _run_import_history_job(db, progress, *, user_id: str, data: list):
     }
 
 
+def _clear_previous_import_requests(db: Session, user_id: str):
+    now = utcnow_naive()
+    active_jobs = (
+        db.query(Job)
+        .filter(
+            Job.user_id == user_id,
+            Job.job_type == "import_history",
+            Job.status.in_(("queued", "running")),
+        )
+        .all()
+    )
+    for job in active_jobs:
+        job.status = "cancelled"
+        job.finished_at = now
+        job.message = "Cancelled because a newer import was started"
+        db.add(job)
+    db.flush()
+
+    deleted_terminal = (
+        db.query(Job)
+        .filter(
+            Job.user_id == user_id,
+            Job.job_type == "import_history",
+            Job.status.in_(("succeeded", "failed", "cancelled")),
+        )
+        .delete(synchronize_session=False)
+    )
+
+    cleared_rate_limits = (
+        db.query(ApiCache)
+        .filter(
+            ApiCache.provider == "rate_limit",
+            ApiCache.cache_key == f"rate_limit:{IMPORT_RATE_LIMIT_NAMESPACE}:{user_id}",
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {
+        "cancelled_active_imports": len(active_jobs),
+        "deleted_previous_imports": int(deleted_terminal or 0),
+        "cleared_import_rate_limits": int(cleared_rate_limits or 0),
+    }
+
+
 @router.post("/import-history/job")
 async def import_history_job(
     request: Request,
@@ -826,7 +895,9 @@ async def import_history_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    enforce_rate_limit(request, namespace="import_history_job", user_id=user_id, limit=3, window_seconds=600)
+
+    cleanup = _clear_previous_import_requests(db, user_id)
+    enforce_rate_limit(request, namespace=IMPORT_RATE_LIMIT_NAMESPACE, user_id=user_id, limit=20, window_seconds=600)
 
     if file.content_type not in ("application/json", "text/plain", "application/octet-stream"):
         raise HTTPException(status_code=400, detail="Expected a JSON file")
@@ -855,7 +926,9 @@ async def import_history_job(
         job.id,
         partial(_run_import_history_job, user_id=user_id, data=data),
     )
-    return serialize_job(job)
+    payload = serialize_job(job)
+    payload["cleanup"] = cleanup
+    return payload
 
 
 @router.post("/backfill-metadata/job")
