@@ -5,6 +5,10 @@ function isDone(job) {
   return ['succeeded', 'failed', 'cancelled'].includes(job?.status)
 }
 
+function isTransientServerError(error) {
+  return error?.status >= 500 || /bad gateway|failed to fetch|network/i.test(error?.message || '')
+}
+
 function setterForKind(kind, setters) {
   if (kind === 'enrichment') return setters.setEnrichmentJob
   if (kind === 'import') return setters.setImportJob
@@ -85,7 +89,16 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
       } catch (e) {
         console.error(e)
         failuresRef.current[kind] = (failuresRef.current[kind] || 0) + 1
-        if (failuresRef.current[kind] < 3) return
+        const transient = isTransientServerError(e)
+        const maxFailures = transient ? 40 : 3
+        setter(prev => prev ? {
+          ...prev,
+          error: transient ? null : e.message,
+          message: transient
+            ? 'Backend is restarting. Still checking job status...'
+            : 'Lost connection while checking job status',
+        } : prev)
+        if (failuresRef.current[kind] < maxFailures) return
         setter(prev => prev ? { ...prev, status: 'failed', error: e.message, message: 'Lost connection while checking job status' } : prev)
         clearTimer(kind)
       }

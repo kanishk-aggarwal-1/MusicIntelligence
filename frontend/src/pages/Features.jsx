@@ -91,6 +91,7 @@ function ImportSection() {
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState(null)
   const fileRef = useRef(null)
+  const pollFailuresRef = useRef(0)
 
   useEffect(() => {
     const storedJobId = localStorage.getItem('musicintel:import-job-id')
@@ -111,12 +112,24 @@ function ImportSection() {
     const t = setInterval(async () => {
       try {
         const updated = await api.get(`/jobs/${job.id}`)
+        pollFailuresRef.current = 0
         setJob(updated)
         if (['succeeded', 'failed', 'cancelled'].includes(updated.status)) {
           localStorage.removeItem('musicintel:import-job-id')
           clearInterval(t)
         }
-      } catch { clearInterval(t) }
+      } catch (e) {
+        pollFailuresRef.current += 1
+        const transient = e?.status >= 500 || /bad gateway|failed to fetch|network/i.test(e?.message || '')
+        setJob(prev => prev ? {
+          ...prev,
+          message: transient
+            ? 'Backend is restarting. Still checking job status...'
+            : 'Lost connection while checking job status',
+          error: transient ? null : e.message,
+        } : prev)
+        if (!transient || pollFailuresRef.current >= 40) clearInterval(t)
+      }
     }, 1500)
     return () => clearInterval(t)
   }, [job?.id, job?.status])
