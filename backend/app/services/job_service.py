@@ -14,10 +14,12 @@ from ..time_utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
 ACTIVE_JOB_MAX_AGE = timedelta(hours=2)
-# A running job that hasn't updated in 30 min is almost certainly stuck due to
-# a server restart. Auto-fail it the next time the frontend polls for it so
-# the UI clears instead of spinning forever.
-STALE_RUNNING_JOB_AGE = timedelta(minutes=30)
+# On Render's free tier the server restarts frequently.  A running job that was
+# last seen > 4 minutes ago is almost certainly orphaned — mark it failed so
+# the frontend's auto-restart picks up the next batch within one poll cycle
+# instead of waiting 30 minutes.  4 min is safely above the longest legitimate
+# enrichment batch (300 songs × ~500 ms/song ≈ 150 s ≈ 2.5 min).
+STALE_RUNNING_JOB_AGE = timedelta(minutes=4)
 
 
 class JobProgress:

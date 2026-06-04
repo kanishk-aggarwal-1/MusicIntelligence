@@ -277,8 +277,9 @@ function ImportSection() {
   )
 }
 
-const ENRICH_BATCH = 2000   // songs per job — large enough to make progress,
-                             // small enough that a Render restart loses < 2 k
+// 300 songs × ~500 ms/song (Last.fm) ≈ 150 s per batch — well under Render's
+// free-tier restart window.  The auto-restart loop chains batches until done.
+const ENRICH_BATCH = 300
 
 export default function Features() {
   const [backfillResult, setBackfillResult]     = useState(null)
@@ -307,6 +308,16 @@ export default function Features() {
       .then(s => setPendingCount(s.pending_enrichment_count ?? null))
       .catch(() => {})
   }, [])
+
+  // Keep the Render free-tier server awake while enrichment is in progress.
+  // The 1.5 s job-poll already sends requests, but if the server restarts and
+  // the job goes terminal the polling stops — a 60 s heartbeat ensures the
+  // newly spun-up instance doesn't sleep again before the next batch starts.
+  useEffect(() => {
+    if (!autoEnrich) return
+    const hb = setInterval(() => api.get('/stats').catch(() => {}), 60_000)
+    return () => clearInterval(hb)
+  }, [autoEnrich])
 
   // Poll the active backfill job; auto-restart if autoEnrich is on and more remain
   useEffect(() => {
