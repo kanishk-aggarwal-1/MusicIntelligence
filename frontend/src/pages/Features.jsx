@@ -309,10 +309,28 @@ export default function Features() {
       .catch(() => {})
   }, [])
 
+  // ── startBatch must be defined BEFORE any useEffect that lists it in deps ──
+  // Putting a useCallback result after the effect that references it in its
+  // deps array causes a TDZ error in the minified bundle ("Cannot access 'X'
+  // before initialization").
+  const startBatch = useCallback(async (overrideLimit) => {
+    setBackfillLoading(true)
+    setBackfillPoll(null)
+    const limit = Math.min(overrideLimit ?? pendingCount ?? ENRICH_BATCH, ENRICH_BATCH)
+    try {
+      const job = await api.post(
+        `/user/backfill-metadata/job?limit=${limit}&retry_partial=${retryPartial}&retry_failed=${retryFailed}`
+      )
+      setBackfillResult(job)
+    } catch (e) {
+      setBackfillResult({ error: e.message })
+      setAutoEnrich(false)
+    } finally {
+      setBackfillLoading(false)
+    }
+  }, [pendingCount, retryPartial, retryFailed])
+
   // Keep the Render free-tier server awake while enrichment is in progress.
-  // The 1.5 s job-poll already sends requests, but if the server restarts and
-  // the job goes terminal the polling stops — a 60 s heartbeat ensures the
-  // newly spun-up instance doesn't sleep again before the next batch starts.
   useEffect(() => {
     if (!autoEnrich) return
     const hb = setInterval(() => api.get('/stats').catch(() => {}), 60_000)
@@ -335,12 +353,10 @@ export default function Features() {
             const processed = job.result?.total_candidates ?? 0
             setEnrichedSoFar(prev => prev + processed)
 
-            // Re-fetch pending count so the label stays accurate
             api.get('/user/sync-status')
               .then(s => {
                 const remaining = s.pending_enrichment_count ?? 0
                 setPendingCount(remaining)
-                // Auto-continue if there are still songs to enrich
                 if (autoEnrich && remaining > 0) {
                   startBatch(remaining)
                 } else {
@@ -361,26 +377,9 @@ export default function Features() {
     return () => clearInterval(timer)
   }, [backfillResult?.id, backfillResult?.status, autoEnrich, startBatch])
 
-  const startBatch = useCallback(async (overrideLimit) => {
-    setBackfillLoading(true)
-    setBackfillPoll(null)
-    const limit = Math.min(overrideLimit ?? pendingCount ?? ENRICH_BATCH, ENRICH_BATCH)
-    try {
-      const job = await api.post(
-        `/user/backfill-metadata/job?limit=${limit}&retry_partial=${retryPartial}&retry_failed=${retryFailed}`
-      )
-      setBackfillResult(job)
-    } catch (e) {
-      setBackfillResult({ error: e.message })
-      setAutoEnrich(false)
-    } finally {
-      setBackfillLoading(false)
-    }
-  }, [pendingCount, retryPartial, retryFailed])
-
   async function handleBackfill() {
     setEnrichedSoFar(0)
-    setAutoEnrich(true)   // enable auto-restart for subsequent batches
+    setAutoEnrich(true)
     await startBatch(pendingCount)
   }
 
