@@ -611,6 +611,7 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
     spotify_song_map: dict[str, int] = {}   # spotify_id       → song_id
     title_song_map:  dict[tuple, int] = {}  # (title, artist_id) → song_id
 
+    # 2a — load ALL songs for artists in the file (title + spotify_id matching)
     all_artist_ids = list(artist_map.values())
     for i in range(0, len(all_artist_ids), _BULK_CHUNK):
         chunk_aids = all_artist_ids[i : i + _BULK_CHUNK]
@@ -622,6 +623,22 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
             title_song_map[(title, aid)] = song_id
             if sid:
                 spotify_song_map[sid] = song_id
+
+    # 2b — spotify_id cross-check: catch songs that exist in the DB under a
+    # DIFFERENT artist (e.g. artist name casing differs between two imports).
+    # The artist_id lookup above would miss these, and Phase 2c would try to
+    # INSERT a conflicting spotify_id → UniqueViolation.  Query without the
+    # artist_id filter and without the is_deleted filter so we see every row
+    # that holds the constraint key.
+    all_file_spotify_ids = list({t["spotify_id"] for t in tracks if t.get("spotify_id")})
+    for i in range(0, len(all_file_spotify_ids), _BULK_CHUNK):
+        chunk_sids = all_file_spotify_ids[i : i + _BULK_CHUNK]
+        rows = db.query(Song.spotify_id, Song.id).filter(
+            Song.spotify_id.in_(chunk_sids),
+        ).all()
+        for sid, song_id in rows:
+            if sid not in spotify_song_map:
+                spotify_song_map[sid] = song_id  # don't create — it already exists
 
     # 2c — create songs that still don't exist
     seen_song_keys: set[tuple] = set()
