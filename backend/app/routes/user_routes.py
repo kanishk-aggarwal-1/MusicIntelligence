@@ -641,7 +641,8 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
                 spotify_song_map[sid] = song_id  # don't create — it already exists
 
     # 2c — create songs that still don't exist
-    seen_song_keys: set[tuple] = set()
+    seen_song_keys:    set[tuple] = set()
+    seen_spotify_ids:  set[str]   = set()   # within-batch dedup by spotify_id
     new_song_meta: list[tuple[Song, str, int]] = []  # (obj, title, artist_id)
 
     for t in tracks:
@@ -654,9 +655,17 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
 
         if (sid and sid in spotify_song_map) or key in title_song_map:
             continue
+        # Two tracks in the same file can share a spotify_id but have different
+        # titles (e.g. "Song X" and "Song X (Remix)").  The key=(title, aid)
+        # check above doesn't catch this, causing a UniqueViolation when both
+        # are flushed in the same INSERT batch.  Skip the duplicate here.
+        if sid and sid in seen_spotify_ids:
+            continue
         if key in seen_song_keys:
             continue
         seen_song_keys.add(key)
+        if sid:
+            seen_spotify_ids.add(sid)
 
         song = Song(
             title=title,
