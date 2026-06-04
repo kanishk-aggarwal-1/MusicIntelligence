@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Music2, ListMusic, Tag, Heart, Wrench, Settings, LogOut, RefreshCw, CheckCircle, XCircle, Search } from 'lucide-react'
+import { LayoutDashboard, Music2, ListMusic, Tag, Heart, Wrench, Settings, LogOut, RefreshCw, CheckCircle, XCircle, Search, Activity } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSyncFlow } from '../../hooks/useSyncFlow'
 
@@ -10,6 +10,7 @@ const links = [
   { to: '/for-you',   icon: Heart,           label: 'For You'   },
   { to: '/playlists', icon: ListMusic,        label: 'Playlists' },
   { to: '/features',  icon: Wrench,           label: 'Tools'     },
+  { to: '/stats',     icon: Activity,         label: 'Stats'     },
   { to: '/settings',  icon: Settings,         label: 'Settings'  },
 ]
 

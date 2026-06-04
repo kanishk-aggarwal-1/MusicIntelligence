@@ -4,6 +4,7 @@ import time
 import requests
 
 from ..config import settings
+from . import live_metrics_service
 from .api_cache_service import get_cached_response, store_cached_response
 from .metrics_service import record_external_call
 
@@ -31,12 +32,19 @@ def lastfm_request(method: str, params=None):
     cache_key = _make_cache_key(method, request_params)
     cached = get_cached_response("lastfm", cache_key)
     if cached is not None:
+        # Cache hit — a real Last.fm call was avoided.
+        live_metrics_service.increment(live_metrics_service.CACHE_HITS)
         if cached.get("error"):
             record_external_call("lastfm_cache", ok=False)
             raise RuntimeError(cached["error"])
         record_external_call("lastfm_cache", ok=True)
         return cached.get("payload") or {}
 
+    # Cache miss — we are about to make a real external Last.fm request.
+    live_metrics_service.increment_many({
+        live_metrics_service.CACHE_MISSES: 1,
+        live_metrics_service.LASTFM_CALLS: 1,
+    })
     time.sleep(0.2)
 
     try:

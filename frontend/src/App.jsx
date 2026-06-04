@@ -12,6 +12,7 @@ const ForYou = lazy(() => import('./pages/ForYou'))
 const Playlists = lazy(() => import('./pages/Playlists'))
 const Features = lazy(() => import('./pages/Features'))
 const Settings = lazy(() => import('./pages/Settings'))
+const Stats = lazy(() => import('./pages/Stats'))
 
 function PageLoading() {
   return (
@@ -33,6 +34,8 @@ export default function App() {
     <Suspense fallback={<PageLoading />}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        {/* Public — shareable live metrics, no login required. */}
+        <Route path="/stats" element={<Stats />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/songs"     element={<ProtectedRoute><Songs /></ProtectedRoute>} />
         <Route path="/browse"    element={<ProtectedRoute><Browse /></ProtectedRoute>} />
