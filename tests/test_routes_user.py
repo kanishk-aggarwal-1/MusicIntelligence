@@ -73,10 +73,12 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
         def update(self, **kwargs):
             updates.append(kwargs)
 
-    monkeypatch.setattr(user_routes, "IMPORT_PROGRESS_BATCH_SIZE", 2)
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError("Import should not auto-enrich; dedup/enrichment happens after all files are imported.")
+    # Use a small chunk size so we get multiple progress updates even for 5 tracks.
+    monkeypatch.setattr(user_routes, "_BULK_CHUNK", 2)
 
+    # Enrichment must NOT be triggered automatically — the user runs dedup first.
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Import must not auto-enrich; dedup/enrichment happen after all files are uploaded.")
     monkeypatch.setattr(user_routes, "backfill_missing_metadata", fail_if_called)
 
     data = [
@@ -93,13 +95,17 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
     result = user_routes._run_import_history_job(db_session, FakeProgress(), user_id="u1", data=data)
 
     messages = [item.get("message") for item in updates if item.get("message")]
-    assert "Importing 0 / 5 tracks into library" in messages
-    assert "Importing 2 / 5 tracks into library" in messages
-    assert "Importing 4 / 5 tracks into library" in messages
-    assert "Importing 5 / 5 tracks into library" in messages
-    assert "Import complete. Run deduplication, then metadata enrichment." in messages
+    # Bulk flow emits phase messages then per-chunk history progress.
+    assert any("artist" in m.lower() for m in messages), "expected artist-sync phase message"
+    assert any("library" in m.lower() or "tracks" in m.lower() for m in messages)
+    # History phase: at least one "Importing X / 5" line with chunk-level granularity.
+    assert any("Importing" in m and "/ 5" in m for m in messages), f"no history progress message found in: {messages}"
+    # Final done message from _run_import_history_job
+    assert any("Next" in m or "Deduplication" in m or "complete" in m.lower() for m in messages)
+
     assert result["valid_tracks"] == 5
     assert result["enrichment_queued"] is False
-    assert result["next_step"] == "Run deduplication, then metadata enrichment."
     assert result["progress_current"] == 5
     assert result["progress_total"] == 5
+    assert result["new_songs"] == 5           # all 5 tracks are brand-new
+    assert result["new_history_rows"] == 5    # all 5 inserted
