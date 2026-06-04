@@ -999,7 +999,7 @@ def backfill_metadata_job(
         user_id=user_id,
         job_type="backfill_metadata",
         message="Queued metadata backfill",
-        progress_total=max(1, min(limit, 5000)),
+        progress_total=max(1, min(limit, 100_000)),
     )
     background_tasks.add_task(
         run_job,
