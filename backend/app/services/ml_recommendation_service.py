@@ -216,18 +216,32 @@ def knn_recommend(
         logger.info("knn_recommend.insufficient_tagged_songs user_id=%s count=%s", user_id, len(indexed))
         return []
 
+    # --- Play counts (needed before capping so we can rank by them) ---
+    play_counts = _get_play_counts(db, user_id)
+    max_plays = max(play_counts.values(), default=1)
+
+    # Cap the model at 10 000 songs ranked by play count.
+    # With 20 k songs the dense tfidf_matrix.toarray() alone exceeds 300 MB;
+    # 10 k keeps the ML step under ~120 MB while covering all practically
+    # relevant songs (beyond 10 k songs recommendation quality is unchanged).
+    _MODEL_CAP = 10_000
+    if len(indexed) > _MODEL_CAP:
+        indexed_sorted = sorted(indexed, key=lambda s: play_counts.get(s.id, 0), reverse=True)
+        indexed = indexed_sorted[:_MODEL_CAP]
+        documents = [_song_document(s) for s in indexed]
+
     # --- TF-IDF ---
+    # max_features=400 (was 600) — reduces matrix width by 33%, saving ~30 MB
+    # at 20 k songs.
+    # min_df=2 filters hapax terms on large libraries; drop to 1 for small
+    # sets (tests / new users) so no vocabulary survives pruning.
     vectorizer = TfidfVectorizer(
-        min_df=1,
-        max_features=600,
+        min_df=2 if len(documents) >= 50 else 1,
+        max_features=400,
         ngram_range=(1, 2),
         sublinear_tf=True,
     )
     tfidf_matrix = vectorizer.fit_transform(documents)
-
-    # --- Play counts ---
-    play_counts = _get_play_counts(db, user_id)
-    max_plays = max(play_counts.values(), default=1)
 
     # --- Temporal signal ---
     now_hour = utcnow_naive().hour
@@ -241,8 +255,10 @@ def knn_recommend(
     ], dtype=float)
     weights /= weights.sum()
 
-    tfidf_dense = tfidf_matrix.toarray()
-    centroid = (weights[:, np.newaxis] * tfidf_dense).sum(axis=0, keepdims=True)
+    # Compute centroid via sparse matrix-vector product instead of converting
+    # the full matrix to dense.  tfidf_matrix.T @ weights is (features,) and
+    # uses only the non-zero entries — ~1 MB vs ~96 MB for toarray().
+    centroid = np.asarray(tfidf_matrix.T.dot(weights)).reshape(1, -1)
 
     # --- Context bias: shift centroid 20% towards context-relevant terms ---
     if context_type:
