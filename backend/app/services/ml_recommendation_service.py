@@ -22,9 +22,11 @@ from sklearn.neighbors import NearestNeighbors
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
+from ..models.artist import Artist
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..models.song_tag import SongTag
+from ..models.tag import Tag
 from ..time_utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
@@ -182,85 +184,117 @@ def knn_recommend(
     """
     excluded = excluded_song_ids or set()
 
-    user_song_ids_subq = (
-        db.query(ListeningHistory.song_id)
-        .filter(ListeningHistory.user_id == user_id)
-        .distinct()
-        .subquery()
-    )
-    songs = (
-        db.query(Song)
-        .join(user_song_ids_subq, user_song_ids_subq.c.song_id == Song.id)
-        .options(
-            joinedload(Song.artist),
-            joinedload(Song.song_tags).joinedload(SongTag.tag),
-        )
-        .filter(Song.is_deleted.is_(False))
-        .all()
-    )
-
-    songs = [s for s in songs if s.id not in excluded]
-    if not songs:
-        return []
-
-    # Only songs with at least one tag or genre can be vectorised
-    documents: list[str] = []
-    indexed: list = []
-    for song in songs:
-        doc = _song_document(song)
-        if doc.strip():
-            documents.append(doc)
-            indexed.append(song)
-
-    if len(indexed) < 2:
-        logger.info("knn_recommend.insufficient_tagged_songs user_id=%s count=%s", user_id, len(indexed))
-        return []
-
-    # --- Play counts (needed before capping so we can rank by them) ---
+    # ── Phase 1: lightweight scalars only ────────────────────────────────────
+    # get_play_counts returns {song_id: int} — no ORM objects.
     play_counts = _get_play_counts(db, user_id)
+    if not play_counts:
+        return []
     max_plays = max(play_counts.values(), default=1)
 
-    # Cap the model at 10 000 songs ranked by play count.
-    # With 20 k songs the dense tfidf_matrix.toarray() alone exceeds 300 MB;
-    # 10 k keeps the ML step under ~120 MB while covering all practically
-    # relevant songs (beyond 10 k songs recommendation quality is unchanged).
-    _MODEL_CAP = 10_000
-    if len(indexed) > _MODEL_CAP:
-        indexed_sorted = sorted(indexed, key=lambda s: play_counts.get(s.id, 0), reverse=True)
-        indexed = indexed_sorted[:_MODEL_CAP]
-        documents = [_song_document(s) for s in indexed]
+    # Top-N song IDs by play count — the recommendation centroid is
+    # play-count-weighted so songs beyond the cap have negligible influence.
+    # This prevents loading 20 k ORM objects when the model only needs 5 k.
+    _MODEL_CAP = 5_000
+    user_song_ids = sorted(
+        (sid for sid in play_counts if sid not in excluded),
+        key=lambda s: play_counts[s],
+        reverse=True,
+    )[:_MODEL_CAP]
 
-    # --- TF-IDF ---
-    # max_features=400 (was 600) — reduces matrix width by 33%, saving ~30 MB
-    # at 20 k songs.
-    # min_df=2 filters hapax terms on large libraries; drop to 1 for small
-    # sets (tests / new users) so no vocabulary survives pruning.
+    if not user_song_ids:
+        return []
+
+    # ── Phase 2: build TF-IDF documents without loading ORM objects ──────────
+    # Query only the three lightweight columns needed for ML:
+    #   song_id (int), tag_names (list[str]), artist_genres (list[str])
+    # Returning plain tuples keeps memory proportional to raw data size
+    # rather than to SQLAlchemy ORM object overhead (~8-10 KB per object).
+
+    # 2a — (song_id, artist_id) for songs in the cap
+    song_meta = (
+        db.query(Song.id, Song.artist_id)
+        .filter(Song.id.in_(user_song_ids), Song.is_deleted.is_(False))
+        .all()
+    )
+    song_id_to_artist: dict[int, int] = {row[0]: row[1] for row in song_meta}
+    valid_ids = list(song_id_to_artist)
+
+    if not valid_ids:
+        return []
+
+    # 2b — (song_id, tag_name) pairs — one row per tag
+    tag_rows = (
+        db.query(SongTag.song_id, Tag.name)
+        .join(Tag, Tag.id == SongTag.tag_id)
+        .filter(SongTag.song_id.in_(valid_ids))
+        .all()
+    )
+    song_tags_map: dict[int, list[str]] = defaultdict(list)
+    for song_id, tag_name in tag_rows:
+        if tag_name:
+            song_tags_map[song_id].append(tag_name.lower().replace(" ", "_"))
+
+    # 2c — (artist_id, genres_json)
+    artist_ids = list({aid for aid in song_id_to_artist.values() if aid})
+    artist_genres: dict[int, list[str]] = {}
+    if artist_ids:
+        for artist_id, genres_json in (
+            db.query(Artist.id, Artist.genres)
+            .filter(Artist.id.in_(artist_ids))
+            .all()
+        ):
+            try:
+                artist_genres[artist_id] = [
+                    g.lower().replace(" ", "_")
+                    for g in json.loads(genres_json or "[]")
+                    if g
+                ]
+            except Exception:
+                pass
+
+    # 2d — assemble document strings; skip songs with no tags/genres
+    model_ids: list[int] = []
+    documents: list[str] = []
+    for sid in user_song_ids:          # preserve play-count order
+        if sid not in song_id_to_artist:
+            continue
+        aid = song_id_to_artist[sid]
+        tags = song_tags_map.get(sid, [])
+        genres = artist_genres.get(aid, [])
+        doc = " ".join(tags + genres).strip()
+        if doc:
+            model_ids.append(sid)
+            documents.append(doc)
+
+    if len(model_ids) < 2:
+        logger.info(
+            "knn_recommend.insufficient_tagged_songs user_id=%s count=%s",
+            user_id, len(model_ids),
+        )
+        return []
+
+    # ── Phase 3: TF-IDF + KNN (pure numpy/scipy, no ORM objects) ────────────
     vectorizer = TfidfVectorizer(
         min_df=2 if len(documents) >= 50 else 1,
         max_features=400,
         ngram_range=(1, 2),
         sublinear_tf=True,
     )
-    tfidf_matrix = vectorizer.fit_transform(documents)
+    tfidf_matrix = vectorizer.fit_transform(documents)   # sparse (N × 400)
 
-    # --- Temporal signal ---
     now_hour = utcnow_naive().hour
     temporal_counts = _get_temporal_play_counts(db, user_id, now_hour)
 
-    # --- Centroid weights: 70% all-time taste + 30% time-of-day taste ---
     weights = np.array([
-        max(1, play_counts.get(s.id, 1)) * 0.7
-        + temporal_counts.get(s.id, 0) * 0.3 * 3
-        for s in indexed
+        max(1, play_counts.get(sid, 1)) * 0.7
+        + temporal_counts.get(sid, 0) * 0.3 * 3
+        for sid in model_ids
     ], dtype=float)
     weights /= weights.sum()
 
-    # Compute centroid via sparse matrix-vector product instead of converting
-    # the full matrix to dense.  tfidf_matrix.T @ weights is (features,) and
-    # uses only the non-zero entries — ~1 MB vs ~96 MB for toarray().
+    # Sparse dot product — no toarray() call, no dense N×400 allocation
     centroid = np.asarray(tfidf_matrix.T.dot(weights)).reshape(1, -1)
 
-    # --- Context bias: shift centroid 20% towards context-relevant terms ---
     if context_type:
         terms = CONTEXT_TERMS.get(context_type.lower().strip(), [])
         if terms:
@@ -270,40 +304,60 @@ def knn_recommend(
             except Exception:
                 pass
 
-    # --- KNN ---
-    n_neighbors = min(len(indexed), max(limit * 4, 60))
+    n_neighbors = min(len(model_ids), max(limit * 4, 60))
     knn = NearestNeighbors(n_neighbors=n_neighbors, metric="cosine", algorithm="brute")
     knn.fit(tfidf_matrix)
     distances, indices = knn.kneighbors(centroid)
 
-    # --- Session co-occurrence ---
-    cooccurrence = _build_cooccurrence(db, user_id)
+    # Candidate song IDs ranked by cosine similarity
+    ranked_ids   = [model_ids[i] for i in indices[0]]
+    ranked_dists = list(distances[0])
+
+    # ── Phase 4: load full Song ORM objects for candidates ONLY (~50-100) ───
+    # Everything before this point used only int/str primitives.
+    n_fetch = min(len(ranked_ids), limit * 6)
+    fetch_ids = ranked_ids[:n_fetch]
+
+    songs_by_id = {
+        s.id: s
+        for s in db.query(Song)
+        .options(
+            joinedload(Song.artist),
+            joinedload(Song.song_tags).joinedload(SongTag.tag),
+        )
+        .filter(Song.id.in_(fetch_ids))
+        .all()
+    }
+
+    # ── Phase 5: score + build candidate dicts ───────────────────────────────
+    cooccurrence   = _build_cooccurrence(db, user_id)
     top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15]
 
     candidates: list[dict] = []
-    for dist, idx in zip(distances[0], indices[0]):
-        song = indexed[idx]
-        tfidf_sim = float(1.0 - dist)
-        play_count = play_counts.get(song.id, 0)
+    for dist, song_id in zip(ranked_dists, ranked_ids):
+        song = songs_by_id.get(song_id)
+        if not song:
+            continue
+        tfidf_sim  = float(1.0 - dist)
+        play_count = play_counts.get(song_id, 0)
         familiarity = (
             min(1.0, log(play_count + 1) / log(max_plays + 1)) if max_plays > 0 else 0.0
         )
-        co_count = sum(cooccurrence.get(song.id, {}).get(a, 0) for a in top_anchor_ids)
+        co_count = sum(cooccurrence.get(song_id, {}).get(a, 0) for a in top_anchor_ids)
         co_boost = min(0.15, co_count * 0.015)
-        score = min(1.0, tfidf_sim + co_boost)
+        score    = min(1.0, tfidf_sim + co_boost)
 
         candidates.append({
-            "song": song,
-            "score": score,
-            "tfidf_similarity": round(tfidf_sim, 4),
+            "song":               song,
+            "score":              score,
+            "tfidf_similarity":   round(tfidf_sim, 4),
             "co_occurrence_boost": round(co_boost, 4),
-            "play_count": play_count,
-            "familiarity_score": round(familiarity, 4),
-            "tags": [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
-            "algorithm_version": ALGORITHM_VERSION,
+            "play_count":         play_count,
+            "familiarity_score":  round(familiarity, 4),
+            "tags":               [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
+            "algorithm_version":  ALGORITHM_VERSION,
         })
 
-    # --- Temperature sampling: different playlist each call while still favouring top songs ---
     if len(candidates) > limit:
         candidates = _temperature_sample(candidates, min(len(candidates), limit * 2), temperature)
     candidates.sort(key=lambda x: x["score"], reverse=True)
