@@ -7,22 +7,31 @@ import ErrorBoundary from '../ui/ErrorBoundary'
 
 const COLORS = ['#1db954', '#17a348', '#138d3c', '#0f7030', '#0b5c26']
 
-function formatMonth(str) {
-  if (!str) return ''
-  const d = new Date(str)
-  return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+// Parse a "YYYY-MM" string into a display label without ever constructing a
+// Date from a string (which can shift the month in UTC− timezones).
+function formatMonth(yyyyMm) {
+  if (!yyyyMm) return ''
+  const [year, month] = yyyyMm.split('-').map(Number)
+  if (!year || !month) return yyyyMm
+  // new Date(year, month-1, 1) uses the *local* calendar — no UTC shift.
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
 }
 
 function pivotTimeline(rows, key) {
-  const byMonth = {}
+  // byMonth is keyed by the raw "YYYY-MM" string so we can sort correctly.
+  const byMonth = {}   // "YYYY-MM" → data point object
   const allKeys = new Set()
   for (const row of rows) {
-    const m = formatMonth(row.month)
-    if (!byMonth[m]) byMonth[m] = { month: m }
-    byMonth[m][row[key]] = (byMonth[m][row[key]] || 0) + row.plays
+    const iso = (row.month || '').slice(0, 7)   // normalise to "YYYY-MM"
+    if (!byMonth[iso]) byMonth[iso] = { month: formatMonth(iso), _iso: iso }
+    byMonth[iso][row[key]] = (byMonth[iso][row[key]] || 0) + row.plays
     allKeys.add(row[key])
   }
-  return { data: Object.values(byMonth), keys: [...allKeys].slice(0, 5) }
+  // Sort oldest → newest so the x-axis reads left-to-right chronologically.
+  const data = Object.values(byMonth)
+    .sort((a, b) => a._iso.localeCompare(b._iso))
+    .map(({ _iso: _unused, ...rest }) => rest)   // strip the sort key before rendering
+  return { data, keys: [...allKeys].slice(0, 5) }
 }
 
 function ChartCard({ title, children, empty = 'No data yet', hasData = true, className = '' }) {

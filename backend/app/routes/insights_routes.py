@@ -162,7 +162,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         month_counts: dict = {}
         result = []
         for row in rows:
-            month_key = str(row[0])
+            month_key = str(row[0])[:7]   # normalise to "YYYY-MM"
             if month_counts.get(month_key, 0) >= _ROWS_PER_MONTH:
                 continue
             month_counts[month_key] = month_counts.get(month_key, 0) + 1
@@ -172,13 +172,21 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
     artist_rows = _cap_per_month(artist_rows, 1)
     genre_rows  = _cap_per_month(genre_rows, 1)
 
+    # Normalise the month value to "YYYY-MM" so the frontend receives a
+    # consistent format regardless of database backend.
+    # PostgreSQL date_trunc → str(datetime) → "2024-06-01 00:00:00"
+    # SQLite   strftime     → str(str)      → "2024-06-01"
+    # Both truncate cleanly to the first 7 characters: "2024-06".
+    def _fmt_month(m) -> str:
+        return str(m)[:7]
+
     monthly_top_artists = [
-        {"month": str(m), "artist": a, "plays": int(p)}
+        {"month": _fmt_month(m), "artist": a, "plays": int(p)}
         for m, a, p in artist_rows
     ]
 
     monthly_top_genres = [
-        {"month": str(m), "genre": g, "plays": int(p)}
+        {"month": _fmt_month(m), "genre": g, "plays": int(p)}
         for m, g, p in genre_rows
     ]
 
