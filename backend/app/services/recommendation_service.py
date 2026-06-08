@@ -705,6 +705,8 @@ def recommend_songs(
     context_type: str | None = None,
     limit: int = 30,
     discovery_ratio: float = 0.4,
+    resolve_spotify: bool = True,
+    discovery_max_similar: int | None = None,
 ):
 
     logger.info(
@@ -721,14 +723,14 @@ def recommend_songs(
         "store_rate_limited": False,
     }
     if allow_discovery and include_discovery_summary:
-        discovered, discovery_summary = discover_new_songs(db, user_id, include_summary=True, seed_limit=discovery_seed_limit)
+        discovered, discovery_summary = discover_new_songs(db, user_id, include_summary=True, seed_limit=discovery_seed_limit, max_similar_per_seed=discovery_max_similar)
     elif allow_discovery:
-        discovered = discover_new_songs(db, user_id, seed_limit=discovery_seed_limit)
+        discovered = discover_new_songs(db, user_id, seed_limit=discovery_seed_limit, max_similar_per_seed=discovery_max_similar)
     else:
         discovered = []
 
     if allow_discovery:
-        store_summary = store_discovered_songs(db, discovered, user_id=user_id, limit=discovery_store_limit)
+        store_summary = store_discovered_songs(db, discovered, user_id=user_id, limit=discovery_store_limit, resolve_spotify=resolve_spotify)
         if include_discovery_summary and discovery_summary is not None:
             discovery_summary.update(store_summary)
 
@@ -841,7 +843,7 @@ def build_discovery_feed(db, user_id, limit=20):
     return feed
 
 
-def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: int | None = None):
+def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: int | None = None, max_similar_per_seed: int | None = None):
 
     logger.info("discover_new_songs.start user_id=%s include_summary=%s", user_id, include_summary)
     artist_rows = (
@@ -902,11 +904,11 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
 
         try:
             if include_summary:
-                discovery_result = discover_songs_from_artist(artist, include_stats=True)
+                discovery_result = discover_songs_from_artist(artist, include_stats=True, max_similar_artists=max_similar_per_seed)
                 discovered = discovery_result.get("songs", [])
                 summary["source_artists"] += int(discovery_result.get("source_artists") or 0)
             else:
-                discovered = discover_songs_from_artist(artist)
+                discovered = discover_songs_from_artist(artist, max_similar_artists=max_similar_per_seed)
         except Exception as exc:
             logger.warning("discover_new_songs.artist_failed name=%s error=%s", artist, exc)
             discovered = []
@@ -920,44 +922,48 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
     return new_songs
 
 
-def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | None = None):
+def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | None = None, resolve_spotify: bool = True):
+    """Store Last.fm-discovered songs in the songs table and enrich with Last.fm metadata.
 
+    ``resolve_spotify=False`` skips the Spotify track-ID lookup, making inline
+    discovery during playlist preview ~10× faster.  Missing Spotify IDs are
+    resolved lazily when the user saves the playlist (``_resolve_playlist_track_ids``
+    already handles that case).
+    """
     total_input = len(songs)
     if limit is not None:
         songs = songs[: max(0, int(limit))]
     logger.info(
-        "store_discovered_songs.start count=%s total_input=%s limit=%s",
+        "store_discovered_songs.start count=%s total_input=%s limit=%s resolve_spotify=%s",
         len(songs),
         total_input,
         limit,
+        resolve_spotify,
     )
-    session = load_user_session(db, user_id=user_id)
-    token = session.get("token")
+
+    sp = None
     rate_limited = False
 
-    if not token:
-        return {"store_attempted": len(songs), "store_rate_limited": False}
-
-    sp = spotify_service.get_spotify_client(token)
+    if resolve_spotify:
+        session = load_user_session(db, user_id=user_id)
+        token = session.get("token")
+        if not token:
+            logger.info("store_discovered_songs.no_token — storing without Spotify IDs")
+            resolve_spotify = False
+        else:
+            sp = spotify_service.get_spotify_client(token)
 
     for idx, s in enumerate(songs, start=1):
         if idx == 1 or idx % 10 == 0 or idx == len(songs):
             logger.info("store_discovered_songs.progress index=%s total=%s", idx, len(songs))
 
         title = s["title"]
-
         artist_name = s["artist"]
 
-        artist = db.query(Artist).filter(
-            Artist.name == artist_name
-        ).first()
-
+        artist = db.query(Artist).filter(Artist.name == artist_name).first()
         if not artist:
-
             artist = Artist(name=artist_name)
-
             db.add(artist)
-
             db.flush()
 
         exists = db.query(Song).filter(
@@ -966,25 +972,29 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
             Song.is_deleted.is_(False),
         ).first()
 
-        try:
-            spotify_id = resolve_track_id(sp, title, artist_name)
-        except Exception as exc:
-            status = getattr(exc, "http_status", None)
-            if status == 401:
-                logger.info("store_discovered_songs.token_expired title=%s artist=%s", title, artist_name)
-                refreshed_session = load_user_session(db, user_id=user_id)
-                refreshed_token = refreshed_session.get("token")
-                if not refreshed_token:
-                    raise
-                sp = spotify_service.get_spotify_client(refreshed_token)
+        # ── Spotify ID resolution (optional, deferred when resolve_spotify=False) ──
+        spotify_id = None
+        if resolve_spotify and sp is not None:
+            try:
                 spotify_id = resolve_track_id(sp, title, artist_name)
-            elif status == 429:
-                logger.warning("store_discovered_songs.rate_limited title=%s artist=%s", title, artist_name)
-                rate_limited = True
-                spotify_id = None
-                break
-            else:
-                raise
+            except Exception as exc:
+                status = getattr(exc, "http_status", None)
+                if status == 401:
+                    logger.info("store_discovered_songs.token_expired title=%s artist=%s", title, artist_name)
+                    refreshed_session = load_user_session(db, user_id=user_id)
+                    refreshed_token = refreshed_session.get("token")
+                    if not refreshed_token:
+                        raise
+                    sp = spotify_service.get_spotify_client(refreshed_token)
+                    spotify_id = resolve_track_id(sp, title, artist_name)
+                elif status == 429:
+                    logger.warning("store_discovered_songs.rate_limited title=%s artist=%s", title, artist_name)
+                    rate_limited = True
+                    spotify_id = None
+                    break
+                else:
+                    raise
+
         if not exists and spotify_id:
             exists = db.query(Song).filter(Song.spotify_id == spotify_id).first()
 
@@ -998,7 +1008,6 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
                 exists.discovery_source = s.get("discovery_source") or "discovery_unknown"
             if not exists.discovery_confidence:
                 exists.discovery_confidence = s.get("discovery_confidence") or 0.5
-
             data = enrich_song(exists)
             _apply_enrichment(db, exists, data)
             continue
@@ -1006,18 +1015,16 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
         song = Song(
             title=title,
             artist_id=artist.id,
-            spotify_id=spotify_id,
+            spotify_id=spotify_id,  # None when resolve_spotify=False; resolved at save time
             discovery_source=s.get("discovery_source") or "discovery_unknown",
             discovery_confidence=s.get("discovery_confidence") or 0.5,
             enrichment_status="pending",
             is_deleted=False,
         )
-
         db.add(song)
         db.flush()
 
         data = enrich_song(song)
-
         _apply_enrichment(db, song, data)
 
     db.commit()
