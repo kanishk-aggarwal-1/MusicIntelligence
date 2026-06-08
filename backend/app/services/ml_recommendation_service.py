@@ -186,7 +186,10 @@ def _score_discovery_songs(
     whole listening-history id list into Python.  Returns up to *limit* dicts
     with keys ``song_id`` and ``similarity``.
     """
-    # Anti-join: enriched, Spotify-resolvable songs not in this user's history.
+    # Anti-join: enriched songs not in this user's history.
+    # We do NOT filter on spotify_id IS NOT NULL here — songs discovered via
+    # Last.fm are stored without a Spotify ID during fast inline discovery;
+    # the ID is resolved lazily when the user saves the playlist.
     disc_rows = (
         db.query(Song.id, Song.artist_id)
         .outerjoin(
@@ -197,8 +200,7 @@ def _score_discovery_songs(
         .filter(
             ListeningHistory.id.is_(None),         # not in user's history
             Song.is_deleted.is_(False),
-            Song.enrichment_status == "complete",  # has tags + genres
-            Song.spotify_id.is_not(None),          # resolvable / playable
+            Song.enrichment_status == "complete",  # has tags + genres from Last.fm
         )
         .order_by(Song.popularity_score.desc().nullslast())
         .limit(_DISCOVERY_POOL_CAP)

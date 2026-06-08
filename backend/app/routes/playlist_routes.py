@@ -422,16 +422,27 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     # familiarity=0.0 → all new discoveries → discovery_ratio=1.0
     _discovery_ratio = max(0.0, min(1.0, 1.0 - payload.familiarity))
 
+    # When discovery is needed, run a quick Last.fm fan-out (top 5 artists →
+    # 4 similar artists each → up to 100 tracks) and store them WITHOUT Spotify
+    # resolution (fast). Spotify IDs are resolved lazily when the user saves.
+    # seed_limit=5 + max_similar=4 = at most 20 Last.fm calls, all cached after
+    # first run so repeated previews are instant.
+    _allow_disc = _discovery_ratio > 0.0
+
     recommendation_result = recommend_songs(
         db,
         user_id,
         return_details=True,
         min_known_ratio=payload.min_known_ratio,
         include_discovery_summary=True,
-        allow_discovery=False,
+        allow_discovery=_allow_disc,
+        discovery_seed_limit=5 if _allow_disc else None,
+        discovery_store_limit=60 if _allow_disc else None,
+        discovery_max_similar=4 if _allow_disc else None,
         context_type=payload.context_type,
         limit=candidate_limit,
         discovery_ratio=_discovery_ratio,
+        resolve_spotify=False,  # skip Spotify during preview; resolved at save time
     )
 
     details = recommendation_result["items"]
