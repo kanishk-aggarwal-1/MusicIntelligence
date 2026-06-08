@@ -154,7 +154,12 @@ def _apply_enrichment(db, song, data):
     changed += _ensure_song_tags(db, song, tags)
     errors = [str(err) for err in data.get("_errors", []) if err]
 
-    if song.genre and song.song_tags:
+    # A song is "complete" once it has at least one tag — tags are what the
+    # TF-IDF / discovery model actually needs.  Requiring song.genre too was
+    # overly strict: many valid tracks have tags but no explicit genre string,
+    # and those songs were permanently invisible to the discovery pool because
+    # _score_discovery_songs filters on enrichment_status == "complete".
+    if song.song_tags:
         song.enrichment_status = "complete"
         song.enrichment_error = None
     elif changed > 0:
@@ -654,9 +659,14 @@ def _human_reasons(song, *, tag_names, play_count, context_type, components, fee
     artist_name = song.artist.name if song.artist else None
     tags = [tag for tag in (tag_names or []) if tag]
 
-    if is_discovery or play_count == 0:
+    if is_discovery:
+        # Explicitly flagged as a discovery track by knn_recommend — always
+        # show the discovery label regardless of play_count on the dict.
+        # Do NOT use `play_count == 0` here: library songs that were imported
+        # without a listening-history row would get a misleading "new music"
+        # label even though the user added them intentionally.
         if artist_name:
-            reasons.append(f"new music — matched to your taste, not yet in your library")
+            reasons.append("new music — matched to your taste, not yet in your library")
         else:
             reasons.append("new music matched to your taste")
     elif play_count >= 5 and artist_name:
@@ -820,7 +830,10 @@ def recommend_songs(
 
 
 def build_discovery_feed(db, user_id, limit=20):
-    details = recommend_songs(db, user_id, return_details=True, allow_discovery=False, limit=limit)
+    # discovery_ratio=0.0 is required here: allow_discovery=False only suppresses
+    # the Last.fm fan-out; without explicitly zeroing discovery_ratio, knn_recommend
+    # would still allocate 40% of results from previously-stored discovery songs.
+    details = recommend_songs(db, user_id, return_details=True, allow_discovery=False, discovery_ratio=0.0, limit=limit)
 
     feed = []
     for item in details[:limit]:
@@ -953,6 +966,15 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
         else:
             sp = spotify_service.get_spotify_client(token)
 
+    # Pre-load all artists by name in a single query to avoid one SELECT per
+    # song inside the loop.  With 60 songs from ~20 distinct artists this
+    # replaces up to 60 round-trips with 1.
+    all_artist_names = list({s["artist"] for s in songs if s.get("artist")})
+    artist_cache: dict[str, Artist] = {
+        a.name: a
+        for a in db.query(Artist).filter(Artist.name.in_(all_artist_names)).all()
+    }
+
     for idx, s in enumerate(songs, start=1):
         if idx == 1 or idx % 10 == 0 or idx == len(songs):
             logger.info("store_discovered_songs.progress index=%s total=%s", idx, len(songs))
@@ -960,14 +982,20 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
         title = s["title"]
         artist_name = s["artist"]
 
-        artist = db.query(Artist).filter(Artist.name == artist_name).first()
+        artist = artist_cache.get(artist_name)
         if not artist:
             artist = Artist(name=artist_name)
             db.add(artist)
             db.flush()
+            artist_cache[artist_name] = artist
 
+        # Case-insensitive title match avoids inserting duplicates that differ
+        # only by capitalisation.  When resolve_spotify=False the secondary
+        # dedup-by-spotify-id check is skipped (spotify_id is always None), so
+        # this is the only guard against repeated preview calls accumulating
+        # near-identical rows.
         exists = db.query(Song).filter(
-            Song.title == title,
+            func.lower(Song.title) == title.lower().strip(),
             Song.artist_id == artist.id,
             Song.is_deleted.is_(False),
         ).first()
