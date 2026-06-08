@@ -206,7 +206,7 @@ export default function Dashboard() {
         <StatCard icon={TrendingUp} label="Total plays" value={totalPlays.toLocaleString()} />
         <StatCard icon={Users} label="Top artist" value={topArtist} />
         <StatCard icon={Disc} label="Top genre" value={topGenre} />
-        <StatCard icon={Music2} label="Artists" value={topArtists.length} />
+        <StatCard icon={Music2} label="Artists" value={(stats?.total_artists ?? topArtists.length).toLocaleString()} sub="distinct artists" />
       </div>
 
       {trend && (
