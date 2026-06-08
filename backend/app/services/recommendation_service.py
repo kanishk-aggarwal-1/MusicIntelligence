@@ -732,17 +732,50 @@ def recommend_songs(
         "store_attempted": 0,
         "store_rate_limited": False,
     }
-    if allow_discovery and include_discovery_summary:
-        discovered, discovery_summary = discover_new_songs(db, user_id, include_summary=True, seed_limit=discovery_seed_limit, max_similar_per_seed=discovery_max_similar)
-    elif allow_discovery:
-        discovered = discover_new_songs(db, user_id, seed_limit=discovery_seed_limit, max_similar_per_seed=discovery_max_similar)
+    # ── Discovery: fan-out to Last.fm and store new songs ───────────────────
+    # Wrapped in a broad try/except so that any failure (Last.fm timeout,
+    # enrichment error, DB constraint violation, etc.) degrades gracefully
+    # instead of aborting the entire playlist preview.
+    #
+    # Critical: if store_discovered_songs raises a DB exception, PostgreSQL
+    # marks the session transaction as ABORTED.  All subsequent queries in the
+    # same session then fail with "current transaction is aborted" — including
+    # knn_recommend and create_playlist_preview_record.  The except block
+    # calls db.rollback() to reset the session to a clean state so the main
+    # recommendation logic always has a healthy connection.
+    if allow_discovery:
+        try:
+            if include_discovery_summary:
+                discovered, discovery_summary = discover_new_songs(
+                    db, user_id, include_summary=True,
+                    seed_limit=discovery_seed_limit,
+                    max_similar_per_seed=discovery_max_similar,
+                )
+            else:
+                discovered = discover_new_songs(
+                    db, user_id,
+                    seed_limit=discovery_seed_limit,
+                    max_similar_per_seed=discovery_max_similar,
+                )
+            store_summary = store_discovered_songs(
+                db, discovered,
+                user_id=user_id,
+                limit=discovery_store_limit,
+                resolve_spotify=resolve_spotify,
+            )
+            if include_discovery_summary and discovery_summary is not None:
+                discovery_summary.update(store_summary)
+        except Exception as exc:
+            logger.warning(
+                "recommend_songs.discovery_failed user_id=%s error=%s — continuing without discovery",
+                user_id, exc, exc_info=True,
+            )
+            try:
+                db.rollback()   # reset aborted PostgreSQL transaction so reads still work
+            except Exception:
+                pass
     else:
         discovered = []
-
-    if allow_discovery:
-        store_summary = store_discovered_songs(db, discovered, user_id=user_id, limit=discovery_store_limit, resolve_spotify=resolve_spotify)
-        if include_discovery_summary and discovery_summary is not None:
-            discovery_summary.update(store_summary)
 
     feedback_map = _feedback_signal_map(db, user_id)
     excluded_song_ids = {
