@@ -74,6 +74,21 @@ def get_stats(
         .all()
     )
 
+    # Total distinct artists the user has EVER listened to (all-time, not windowed).
+    # The windowed top_artists only returns ≤10 rows, so the stat card needs a
+    # separate count so it reflects the full library, not just the top 10.
+    total_artists = (
+        db.query(func.count(func.distinct(Artist.id)))
+        .select_from(ListeningHistory)
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .join(Artist, artist_join)
+        .filter(
+            ListeningHistory.user_id == user_id,
+            Song.is_deleted.is_(False),
+        )
+        .scalar()
+    ) or 0
+
     top_genres_rows = (
         db.query(Song.genre, func.count(ListeningHistory.id))
         .join(ListeningHistory, Song.id == ListeningHistory.song_id)
@@ -193,6 +208,7 @@ def get_stats(
     return {
         "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat(), "days": safe_days},
         "total_plays": int(total_plays),
+        "total_artists": int(total_artists),
         "comparison": compare_payload,
         "top_artists": top_artists,
         "top_genres": top_genres,

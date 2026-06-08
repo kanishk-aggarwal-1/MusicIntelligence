@@ -166,8 +166,15 @@ def build_stats() -> dict:
     cache_total = hits + misses
     requested = c[PLAYLIST_TRACKS_REQUESTED]
     resolved = c[PLAYLIST_TRACKS_RESOLVED]
+    external_actual = c[SPOTIFY_CALLS] + c[LASTFM_CALLS]
 
     hit_rate = _pct(hits, cache_total)
+
+    # "API calls saved %" answers: of every API call that *could* have gone to
+    # Spotify/Last.fm (cache hits + actual external calls), what fraction was
+    # served from cache?  This differs from hit_rate_pct (hits / all lookups)
+    # because not every cache miss results in an external call (some are no-ops).
+    api_calls_saved_pct = _pct(hits, hits + external_actual)
 
     return {
         "cache": {
@@ -177,7 +184,7 @@ def build_stats() -> dict:
             "hit_rate_pct": hit_rate,
             # Each cache hit is an external API call that did NOT have to be made.
             "api_calls_saved": hits,
-            "api_calls_saved_pct": hit_rate,
+            "api_calls_saved_pct": api_calls_saved_pct,
         },
         "external_api_calls": {
             "spotify": c[SPOTIFY_CALLS],

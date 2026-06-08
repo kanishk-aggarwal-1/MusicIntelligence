@@ -50,7 +50,9 @@ def test_build_stats_computes_rates(monkeypatch, testing_session_local, test_eng
     stats = lm.build_stats()
     assert stats["cache"]["hit_rate_pct"] == 75.0          # 3 / (3+1)
     assert stats["cache"]["api_calls_saved"] == 3          # each hit = a call avoided
-    assert stats["cache"]["api_calls_saved_pct"] == 75.0
+    # api_calls_saved_pct = hits / (hits + actual_external) = 3 / (3+3) = 50%
+    # Differs from hit_rate_pct which is hits / all_cache_lookups (75%).
+    assert stats["cache"]["api_calls_saved_pct"] == 50.0
     assert stats["external_api_calls"]["total"] == 3
     assert stats["playlists"]["generated"] == 1
     assert stats["playlists"]["resolution_rate_pct"] == 80.0  # 8 / 10

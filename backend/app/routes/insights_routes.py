@@ -103,6 +103,17 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
     user_id = _require_user_id(db, request)
     safe_months = max(1, min(months, 24))
 
+    # Cut off at `safe_months` months ago so the timeline doesn't load all-time
+    # data but also has a proper date boundary, not just a row limit.
+    from ..time_utils import utcnow_naive as _now
+    from datetime import timedelta as _td
+    cutoff = _now() - _td(days=safe_months * 31)
+
+    # Limit = months × 20: up to 20 distinct artists/genres per month.
+    # The old limit was months × 5 which meant a busy single month consumed
+    # the entire quota and only 1 data point appeared on the chart.
+    _row_limit = safe_months * 20
+
     artist_rows = (
         db.query(
             _month_trunc(ListeningHistory.played_at).label("month"),
@@ -111,10 +122,14 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         )
         .join(Song, Song.id == ListeningHistory.song_id)
         .join(Artist, Artist.id == Song.artist_id)
-        .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
+        .filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.played_at >= cutoff,
+            Song.is_deleted.is_(False),
+        )
         .group_by(_month_trunc(ListeningHistory.played_at), Artist.name)
         .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
-        .limit(safe_months * 5)
+        .limit(_row_limit)
         .all()
     )
 
@@ -125,10 +140,15 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
             func.count(ListeningHistory.id).label("plays"),
         )
         .join(Song, Song.id == ListeningHistory.song_id)
-        .filter(ListeningHistory.user_id == user_id, Song.genre.is_not(None), Song.is_deleted.is_(False))
+        .filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.played_at >= cutoff,
+            Song.genre.is_not(None),
+            Song.is_deleted.is_(False),
+        )
         .group_by(_month_trunc(ListeningHistory.played_at), Song.genre)
         .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
-        .limit(safe_months * 5)
+        .limit(_row_limit)
         .all()
     )
 
