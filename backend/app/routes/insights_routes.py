@@ -109,10 +109,14 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
     from datetime import timedelta as _td
     cutoff = _now() - _td(days=safe_months * 31)
 
-    # Limit = months × 20: up to 20 distinct artists/genres per month.
-    # The old limit was months × 5 which meant a busy single month consumed
-    # the entire quota and only 1 data point appeared on the chart.
-    _row_limit = safe_months * 20
+    # Cap per-month rather than globally so that a single busy month can't
+    # starve earlier months of rows.  We fetch up to safe_months*50 rows from
+    # the DB (a generous safety cap) then slice to _ROWS_PER_MONTH in Python.
+    # A pure SQL LIMIT can't guarantee per-month fairness without a window
+    # function, and the window-function syntax differs between PostgreSQL and
+    # SQLite — Python post-processing is simpler and equally fast at this scale.
+    _ROWS_PER_MONTH = 20
+    _db_row_cap = safe_months * 50   # generous head-room for the DB query
 
     artist_rows = (
         db.query(
@@ -129,7 +133,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         )
         .group_by(_month_trunc(ListeningHistory.played_at), Artist.name)
         .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
-        .limit(_row_limit)
+        .limit(_db_row_cap)
         .all()
     )
 
@@ -148,9 +152,25 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         )
         .group_by(_month_trunc(ListeningHistory.played_at), Song.genre)
         .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
-        .limit(_row_limit)
+        .limit(_db_row_cap)
         .all()
     )
+
+    # Per-month cap: rows arrive ordered (month DESC, plays DESC) so we just
+    # count how many we've already kept for each month and stop at the cap.
+    def _cap_per_month(rows, value_index):
+        month_counts: dict = {}
+        result = []
+        for row in rows:
+            month_key = str(row[0])
+            if month_counts.get(month_key, 0) >= _ROWS_PER_MONTH:
+                continue
+            month_counts[month_key] = month_counts.get(month_key, 0) + 1
+            result.append(row)
+        return result
+
+    artist_rows = _cap_per_month(artist_rows, 1)
+    genre_rows  = _cap_per_month(genre_rows, 1)
 
     monthly_top_artists = [
         {"month": str(m), "artist": a, "plays": int(p)}

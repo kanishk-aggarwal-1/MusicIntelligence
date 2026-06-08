@@ -50,15 +50,32 @@ def _song_document(song) -> str:
     terms = []
     for st in (song.song_tags or []):
         if st.tag and st.tag.name:
-            terms.append(st.tag.name.lower().replace(" ", "_"))
+            terms.append(_norm_term(st.tag.name))
     if song.artist and song.artist.genres:
         try:
             for g in json.loads(song.artist.genres):
                 if g:
-                    terms.append(g.lower().replace(" ", "_"))
+                    terms.append(_norm_term(g))
         except Exception:
             pass
     return " ".join(terms)
+
+
+def _norm_term(s: str) -> str:
+    """Normalise a tag or genre term to the vocabulary encoding the vectorizer expects.
+
+    Single source of truth for the lowercase+underscore normalisation used in
+    both the familiar-pool document builder (knn_recommend Phase 2) and the
+    discovery-pool document builder (_score_discovery_songs).  Any future
+    change to the encoding (e.g. stripping punctuation, Unicode folding) only
+    needs to happen here.
+    """
+    return s.lower().replace(" ", "_")
+
+
+def _build_doc(tags: list[str], genres: list[str]) -> str:
+    """Combine pre-normalised tag and genre terms into one TF-IDF document string."""
+    return " ".join(tags + genres).strip()
 
 
 def _get_play_counts(db, user_id: str) -> dict[int, int]:
@@ -202,7 +219,11 @@ def _score_discovery_songs(
         .filter(
             ListeningHistory.id.is_(None),         # not this specific song in history
             Song.is_deleted.is_(False),
-            Song.enrichment_status == "complete",  # has tags + genres from Last.fm
+            # Accept both "complete" and "partial" — songs enriched before the
+            # fix that required genre+tags to reach "complete" may sit at
+            # "partial" despite having usable tags.  Empty-doc songs are
+            # filtered out later by the `if doc:` guard.
+            Song.enrichment_status.in_(["complete", "partial"]),
         )
         .order_by(Song.popularity_score.desc().nullslast())
         .limit(_DISCOVERY_POOL_CAP)
@@ -233,7 +254,7 @@ def _score_discovery_songs(
     disc_tags: dict[int, list[str]] = defaultdict(list)
     for sid, tag_name in disc_tag_rows:
         if tag_name:
-            disc_tags[sid].append(tag_name.lower().replace(" ", "_"))
+            disc_tags[sid].append(_norm_term(tag_name))
 
     # (artist_id, genres_json)
     disc_artist_ids = list({aid for aid in disc_id_to_artist.values() if aid})
@@ -246,19 +267,21 @@ def _score_discovery_songs(
         ):
             try:
                 disc_genres[artist_id] = [
-                    g.lower().replace(" ", "_")
+                    _norm_term(g)
                     for g in json.loads(genres_json or "[]")
                     if g
                 ]
             except Exception:
                 pass
 
-    # Build documents (same vocabulary encoding as the fitted vectorizer)
+    # Build documents using the shared helper — same vocabulary encoding as
+    # the fitted vectorizer used for the familiar pool.  Any normalisation
+    # change to _norm_term / _build_doc automatically applies to both pools.
     disc_model_ids: list[int] = []
     disc_documents: list[str] = []
     for sid in disc_ids:
         aid = disc_id_to_artist[sid]
-        doc = " ".join(disc_tags.get(sid, []) + disc_genres.get(aid, [])).strip()
+        doc = _build_doc(disc_tags.get(sid, []), disc_genres.get(aid, []))
         if doc:
             disc_model_ids.append(sid)
             disc_documents.append(doc)
@@ -364,7 +387,7 @@ def knn_recommend(
     song_tags_map: dict[int, list[str]] = defaultdict(list)
     for song_id, tag_name in tag_rows:
         if tag_name:
-            song_tags_map[song_id].append(tag_name.lower().replace(" ", "_"))
+            song_tags_map[song_id].append(_norm_term(tag_name))
 
     # 2c — (artist_id, genres_json)
     artist_ids = list({aid for aid in song_id_to_artist.values() if aid})
@@ -377,7 +400,7 @@ def knn_recommend(
         ):
             try:
                 artist_genres[artist_id] = [
-                    g.lower().replace(" ", "_")
+                    _norm_term(g)
                     for g in json.loads(genres_json or "[]")
                     if g
                 ]
@@ -393,7 +416,7 @@ def knn_recommend(
         aid = song_id_to_artist[sid]
         tags = song_tags_map.get(sid, [])
         genres = artist_genres.get(aid, [])
-        doc = " ".join(tags + genres).strip()
+        doc = _build_doc(tags, genres)
         if doc:
             model_ids.append(sid)
             documents.append(doc)
@@ -481,8 +504,14 @@ def knn_recommend(
     }
 
     # ── Phase 5: build familiar candidate dicts ───────────────────────────────
-    cooccurrence   = _build_cooccurrence(db, user_id)
-    top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15]
+    # _build_cooccurrence does a full history scan + O(k²) Python loop — skip
+    # it entirely when familiar_n == 0 (100% discovery mode) because the
+    # co-occurrence boost is only applied to familiar candidates.
+    cooccurrence: dict = {}
+    top_anchor_ids: list = []
+    if familiar_n > 0:
+        cooccurrence   = _build_cooccurrence(db, user_id)
+        top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15]
 
     familiar_candidates: list[dict] = []
     for dist, song_id in zip(ranked_dists, ranked_ids):
