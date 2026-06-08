@@ -186,10 +186,12 @@ def _score_discovery_songs(
     whole listening-history id list into Python.  Returns up to *limit* dicts
     with keys ``song_id`` and ``similarity``.
     """
-    # Anti-join: enriched songs not in this user's history.
-    # We do NOT filter on spotify_id IS NOT NULL here — songs discovered via
-    # Last.fm are stored without a Spotify ID during fast inline discovery;
-    # the ID is resolved lazily when the user saves the playlist.
+    # Anti-join: enriched songs the user has never played — regardless of
+    # whether they know the artist.  This covers both cases the user wants:
+    #   • new songs from artists they already love (deep cuts / B-sides)
+    #   • songs from artists they've never heard of at all
+    # Both are valid discovery; the TF-IDF centroid score decides which surface
+    # first based on taste fit.
     disc_rows = (
         db.query(Song.id, Song.artist_id)
         .outerjoin(
@@ -198,7 +200,7 @@ def _score_discovery_songs(
             & (ListeningHistory.user_id == user_id),
         )
         .filter(
-            ListeningHistory.id.is_(None),         # not in user's history
+            ListeningHistory.id.is_(None),         # not this specific song in history
             Song.is_deleted.is_(False),
             Song.enrichment_status == "complete",  # has tags + genres from Last.fm
         )
