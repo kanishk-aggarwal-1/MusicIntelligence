@@ -649,12 +649,17 @@ def _feedback_adjustment(feedback_counts, *, context_type, familiarity_score, ra
     return adjustment, "; ".join(notes)
 
 
-def _human_reasons(song, *, tag_names, play_count, context_type, components, feedback_reason=None):
+def _human_reasons(song, *, tag_names, play_count, context_type, components, feedback_reason=None, is_discovery=False):
     reasons = []
     artist_name = song.artist.name if song.artist else None
     tags = [tag for tag in (tag_names or []) if tag]
 
-    if play_count >= 5 and artist_name:
+    if is_discovery or play_count == 0:
+        if artist_name:
+            reasons.append(f"new music — matched to your taste, not yet in your library")
+        else:
+            reasons.append("new music matched to your taste")
+    elif play_count >= 5 and artist_name:
         reasons.append(f"because you often play {artist_name}")
     elif play_count > 0:
         reasons.append("because it already fits your listening history")
@@ -699,6 +704,7 @@ def recommend_songs(
     discovery_store_limit: int | None = None,
     context_type: str | None = None,
     limit: int = 30,
+    discovery_ratio: float = 0.4,
 ):
 
     logger.info(
@@ -739,6 +745,7 @@ def recommend_songs(
         limit=limit,
         context_type=context_type,
         excluded_song_ids=excluded_song_ids,
+        discovery_ratio=discovery_ratio,
     )
 
     if not return_details:
@@ -790,6 +797,7 @@ def recommend_songs(
             context_type=context_type,
             components=components,
             feedback_reason=feedback_reason,
+            is_discovery=r.get("is_discovery", False),
         )
 
         items.append({

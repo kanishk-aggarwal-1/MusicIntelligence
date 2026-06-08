@@ -417,6 +417,11 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     requested_tracks = max(1, min(payload.max_tracks, 100))
     candidate_limit = max(30, min(requested_tracks * 4, 150))
 
+    # familiarity=1.0 → user wants only songs they already know → discovery_ratio=0
+    # familiarity=0.5 → mix (default) → discovery_ratio=0.5
+    # familiarity=0.0 → all new discoveries → discovery_ratio=1.0
+    _discovery_ratio = max(0.0, min(1.0, 1.0 - payload.familiarity))
+
     recommendation_result = recommend_songs(
         db,
         user_id,
@@ -426,6 +431,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
         allow_discovery=False,
         context_type=payload.context_type,
         limit=candidate_limit,
+        discovery_ratio=_discovery_ratio,
     )
 
     details = recommendation_result["items"]
