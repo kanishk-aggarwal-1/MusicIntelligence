@@ -163,6 +163,126 @@ def _temperature_sample(candidates: list, n: int, temperature: float) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Discovery helpers
+# ---------------------------------------------------------------------------
+
+# Maximum enriched non-history songs to score per request.  2 000 is fast
+# (one anti-join + two IN queries) and gives plenty of diversity.
+_DISCOVERY_POOL_CAP = 2_000
+
+
+def _score_discovery_songs(
+    db,
+    user_id: str,
+    vectorizer,          # already fitted TfidfVectorizer — DO NOT re-fit
+    centroid,            # shape (1, n_features)
+    excluded: set,       # song IDs to skip (never-show / disliked)
+    limit: int,
+) -> list[dict]:
+    """Score enriched songs *not* in the user's listening history against the
+    taste centroid built from their library.
+
+    Uses an SQL anti-join (LEFT OUTER JOIN + IS NULL) so it never loads the
+    whole listening-history id list into Python.  Returns up to *limit* dicts
+    with keys ``song_id`` and ``similarity``.
+    """
+    # Anti-join: enriched, Spotify-resolvable songs not in this user's history.
+    disc_rows = (
+        db.query(Song.id, Song.artist_id)
+        .outerjoin(
+            ListeningHistory,
+            (ListeningHistory.song_id == Song.id)
+            & (ListeningHistory.user_id == user_id),
+        )
+        .filter(
+            ListeningHistory.id.is_(None),         # not in user's history
+            Song.is_deleted.is_(False),
+            Song.enrichment_status == "complete",  # has tags + genres
+            Song.spotify_id.is_not(None),          # resolvable / playable
+        )
+        .order_by(Song.popularity_score.desc().nullslast())
+        .limit(_DISCOVERY_POOL_CAP)
+        .all()
+    )
+
+    if not disc_rows:
+        return []
+
+    disc_id_to_artist: dict[int, int] = {
+        row_id: row_artist_id
+        for row_id, row_artist_id in disc_rows
+        if row_id not in excluded
+    }
+
+    if not disc_id_to_artist:
+        return []
+
+    disc_ids = list(disc_id_to_artist.keys())
+
+    # (song_id, tag_name) pairs
+    disc_tag_rows = (
+        db.query(SongTag.song_id, Tag.name)
+        .join(Tag, Tag.id == SongTag.tag_id)
+        .filter(SongTag.song_id.in_(disc_ids))
+        .all()
+    )
+    disc_tags: dict[int, list[str]] = defaultdict(list)
+    for sid, tag_name in disc_tag_rows:
+        if tag_name:
+            disc_tags[sid].append(tag_name.lower().replace(" ", "_"))
+
+    # (artist_id, genres_json)
+    disc_artist_ids = list({aid for aid in disc_id_to_artist.values() if aid})
+    disc_genres: dict[int, list[str]] = {}
+    if disc_artist_ids:
+        for artist_id, genres_json in (
+            db.query(Artist.id, Artist.genres)
+            .filter(Artist.id.in_(disc_artist_ids))
+            .all()
+        ):
+            try:
+                disc_genres[artist_id] = [
+                    g.lower().replace(" ", "_")
+                    for g in json.loads(genres_json or "[]")
+                    if g
+                ]
+            except Exception:
+                pass
+
+    # Build documents (same vocabulary encoding as the fitted vectorizer)
+    disc_model_ids: list[int] = []
+    disc_documents: list[str] = []
+    for sid in disc_ids:
+        aid = disc_id_to_artist[sid]
+        doc = " ".join(disc_tags.get(sid, []) + disc_genres.get(aid, [])).strip()
+        if doc:
+            disc_model_ids.append(sid)
+            disc_documents.append(doc)
+
+    if not disc_model_ids:
+        return []
+
+    # Transform through the *already fitted* vectorizer — never re-fit.
+    # OOV tokens score zero on unknown features but shared vocabulary
+    # (genre terms, common tags) still provides meaningful signal.
+    try:
+        disc_matrix = vectorizer.transform(disc_documents)  # sparse (N × n_features)
+    except Exception:
+        return []
+
+    # Cosine similarity against the user's centroid
+    sims = np.asarray(disc_matrix.dot(centroid.T)).flatten()
+
+    top_n   = min(len(disc_model_ids), limit)
+    top_idx = np.argsort(sims)[::-1][:top_n]
+
+    return [
+        {"song_id": disc_model_ids[i], "similarity": float(sims[i])}
+        for i in top_idx
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -173,14 +293,22 @@ def knn_recommend(
     context_type: str | None = None,
     excluded_song_ids: set | None = None,
     temperature: float = 0.35,
+    discovery_ratio: float = 0.4,
 ) -> list[dict]:
     """
-    Return up to `limit` recommended songs ranked by TF-IDF cosine similarity to
-    the user's taste centroid, boosted by session co-occurrence.
+    Return up to `limit` recommended songs ranked by TF-IDF cosine similarity
+    to the user's taste centroid, boosted by session co-occurrence.
+
+    ``discovery_ratio`` (0.0–1.0) controls how many results come from songs
+    the user has *never* listened to vs. songs already in their library:
+      - 0.0  → all familiar (songs from listening history)
+      - 0.4  → 40 % new discoveries, 60 % familiar  (default)
+      - 1.0  → all new discoveries
 
     Each result dict contains:
         song, score, tfidf_similarity, co_occurrence_boost,
-        play_count, familiarity_score, tags, algorithm_version
+        play_count, familiarity_score, tags, algorithm_version,
+        is_discovery (bool)
     """
     excluded = excluded_song_ids or set()
 
@@ -304,19 +432,38 @@ def knn_recommend(
             except Exception:
                 pass
 
-    n_neighbors = min(len(model_ids), max(limit * 4, 60))
+    # ── Phase 3.5: compute pool quotas ──────────────────────────────────────
+    _disc_ratio  = max(0.0, min(1.0, discovery_ratio))
+    discovery_n  = round(limit * _disc_ratio)
+    familiar_n   = limit - discovery_n
+
+    # ── Phase 3.6: KNN over history songs (familiar pool) ────────────────────
+    n_neighbors = min(len(model_ids), max(familiar_n * 6, 60))
     knn = NearestNeighbors(n_neighbors=n_neighbors, metric="cosine", algorithm="brute")
     knn.fit(tfidf_matrix)
     distances, indices = knn.kneighbors(centroid)
 
-    # Candidate song IDs ranked by cosine similarity
     ranked_ids   = [model_ids[i] for i in indices[0]]
     ranked_dists = list(distances[0])
 
-    # ── Phase 4: load full Song ORM objects for candidates ONLY (~50-100) ───
-    # Everything before this point used only int/str primitives.
-    n_fetch = min(len(ranked_ids), limit * 6)
-    fetch_ids = ranked_ids[:n_fetch]
+    # ── Phase 3.7: score discovery pool (songs NOT in user's history) ────────
+    disc_scored: list[dict] = []
+    if discovery_n > 0:
+        disc_scored = _score_discovery_songs(
+            db,
+            user_id,
+            vectorizer,
+            centroid,
+            excluded=excluded,
+            limit=discovery_n * 6,   # over-fetch for temperature sampling
+        )
+
+    # ── Phase 4: load full ORM objects for BOTH pools (single query) ─────────
+    n_familiar_fetch = min(len(ranked_ids), max(familiar_n * 6, 60))
+    familiar_fetch_ids = ranked_ids[:n_familiar_fetch]
+    disc_fetch_ids     = [item["song_id"] for item in disc_scored]
+
+    all_fetch_ids = list(dict.fromkeys(familiar_fetch_ids + disc_fetch_ids))  # dedup, preserve order
 
     songs_by_id = {
         s.id: s
@@ -325,41 +472,94 @@ def knn_recommend(
             joinedload(Song.artist),
             joinedload(Song.song_tags).joinedload(SongTag.tag),
         )
-        .filter(Song.id.in_(fetch_ids))
+        .filter(Song.id.in_(all_fetch_ids))
         .all()
     }
 
-    # ── Phase 5: score + build candidate dicts ───────────────────────────────
+    # ── Phase 5: build familiar candidate dicts ───────────────────────────────
     cooccurrence   = _build_cooccurrence(db, user_id)
     top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15]
 
-    candidates: list[dict] = []
+    familiar_candidates: list[dict] = []
     for dist, song_id in zip(ranked_dists, ranked_ids):
         song = songs_by_id.get(song_id)
         if not song:
             continue
         tfidf_sim  = float(1.0 - dist)
         play_count = play_counts.get(song_id, 0)
-        familiarity = (
+        familiarity_score = (
             min(1.0, log(play_count + 1) / log(max_plays + 1)) if max_plays > 0 else 0.0
         )
         co_count = sum(cooccurrence.get(song_id, {}).get(a, 0) for a in top_anchor_ids)
         co_boost = min(0.15, co_count * 0.015)
         score    = min(1.0, tfidf_sim + co_boost)
 
-        candidates.append({
-            "song":               song,
-            "score":              score,
-            "tfidf_similarity":   round(tfidf_sim, 4),
+        familiar_candidates.append({
+            "song":                song,
+            "score":               score,
+            "tfidf_similarity":    round(tfidf_sim, 4),
             "co_occurrence_boost": round(co_boost, 4),
-            "play_count":         play_count,
-            "familiarity_score":  round(familiarity, 4),
-            "tags":               [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
-            "algorithm_version":  ALGORITHM_VERSION,
+            "play_count":          play_count,
+            "familiarity_score":   round(familiarity_score, 4),
+            "tags":                [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
+            "algorithm_version":   ALGORITHM_VERSION,
+            "is_discovery":        False,
         })
 
-    if len(candidates) > limit:
-        candidates = _temperature_sample(candidates, min(len(candidates), limit * 2), temperature)
-    candidates.sort(key=lambda x: x["score"], reverse=True)
+    # ── Phase 5.5: build discovery candidate dicts ────────────────────────────
+    disc_candidates: list[dict] = []
+    for item in disc_scored:
+        song = songs_by_id.get(item["song_id"])
+        if not song:
+            continue
+        tfidf_sim = item["similarity"]
+        disc_candidates.append({
+            "song":                song,
+            "score":               tfidf_sim,
+            "tfidf_similarity":    round(tfidf_sim, 4),
+            "co_occurrence_boost": 0.0,
+            "play_count":          0,
+            "familiarity_score":   0.0,
+            "tags":                [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
+            "algorithm_version":   ALGORITHM_VERSION,
+            "is_discovery":        True,
+        })
 
-    return candidates[:limit]
+    # ── Phase 6: temperature sample each pool, then interleave ───────────────
+    # Sample familiar pool
+    if len(familiar_candidates) > familiar_n:
+        familiar_candidates = _temperature_sample(
+            familiar_candidates, min(len(familiar_candidates), familiar_n * 2), temperature
+        )
+    familiar_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Sample discovery pool
+    if len(disc_candidates) > discovery_n:
+        disc_candidates = _temperature_sample(
+            disc_candidates, min(len(disc_candidates), discovery_n * 2), temperature
+        )
+    disc_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Enforce quotas; if one pool runs short, backfill from the other
+    actual_disc_n     = min(len(disc_candidates), discovery_n)
+    spare_from_disc   = discovery_n - actual_disc_n            # unfulfilled discovery slots
+    actual_familiar_n = min(len(familiar_candidates), familiar_n + spare_from_disc)
+
+    fam_final  = familiar_candidates[:actual_familiar_n]
+    disc_final = disc_candidates[:actual_disc_n]
+
+    # Interleave familiar and discovery so new tracks appear throughout the
+    # playlist rather than being clumped at the end.
+    output: list[dict] = []
+    fi = iter(fam_final)
+    di = iter(disc_final)
+    f_item, d_item = next(fi, None), next(di, None)
+    while len(output) < limit and (f_item or d_item):
+        if f_item:
+            output.append(f_item)
+            f_item = next(fi, None)
+        if d_item and len(output) < limit:
+            output.append(d_item)
+            d_item = next(di, None)
+
+    return output[:limit]
