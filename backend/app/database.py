@@ -68,6 +68,18 @@ def run_startup_migrations():
         table_names = set(inspector.get_table_names())
 
         with engine.begin() as conn:
+            # On PostgreSQL, acquire an advisory lock so that concurrent Render
+            # instances (zero-downtime deploys spin up 2 processes at once) don't
+            # both try to ALTER TABLE simultaneously and deadlock each other.
+            # pg_try_advisory_xact_lock is released automatically at transaction
+            # end. If another instance holds it, skip — it will handle migrations.
+            if dialect == "postgresql":
+                got_lock = conn.execute(
+                    text("SELECT pg_try_advisory_xact_lock(987654321)")
+                ).scalar()
+                if not got_lock:
+                    logger.info("Startup migrations skipped — another instance is running them")
+                    return
             if "artists" in table_names:
                 cols = _column_type_map(inspector, "artists")
                 if dialect == "postgresql":

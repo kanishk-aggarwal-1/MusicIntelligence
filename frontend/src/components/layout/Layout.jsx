@@ -24,7 +24,7 @@ function DemoBanner() {
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-2 bg-brand/10 border-b border-brand/20">
       <p className="text-brand text-xs sm:text-sm min-w-0">
-        You're viewing a demo account — sign in with Spotify to use all features.
+        You&apos;re viewing a demo account &mdash; sign in with Spotify to use all features.
       </p>
     </div>
   )
