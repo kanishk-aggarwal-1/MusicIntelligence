@@ -338,55 +338,57 @@ def seed():
         db.commit()
         print(f"  OK {len(ARTISTS_AND_SONGS)} artists, {len(song_id_map)} songs ready ({total_songs} new)")
 
-        # 4. Clear existing demo history and re-seed
-        deleted = db.query(ListeningHistory).filter(ListeningHistory.user_id == DEMO_USER_ID).delete(synchronize_session=False)
-        db.commit()
-        if deleted:
-            print(f"  OK Cleared {deleted} old demo history rows")
+        # 4. Find the real user — the non-demo account with the most history
+        from sqlalchemy import func as _func
+        real_user_row = (
+            db.query(ListeningHistory.user_id, _func.count(ListeningHistory.id).label("n"))
+            .filter(ListeningHistory.user_id != DEMO_USER_ID)
+            .group_by(ListeningHistory.user_id)
+            .order_by(_func.count(ListeningHistory.id).desc())
+            .first()
+        )
+        if not real_user_row:
+            print("  WARNING: no real user history found — skipping history copy")
+        else:
+            real_user_id = real_user_row[0]
+            real_count   = real_user_row[1]
+            print(f"  OK found real user {real_user_id!r} with {real_count:,} history rows")
 
-        # 5. Generate listening history
-        # Artists played more often get higher play weights
-        PLAY_WEIGHTS = {
-            "The Weeknd": 45,
-            "Kendrick Lamar": 40,
-            "Arctic Monkeys": 38,
-            "Frank Ocean": 35,
-            "Tame Impala": 32,
-            "Tyler, The Creator": 30,
-            "SZA": 28,
-            "Mac Miller": 25,
-            "Radiohead": 22,
-            "J. Cole": 30,
-            "Bon Iver": 18,
-            "Daniel Caesar": 20,
-            "James Blake": 15,
-            "Childish Gambino": 25,
-            "Rex Orange County": 20,
-        }
+            # 5. Clear existing demo history then bulk-copy from real user
+            deleted = db.query(ListeningHistory).filter(
+                ListeningHistory.user_id == DEMO_USER_ID
+            ).delete(synchronize_session=False)
+            db.commit()
+            if deleted:
+                print(f"  OK cleared {deleted:,} old demo history rows")
 
-        all_history_rows = []
-        for artist_data in ARTISTS_AND_SONGS:
-            base = PLAY_WEIGHTS.get(artist_data["name"], 20)
-            for title, spotify_id in artist_data["songs"]:
-                song_id = song_id_map[spotify_id]
-                # Each song gets base ± 30% plays
-                plays = max(3, int(base * random.uniform(0.7, 1.3)))
-                all_history_rows.extend(_generate_history(song_id, DEMO_USER_ID, plays))
+            # Copy in chunks to avoid huge single INSERT
+            CHUNK = 5000
+            offset = 0
+            inserted = 0
+            while True:
+                rows = (
+                    db.query(ListeningHistory)
+                    .filter(ListeningHistory.user_id == real_user_id)
+                    .order_by(ListeningHistory.id)
+                    .offset(offset)
+                    .limit(CHUNK)
+                    .all()
+                )
+                if not rows:
+                    break
+                for r in rows:
+                    db.add(ListeningHistory(
+                        user_id=DEMO_USER_ID,
+                        song_id=r.song_id,
+                        played_at=r.played_at,
+                    ))
+                db.commit()
+                inserted += len(rows)
+                print(f"  ... copied {inserted:,} / {real_count:,} rows", end="\r")
+                offset += CHUNK
 
-        # Deduplicate on (song_id, played_at) — same as the real import logic
-        seen: set[tuple] = set()
-        deduped = []
-        for row in all_history_rows:
-            key = (row["song_id"], row["played_at"])
-            if key not in seen:
-                seen.add(key)
-                deduped.append(row)
-
-        for row in deduped:
-            db.add(ListeningHistory(**row))
-
-        db.commit()
-        print(f"  OK {len(deduped)} listening history rows inserted")
+            print(f"  OK {inserted:,} listening history rows copied          ")
         print()
         print(f"Demo seed complete. User ID: {DEMO_USER_ID}")
         print("Remember to set DEMO_USER_ID in your backend .env / Render env vars.")
