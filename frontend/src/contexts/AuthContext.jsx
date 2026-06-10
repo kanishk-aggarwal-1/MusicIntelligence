@@ -28,6 +28,13 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('musicintel:auth-expired', onAuthExpired)
   }, [])
 
+  async function demoLogin() {
+    try { await api.post('/user/logout') } catch {}
+    const data = await api.post('/user/demo-login')
+    setUser(data)
+    return data
+  }
+
   async function login({ skipLogout = false } = {}) {
     if (!skipLogout) {
       try { await api.post('/user/logout') } catch {}
@@ -105,7 +112,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, serverWarming, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, serverWarming, login, demoLogin, logout }}>
       {children}
     </AuthContext.Provider>
   )

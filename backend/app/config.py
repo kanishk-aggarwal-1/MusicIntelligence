@@ -40,6 +40,10 @@ class Settings:
     # Secret expected in X-Cron-Secret header for /ops/sync-all.
     CRON_SECRET = os.getenv("CRON_SECRET")
 
+    # Demo mode — set DEMO_USER_ID in env to enable the guest demo account.
+    # This user_id must have seeded listening history in the database.
+    DEMO_USER_ID = os.getenv("DEMO_USER_ID", "musicintel_demo")
+
 
     _default_local_origins = [
         "http://127.0.0.1:5173",
