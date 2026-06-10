@@ -5,9 +5,10 @@ import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
 
 export default function Login() {
-  const { login, serverWarming } = useAuth()
+  const { login, demoLogin, serverWarming } = useAuth()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
+  const [demoLoading, setDemoLoading] = useState(false)
   const [error, setError] = useState(null)
   const configError = !api.configured
 
@@ -22,6 +23,20 @@ export default function Login() {
       setError(e.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleDemoLogin() {
+    if (configError) return
+    setDemoLoading(true)
+    setError(null)
+    try {
+      await demoLogin()
+      navigate('/dashboard')
+    } catch (e) {
+      setError(e.message || 'Demo login failed.')
+    } finally {
+      setDemoLoading(false)
     }
   }
 
@@ -42,7 +57,7 @@ export default function Login() {
 
         <button
           onClick={handleLogin}
-          disabled={loading || configError}
+          disabled={loading || demoLoading || configError}
           className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl bg-brand text-black font-semibold text-sm hover:bg-green-400 transition-colors disabled:opacity-60"
         >
           {loading ? (
@@ -53,6 +68,21 @@ export default function Login() {
             </svg>
           )}
           {loading ? 'Opening Spotify...' : 'Connect with Spotify'}
+        </button>
+
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-zinc-800" />
+          <span className="text-zinc-600 text-xs">or</span>
+          <div className="flex-1 h-px bg-zinc-800" />
+        </div>
+
+        <button
+          onClick={handleDemoLogin}
+          disabled={loading || demoLoading || configError}
+          className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-zinc-800 text-zinc-300 font-medium text-sm hover:bg-zinc-700 transition-colors disabled:opacity-60 border border-zinc-700"
+        >
+          {demoLoading ? <Spinner size="sm" /> : null}
+          {demoLoading ? 'Loading demo...' : 'Try Demo (no sign-in required)'}
         </button>
 
         {serverWarming && !configError && (

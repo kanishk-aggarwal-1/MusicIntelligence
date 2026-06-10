@@ -35,6 +35,7 @@ from ..services.playlist_schedule_service import (
     mark_ran,
     serialize_schedule,
 )
+from ..config import settings
 from ..services import live_metrics_service
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import recommend_songs
@@ -786,6 +787,8 @@ def post_schedule(payload: ScheduleCreatePayload, request: Request, db: Session 
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    if user_id == settings.DEMO_USER_ID:
+        raise HTTPException(status_code=403, detail="Not available in demo mode")
 
     if payload.cadence not in VALID_CADENCES:
         raise HTTPException(status_code=400, detail=f"Unknown cadence. Use one of: {', '.join(sorted(VALID_CADENCES))}")
@@ -828,6 +831,8 @@ def remove_schedule(schedule_id: int, request: Request, db: Session = Depends(ge
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    if user_id == settings.DEMO_USER_ID:
+        raise HTTPException(status_code=403, detail="Not available in demo mode")
 
     if not delete_schedule(db, schedule_id=schedule_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="Schedule not found")

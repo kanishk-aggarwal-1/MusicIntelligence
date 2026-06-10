@@ -53,6 +53,12 @@ logger = logging.getLogger(__name__)
 IMPORT_RATE_LIMIT_NAMESPACE = "import_history_job"
 
 
+def _require_non_demo(user_id: str | None):
+    """Raise 403 if the request is from the demo account."""
+    if user_id and user_id == settings.DEMO_USER_ID:
+        raise HTTPException(status_code=403, detail="Not available in demo mode")
+
+
 def _allowed_frontend_origin(origin: str | None):
     cleaned = (origin or "").strip().rstrip("/")
     if cleaned and cleaned in settings.BACKEND_CORS_ORIGINS:
@@ -94,6 +100,37 @@ def _login_popup_response(*, success: bool, message: str, frontend_origin: str, 
     """,
         status_code=status_code,
     )
+
+
+@router.post("/demo-login")
+def demo_login(db: Session = Depends(get_db)):
+    """Log in as the demo account — no Spotify OAuth required."""
+    demo_user_id = settings.DEMO_USER_ID
+    if not demo_user_id:
+        raise HTTPException(status_code=404, detail="Demo mode is not enabled on this server")
+    # Upsert a UserSession row so load_user_session can resolve the user_id.
+    # token is set to a placeholder and expires_at to the past so the session is
+    # recognised as "logged in" but spotify_connected=False (no valid token).
+    from ..time_utils import utcnow_naive
+    from datetime import timedelta
+    from ..models.user_session import UserSession as _UserSession
+    past = utcnow_naive() - timedelta(days=365)
+    existing = db.query(_UserSession).filter(_UserSession.user_id == demo_user_id).first()
+    if existing:
+        existing.token_expires_at = past
+        existing.updated_at = utcnow_naive()
+    else:
+        db.add(_UserSession(user_id=demo_user_id, token="__demo__", token_expires_at=past))
+    db.commit()
+    logger.info("demo.login user_id=%s", demo_user_id)
+    response = JSONResponse({
+        "logged_in": True,
+        "user_id": demo_user_id,
+        "spotify_connected": False,
+        "is_demo": True,
+    })
+    response.set_cookie(value=create_session_cookie_value(demo_user_id), **get_session_cookie_options())
+    return response
 
 
 @router.get("/login")
@@ -188,6 +225,7 @@ def session_status(request: Request, db: Session = Depends(get_db)):
         "logged_in": bool(user_id),
         "spotify_connected": bool(session.get("token") and user_id),
         "user_id": user_id,
+        "is_demo": bool(user_id and user_id == settings.DEMO_USER_ID),
     }
 
 
@@ -249,8 +287,21 @@ def get_profile(request: Request, db: Session = Depends(get_db)):
     session = load_request_user_session(db, request)
     token = session.get("token")
     user_id = session.get("user_id")
-    if not token or not user_id:
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+
+    # Demo user has no Spotify token — return a synthetic profile.
+    if user_id == settings.DEMO_USER_ID:
+        return {
+            "user_id": user_id,
+            "display_name": "Demo User",
+            "email": None,
+            "country": "US",
+            "followers": 0,
+            "images": [],
+            "product": None,
+            "spotify_url": None,
+        }
 
     spotify_user: dict = {}
     try:
@@ -312,6 +363,7 @@ def delete_user_data(request: Request, db: Session = Depends(get_db)):
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    _require_non_demo(user_id)
 
     deleted: dict[str, int] = {}
 
@@ -373,6 +425,7 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
 
     if not token or not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    _require_non_demo(user_id)
     # Shared namespace with sync_history_job so both paths count against the same budget.
     enforce_rate_limit(request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60)
 
@@ -459,6 +512,7 @@ def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Se
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    _require_non_demo(user_id)
 
     # Check for a running job first — returning it is free and must not burn tokens.
     existing = get_active_job(db, user_id=user_id, job_type="sync_history")
@@ -485,6 +539,7 @@ def backfill_metadata(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    _require_non_demo(user_id)
     enforce_rate_limit(request, namespace="backfill", user_id=user_id, limit=5, window_seconds=60)
 
     result = backfill_missing_metadata(
@@ -910,6 +965,7 @@ async def import_history_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    _require_non_demo(user_id)
 
     cleanup = _clear_previous_import_requests(db, user_id)
     enforce_rate_limit(request, namespace=IMPORT_RATE_LIMIT_NAMESPACE, user_id=user_id, limit=20, window_seconds=600)
@@ -985,6 +1041,7 @@ def backfill_metadata_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    _require_non_demo(user_id)
 
     # Return existing job without consuming a rate-limit token.
     existing = get_active_job(db, user_id=user_id, job_type="backfill_metadata")

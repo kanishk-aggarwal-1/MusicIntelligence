@@ -18,12 +18,25 @@ const PAGE_TITLES = {
   '/settings':  'Settings',
 }
 
+function DemoBanner() {
+  const { user } = useAuth()
+  if (!user?.is_demo) return null
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-2 bg-brand/10 border-b border-brand/20">
+      <p className="text-brand text-xs sm:text-sm min-w-0">
+        You're viewing a demo account — sign in with Spotify to use all features.
+      </p>
+    </div>
+  )
+}
+
 function ReconnectBanner() {
   const { user, login } = useAuth()
   const [reconnecting, setReconnecting] = useState(false)
 
   // Show only when the app session is valid but the Spotify token has expired.
-  if (!user?.logged_in || user?.spotify_connected) return null
+  // Suppress for demo users — they intentionally have no Spotify token.
+  if (!user?.logged_in || user?.spotify_connected || user?.is_demo) return null
 
   async function handleReconnect() {
     setReconnecting(true)
@@ -106,6 +119,7 @@ export default function Layout({ children }) {
       )}
 
       <main className={`flex-1 overflow-auto pt-14 md:pt-0 ${current ? 'pb-24' : ''}`}>
+        <DemoBanner />
         <ReconnectBanner />
         {children}
       </main>

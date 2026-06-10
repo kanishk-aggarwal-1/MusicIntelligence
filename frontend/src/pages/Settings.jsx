@@ -32,7 +32,8 @@ function ProfileSkeleton() {
 }
 
 export default function Settings() {
-  const { logout } = useAuth()
+  const { logout, user } = useAuth()
+  const isDemo = user?.is_demo
   const navigate = useNavigate()
   const [profile, setProfile]       = useState(null)
   const [profileLoading, setPL]     = useState(true)
@@ -126,8 +127,8 @@ export default function Settings() {
         </button>
       </Section>
 
-      {/* Danger zone */}
-      <Section title="Delete My Data" description="Permanently remove all your listening history, playlists, goals, and session data. Songs and artists are shared and will not be deleted. This cannot be undone.">
+      {/* Danger zone — hidden for demo account */}
+      {!isDemo && <Section title="Delete My Data" description="Permanently remove all your listening history, playlists, goals, and session data. Songs and artists are shared and will not be deleted. This cannot be undone.">
         {!deleteConfirm ? (
           <button
             onClick={() => setDC(true)}
@@ -161,7 +162,7 @@ export default function Settings() {
             </div>
           </div>
         )}
-      </Section>
+      </Section>}
     </div>
   )
 }
