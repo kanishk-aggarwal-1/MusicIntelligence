@@ -3,6 +3,7 @@ import logging
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 
@@ -37,8 +38,10 @@ _connect_args = (
 
 engine = create_engine(
     settings.DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=300,
+    # NullPool: connections are opened per-request and closed immediately.
+    # This lets Neon's compute auto-suspend between requests rather than
+    # staying awake to serve idle pool connections 24/7.
+    poolclass=NullPool,
     connect_args=_connect_args,
 )
 
