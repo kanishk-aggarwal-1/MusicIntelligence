@@ -13,6 +13,7 @@ def _use_test_db(monkeypatch, testing_session_local, test_engine):
     monkeypatch.setattr(lm, "engine", test_engine)
     monkeypatch.setattr(lm, "_MetricSession", testing_session_local)
     monkeypatch.setattr(lm, "_metric_engine", test_engine)
+    stats_routes._metrics_cache.clear()
 
 
 def test_counters_accumulate_atomically(monkeypatch, testing_session_local, test_engine):
@@ -95,3 +96,23 @@ def test_stats_endpoint_is_public_and_non_sensitive(monkeypatch, testing_session
     text = resp.text.lower()
     for forbidden in ("token", "refresh", "secret", "password", "email", "user_id"):
         assert forbidden not in text
+
+
+def test_stats_and_metrics_share_database_read_cache(monkeypatch, testing_session_local, test_engine, client_factory):
+    _use_test_db(monkeypatch, testing_session_local, test_engine)
+    lm.increment(lm.CACHE_HITS, 2)
+    original_get_counters = lm.get_counters
+    calls = 0
+
+    def counted_get_counters():
+        nonlocal calls
+        calls += 1
+        return original_get_counters()
+
+    monkeypatch.setattr(lm, "get_counters", counted_get_counters)
+    client = client_factory(stats_routes.router)
+
+    assert client.get("/stats").status_code == 200
+    assert client.get("/stats").status_code == 200
+    assert client.get("/metrics").status_code == 200
+    assert calls == 1

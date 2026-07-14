@@ -102,7 +102,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
         setter(prev => prev ? { ...prev, status: 'failed', error: e.message, message: 'Lost connection while checking job status' } : prev)
         clearTimer(kind)
       }
-    }, 1500)
+    }, 5000)
   }, [clearTimer, onEnrichmentFinished, onSyncFinished, refreshSyncStatus])
 
   const resumeJob = useCallback((job) => {

@@ -158,9 +158,9 @@ def _pct(numerator: float, denominator: float) -> float:
     return round((numerator / denominator) * 100, 1)
 
 
-def build_stats() -> dict:
+def build_stats(counters: dict[str, int] | None = None) -> dict:
     """Shape the raw counters into the public, non-sensitive /stats payload."""
-    c = get_counters()
+    c = counters if counters is not None else get_counters()
     hits = c[CACHE_HITS]
     misses = c[CACHE_MISSES]
     cache_total = hits + misses

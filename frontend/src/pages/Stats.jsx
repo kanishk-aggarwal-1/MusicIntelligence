@@ -3,8 +3,8 @@ import { Activity, Database, Gauge, ListMusic, Radio, RefreshCw, Sparkles, Zap }
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { api } from '../lib/api'
 
-const POLL_MS = 5000
-const MAX_POINTS = 60 // ~5 minutes of history at 5s cadence
+const POLL_MS = 60_000
+const MAX_POINTS = 60 // up to one hour of visible-tab history
 
 function StatCard({ icon: Icon, label, value, sub, accent = 'text-brand' }) {
   return (
@@ -26,7 +26,7 @@ function HitRateChart({ data }) {
     <div className="bg-zinc-900 rounded-xl p-5 border border-zinc-800">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-white font-semibold">Cache hit rate over time</h2>
-        <span className="text-zinc-500 text-xs">updates every 5s</span>
+        <span className="text-zinc-500 text-xs">updates every minute</span>
       </div>
       <div className="h-56">
         {data.length < 2 ? (
@@ -80,7 +80,9 @@ export default function Stats() {
     }
 
     poll()
-    timerRef.current = setInterval(poll, POLL_MS)
+    timerRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') poll()
+    }, POLL_MS)
     return () => { cancelled = true; if (timerRef.current) clearInterval(timerRef.current) }
   }, [])
 
