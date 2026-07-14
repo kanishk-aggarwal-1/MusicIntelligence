@@ -6,12 +6,38 @@ GET /metrics — Prometheus exposition format (powers Grafana / scraping).
 Both endpoints expose only non-sensitive cumulative aggregates — counts and
 rates, never tokens or PII. Safe to expose publicly on the deployed app.
 """
+import threading
+import time
+
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
-from ..services.live_metrics_service import CACHE_HITS, CACHE_MISSES, LASTFM_CALLS, PLAYLIST_TRACKS_REQUESTED, PLAYLIST_TRACKS_RESOLVED, PLAYLISTS_GENERATED, SPOTIFY_CALLS, TRACKS_ENRICHED, TRACKS_SYNCED, build_stats, get_counters
+from ..services import live_metrics_service
+from ..services.live_metrics_service import CACHE_HITS, CACHE_MISSES, LASTFM_CALLS, PLAYLIST_TRACKS_REQUESTED, PLAYLIST_TRACKS_RESOLVED, PLAYLISTS_GENERATED, SPOTIFY_CALLS, TRACKS_ENRICHED, TRACKS_SYNCED
 
 router = APIRouter(tags=["Stats"])
+
+# Monitoring scrapes should not keep serverless Postgres awake continuously.
+# Operational counters can safely be a few minutes behind live traffic.
+METRICS_CACHE_TTL_SECONDS = 10 * 60
+_metrics_cache: dict[int, tuple[float, dict]] = {}
+_metrics_cache_lock = threading.Lock()
+
+
+def _cached_counters() -> dict:
+    key = id(live_metrics_service.engine)
+    now = time.monotonic()
+    cached = _metrics_cache.get(key)
+    if cached and now - cached[0] < METRICS_CACHE_TTL_SECONDS:
+        return cached[1]
+    with _metrics_cache_lock:
+        cached = _metrics_cache.get(key)
+        if cached and now - cached[0] < METRICS_CACHE_TTL_SECONDS:
+            return cached[1]
+        counters = live_metrics_service.get_counters()
+        _metrics_cache.clear()
+        _metrics_cache[key] = (now, counters)
+        return counters
 
 _PROM_HELP = {
     CACHE_HITS:                "musicintel_cache_hits_total",
@@ -28,13 +54,13 @@ _PROM_HELP = {
 
 @router.get("/stats")
 def public_stats():
-    return build_stats()
+    return live_metrics_service.build_stats(_cached_counters())
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
 def prometheus_metrics():
     """Prometheus text exposition format for scraping by Prometheus / Grafana."""
-    counters = get_counters()
+    counters = _cached_counters()
     lines = []
     for counter_name, prom_name in _PROM_HELP.items():
         lines.append(f"# HELP {prom_name} Cumulative count from live traffic")

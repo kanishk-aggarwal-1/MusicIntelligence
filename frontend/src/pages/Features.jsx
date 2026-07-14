@@ -166,7 +166,7 @@ function ImportSection() {
         } : prev)
         if (!transient || pollFailuresRef.current >= 40) clearInterval(t)
       }
-    }, 800)
+    }, 5000)
     return () => clearInterval(t)
   }, [job?.id, job?.status])
 
@@ -339,15 +339,6 @@ export default function Features() {
     }
   }, [pendingCount, retryPartial, retryFailed])
 
-  // Keep the Render free-tier server awake while enrichment is in progress.
-  // Ping every 20 s (browsers throttle hidden-tab timers to ~1 min, so use
-  // a short base interval to still fire every ~1 min when backgrounded).
-  useEffect(() => {
-    if (!autoEnrich) return
-    const hb = setInterval(() => api.get('/stats').catch(() => {}), 20_000)
-    return () => clearInterval(hb)
-  }, [autoEnrich])
-
   // Page Visibility API: when the user switches back to this tab, immediately
   // re-check the job. Browsers throttle timers when tabs are hidden, so the
   // 1.5 s poll can slow to 1 min+. If the job died while the tab was in the
@@ -431,7 +422,7 @@ export default function Features() {
       } catch (e) {
         setBackfillPoll({ error: e.message })
       }
-    }, 1500)
+    }, 5000)
 
     setBackfillPoll({ active: true })
     return () => clearInterval(timer)

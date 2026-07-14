@@ -168,7 +168,7 @@ function DiscoverSection() {
               clearInterval(timer)
               if (!cancelled) setLoading(false)
             }
-          }, 1500)
+          }, 5000)
         } else {
           setItems(d.items || [])
           setLoading(false)
