@@ -181,6 +181,7 @@ def serialize_generated_playlist(record: GeneratedPlaylist, include_tracks: bool
                 "final_score": round(float(track.final_score or 0), 4),
                 "score_breakdown": _loads(track.score_breakdown_json) or {},
                 "explanation": _loads(track.explanation_json) or {},
+                "is_pinned": bool(track.is_pinned),
                 "song": {
                     "title": track.song.title if track.song else None,
                     "artist": track.song.artist.name if track.song and track.song.artist else None,

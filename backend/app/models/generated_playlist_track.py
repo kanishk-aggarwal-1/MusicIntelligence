@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Text
 from sqlalchemy.orm import relationship
 
 from ..database import Base
@@ -15,6 +15,7 @@ class GeneratedPlaylistTrack(Base):
     final_score = Column(Float, nullable=False, default=0)
     score_breakdown_json = Column(Text)
     explanation_json = Column(Text)
+    is_pinned = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=utcnow_naive, nullable=False)
 
     generated_playlist = relationship("GeneratedPlaylist", back_populates="tracks")

@@ -167,6 +167,9 @@ def get_stats(
     )
 
     total_plays = base_history.count()
+    total_ms = base_history.with_entities(func.sum(ListeningHistory.ms_played)).scalar() or 0
+    known_skip_rows = base_history.filter(ListeningHistory.skipped.is_not(None)).count()
+    skipped_rows = base_history.filter(ListeningHistory.skipped.is_(True)).count()
 
     compare_payload = None
     if compare_previous:
@@ -211,6 +214,8 @@ def get_stats(
     return {
         "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat(), "days": safe_days},
         "total_plays": int(total_plays),
+        "minutes_listened": round(int(total_ms) / 60000),
+        "skip_rate_percent": round((skipped_rows / known_skip_rows) * 100, 1) if known_skip_rows else None,
         "total_artists": int(total_artists),
         "comparison": compare_payload,
         "top_artists": top_artists,

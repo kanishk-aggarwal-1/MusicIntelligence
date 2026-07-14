@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ExternalLink, LogOut, Trash2, User } from 'lucide-react'
+import { Download, ExternalLink, LogOut, RotateCcw, Trash2, User, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 import Spinner from '../components/ui/Spinner'
@@ -32,7 +32,7 @@ function ProfileSkeleton() {
 }
 
 export default function Settings() {
-  const { logout, user } = useAuth()
+  const { logout, user, can } = useAuth()
   const isDemo = user?.is_demo
   const navigate = useNavigate()
   const [profile, setProfile]       = useState(null)
@@ -40,6 +40,10 @@ export default function Settings() {
   const [deleteConfirm, setDC]      = useState(false)
   const [deleting, setDeleting]     = useState(false)
   const [deleteError, setDeleteErr] = useState(null)
+  const [exporting, setExporting] = useState(false)
+  const [feedback, setFeedback] = useState([])
+  const [feedbackTotal, setFeedbackTotal] = useState(0)
+  const [feedbackError, setFeedbackError] = useState(null)
 
   useEffect(() => {
     api.get('/user/profile')
@@ -47,6 +51,41 @@ export default function Settings() {
       .catch(console.error)
       .finally(() => setPL(false))
   }, [])
+
+  useEffect(() => {
+    if (isDemo) return
+    api.get('/insights/feedback-history', { limit: 50 })
+      .then(data => { setFeedback(data.items || []); setFeedbackTotal(data.total || 0) })
+      .catch(e => setFeedbackError(e.message))
+  }, [isDemo])
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const data = await api.get('/user/export-data')
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `musicintelligence-export-${new Date().toISOString().slice(0, 10)}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function removeFeedback(id) {
+    await api.delete(`/insights/feedback/${id}`)
+    setFeedback(items => items.filter(item => item.id !== id))
+    setFeedbackTotal(total => Math.max(0, total - 1))
+  }
+
+  async function resetFeedback() {
+    if (!window.confirm('Reset all recommendation feedback? This cannot be undone.')) return
+    await api.delete('/insights/feedback')
+    setFeedback([])
+    setFeedbackTotal(0)
+  }
 
   async function handleDelete() {
     setDeleting(true)
@@ -115,6 +154,46 @@ export default function Settings() {
           <p className="text-zinc-500 text-sm">Could not load Spotify profile.</p>
         )}
       </Section>
+
+      {!isDemo && can('manage_account') && (
+        <Section title="Export My Data" description="Download a portable JSON copy of your listening history, feedback, goals, playlists, and schedules. Credentials are never included.">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-60 transition-colors"
+          >
+            {exporting ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
+            {exporting ? 'Preparing export...' : 'Download my data'}
+          </button>
+        </Section>
+      )}
+
+      {!isDemo && can('submit_feedback') && (
+        <Section title="Recommendation Feedback" description={`Review or undo the signals used to tune your recommendations (${feedbackTotal} total).`}>
+          {feedbackError && <p className="text-sm text-red-400">{feedbackError}</p>}
+          {feedback.length === 0 ? (
+            <p className="text-sm text-zinc-500">You have not submitted any feedback yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {feedback.map(item => (
+                <div key={item.id} className="flex items-center gap-3 rounded-lg bg-zinc-950 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-zinc-200">{item.song.title} <span className="text-zinc-500">by {item.song.artist}</span></p>
+                    <p className="text-xs text-brand">{item.action.replaceAll('_', ' ')}</p>
+                  </div>
+                  <button type="button" onClick={() => removeFeedback(item.id)} aria-label={`Undo feedback for ${item.song.title}`} className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-white">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <button type="button" onClick={resetFeedback} className="mt-2 flex items-center gap-2 text-sm text-red-400 hover:text-red-300">
+                <RotateCcw className="h-4 w-4" /> Reset all feedback
+              </button>
+            </div>
+          )}
+        </Section>
+      )}
 
       {/* Session */}
       <Section title="Session" description="Log out of MusicIntelligence on this device.">

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Ban, CalendarClock, ChevronDown, ChevronUp, Clock, ExternalLink, Info, Music, Pause, Play, Plus, RefreshCw, RotateCcw, Shuffle, SkipForward, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Ban, CalendarClock, ChevronDown, ChevronUp, Clock, ExternalLink, Info, Music, Pause, Pin, Play, Plus, RefreshCw, RotateCcw, Shuffle, SkipForward, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth, useCapability } from '../contexts/AuthContext'
 import { usePlayer } from '../contexts/PlayerContext'
 import Spinner from '../components/ui/Spinner'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
+import CapabilityNotice from '../components/ui/CapabilityNotice'
 
 const CONTEXTS = [
   { value: '', label: 'No context' },
@@ -143,11 +144,12 @@ function QualityNotes({ preview }) {
   )
 }
 
-function TrackRow({ track, index }) {
+function TrackRow({ track, index, editable, onMove, onRemove, onReplace, onPin }) {
   const { play, isPlaying } = usePlayer()
   const song = track.song
   const active = isPlaying(song)
   const [feedback, setFeedback] = useState(null)
+  const canGiveFeedback = useCapability('submit_feedback')
 
   async function sendFeedback(action) {
     if (!song?.id) return
@@ -178,7 +180,7 @@ function TrackRow({ track, index }) {
         <WhyDetails reasons={track.explanation?.reasons} breakdown={track.score_breakdown} />
       </div>
 
-      <div className="hidden group-hover:flex items-center gap-1 shrink-0 self-start mt-1">
+      {canGiveFeedback && <div className="hidden group-hover:flex items-center gap-1 shrink-0 self-start mt-1">
         {QUICK_FEEDBACK.map(({ action, icon: Icon, tip }) => (
           <button
             key={action}
@@ -190,9 +192,16 @@ function TrackRow({ track, index }) {
             <Icon className="w-3 h-3" />
           </button>
         ))}
-      </div>
+      </div>}
 
       <span className="text-xs text-zinc-600 shrink-0 group-hover:hidden">{track.final_score?.toFixed(2)}</span>
+      {editable && <div className="hidden group-hover:flex items-center gap-0.5">
+        <button type="button" title="Move up" onClick={() => onMove(index, -1)} className="p-1 text-zinc-500 hover:text-white"><ArrowUp className="h-3 w-3" /></button>
+        <button type="button" title="Move down" onClick={() => onMove(index, 1)} className="p-1 text-zinc-500 hover:text-white"><ArrowDown className="h-3 w-3" /></button>
+        <button type="button" title={track.is_pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(track)} className={`p-1 ${track.is_pinned ? 'text-brand' : 'text-zinc-500 hover:text-white'}`}><Pin className="h-3 w-3" /></button>
+        <button type="button" title="Replace" disabled={track.is_pinned} onClick={() => onReplace(track)} className="p-1 text-zinc-500 hover:text-white disabled:opacity-30"><RefreshCw className="h-3 w-3" /></button>
+        <button type="button" title="Remove" onClick={() => onRemove(track)} className="p-1 text-zinc-500 hover:text-red-400"><Trash2 className="h-3 w-3" /></button>
+      </div>}
     </div>
   )
 }
@@ -288,6 +297,7 @@ function SchedulesTab() {
   const [creating, setCreating] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [form, setForm] = useState({ cadence: 'weekly', context_type: '', max_tracks: 25 })
+  const canManageSchedules = useCapability('manage_schedules')
 
   function load() {
     setLoading(true)
@@ -337,7 +347,8 @@ function SchedulesTab() {
             We regenerate a fresh playlist from your latest taste on this cadence. Open this page to pick up due refreshes; the newest one waits in History.
           </p>
         </div>
-        <div className="flex flex-wrap gap-3 items-end">
+        {!canManageSchedules && <CapabilityNotice>Schedules are read-only in the shared demo. Connect Spotify to create automatic playlists.</CapabilityNotice>}
+        {canManageSchedules && <div className="flex flex-wrap gap-3 items-end">
           <div className="space-y-1">
             <label className="text-xs text-zinc-400">Cadence</label>
             <select
@@ -375,7 +386,7 @@ function SchedulesTab() {
             {creating ? <Spinner size="sm" /> : <Plus className="w-4 h-4" />}
             Add schedule
           </button>
-        </div>
+        </div>}
       </div>
 
       {loading ? (
@@ -396,8 +407,9 @@ function SchedulesTab() {
                 <p className="text-zinc-500 text-xs mt-0.5">
                   Next {formatScheduleDate(s.next_run_at)} · Last run {formatScheduleDate(s.last_run_at)}
                 </p>
+                {s.last_error && <p className="mt-1 text-xs text-red-400">Last run failed: {s.last_error}</p>}
               </div>
-              <button
+              {canManageSchedules && <button
                 onClick={() => runNow(s.id)}
                 disabled={busyId === s.id}
                 title="Run now"
@@ -405,15 +417,15 @@ function SchedulesTab() {
               >
                 {busyId === s.id ? <Spinner size="sm" /> : <RefreshCw className="w-3 h-3" />}
                 Run now
-              </button>
-              <button
+              </button>}
+              {canManageSchedules && <button
                 onClick={() => remove(s.id)}
                 title="Delete schedule"
                 aria-label="Delete schedule"
                 className="w-7 h-7 rounded flex items-center justify-center text-zinc-600 hover:text-red-400 hover:bg-zinc-800 shrink-0"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              </button>}
             </div>
           ))}
         </div>
@@ -424,7 +436,7 @@ function SchedulesTab() {
 
 export default function Playlists() {
   const navigate = useNavigate()
-  const { login } = useAuth()
+  const { login, can } = useAuth()
   const [tab, setTab] = useState('generate')
   const [config, setConfig] = useState({ context_type: '', max_tracks: 20, diversity: 0.5, familiarity: 0.5 })
   const [preview, setPreview] = useState(null)
@@ -510,6 +522,37 @@ export default function Playlists() {
     } finally {
       setEditingName(false)
     }
+  }
+
+  function applyEditedPlaylist(generatedPlaylist) {
+    setPreview(prev => prev ? { ...prev, generated_playlist: generatedPlaylist } : prev)
+  }
+
+  async function moveTrack(index, direction) {
+    const next = [...tracks]
+    const target = index + direction
+    if (target < 0 || target >= next.length) return
+    ;[next[index], next[target]] = [next[target], next[index]]
+    try {
+      applyEditedPlaylist(await api.patch(`/playlists/generated/${preview.generated_playlist.id}/tracks/reorder`, { track_ids: next.map(t => t.id) }))
+    } catch (e) { setError(e.message) }
+  }
+
+  async function removeTrack(track) {
+    try { applyEditedPlaylist(await api.delete(`/playlists/generated/${preview.generated_playlist.id}/tracks/${track.id}`)) }
+    catch (e) { setError(e.message) }
+  }
+
+  async function replaceTrack(track) {
+    try { applyEditedPlaylist(await api.post(`/playlists/generated/${preview.generated_playlist.id}/tracks/${track.id}/replace`)) }
+    catch (e) { setError(e.message) }
+  }
+
+  async function pinTrack(track) {
+    try {
+      await api.patch(`/playlists/generated/${preview.generated_playlist.id}/tracks/${track.id}`, { is_pinned: !track.is_pinned })
+      applyEditedPlaylist({ ...preview.generated_playlist, tracks: tracks.map(item => item.id === track.id ? { ...item, is_pinned: !item.is_pinned } : item) })
+    } catch (e) { setError(e.message) }
   }
 
   const tracks = preview?.generated_playlist?.tracks || []
@@ -627,7 +670,7 @@ export default function Playlists() {
                       className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-sm font-semibold text-white focus:outline-none focus:border-brand"
                     />
                   ) : (
-                    <button type="button" onClick={() => { setDraftName(preview.generated_playlist?.name || ''); setEditingName(true) }} className="text-left max-w-full">
+                    <button type="button" disabled={!can('mutate_library')} onClick={() => { setDraftName(preview.generated_playlist?.name || ''); setEditingName(true) }} className="text-left max-w-full disabled:cursor-default">
                       <h2 className="text-white font-semibold truncate">{preview.generated_playlist?.name}</h2>
                     </button>
                   )}
@@ -647,11 +690,13 @@ export default function Playlists() {
                     >
                       <ExternalLink className="w-3 h-3" /> Open in Spotify ↗
                     </a>
-                  ) : (
+                  ) : can('create_spotify_playlists') ? (
                     <button onClick={pushToSpotify} disabled={pushing} className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand text-black font-medium rounded-lg hover:bg-green-400 transition-colors disabled:opacity-60">
                       {pushing ? <Spinner size="sm" /> : <ExternalLink className="w-3 h-3" />}
                       {pushing ? 'Creating...' : 'Save to Spotify'}
                     </button>
+                  ) : (
+                    <span className="text-xs text-zinc-400">Preview only in demo</span>
                   )}
                 </div>
               </div>
@@ -661,7 +706,16 @@ export default function Playlists() {
 
               <div className="p-2 space-y-0.5">
                 {tracks.map((track, i) => (
-                  <TrackRow key={track.id ?? i} track={track} index={i} />
+                  <TrackRow
+                    key={track.id ?? i}
+                    track={track}
+                    index={i}
+                    editable={can('mutate_library') && !spotifyPlaylistId}
+                    onMove={moveTrack}
+                    onRemove={removeTrack}
+                    onReplace={replaceTrack}
+                    onPin={pinTrack}
+                  />
                 ))}
               </div>
             </div>

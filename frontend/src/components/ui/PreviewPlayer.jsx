@@ -29,7 +29,9 @@ export default function PreviewPlayer() {
         <div className="flex-1 flex flex-col gap-1.5">
           <div className="flex items-center justify-center">
             <button
+              type="button"
               onClick={() => play(current)}
+              aria-label={playing ? `Pause ${current.title}` : `Play ${current.title}`}
               className="w-8 h-8 rounded-full bg-white flex items-center justify-center hover:scale-105 transition-transform"
             >
               {playing ? (
@@ -39,18 +41,16 @@ export default function PreviewPlayer() {
               )}
             </button>
           </div>
-          <div
-            className="w-full h-1 bg-zinc-700 rounded-full cursor-pointer"
-            onClick={e => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              seek((e.clientX - rect.left) / rect.width)
-            }}
-          >
-            <div
-              className="h-full bg-brand rounded-full transition-all"
-              style={{ width: `${progress * 100}%` }}
-            />
-          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={Math.round(progress * 100)}
+            onChange={event => seek(Number(event.target.value) / 100)}
+            aria-label={`Playback position for ${current.title}`}
+            className="w-full h-1 cursor-pointer accent-green-500"
+          />
           <p className="text-center text-zinc-600 text-xs">
             <kbd className="font-mono">space</kbd> play/pause &nbsp;·&nbsp;
             <kbd className="font-mono">←→</kbd> seek 10s
@@ -58,7 +58,7 @@ export default function PreviewPlayer() {
         </div>
 
         {/* Close */}
-        <button onClick={stop} className="p-1.5 text-zinc-500 hover:text-white transition-colors shrink-0">
+        <button type="button" onClick={stop} aria-label="Close preview player" className="p-1.5 text-zinc-500 hover:text-white transition-colors shrink-0">
           <X className="w-4 h-4" />
         </button>
       </div>

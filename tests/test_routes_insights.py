@@ -1,5 +1,5 @@
 """Tests for /insights routes (insights_routes.py)."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from backend.app.models.artist import Artist
 from backend.app.models.listening_history import ListeningHistory
@@ -11,6 +11,7 @@ from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.routes import insights_routes
 from backend.app.services import api_cache_service, recommendation_service
+from backend.app.time_utils import utcnow_naive
 
 
 def _session(user_id: str):
@@ -277,6 +278,32 @@ def test_feedback_summary_empty_for_new_user(client_factory, db_session):
     assert resp.json()["summary"] == []
 
 
+def test_feedback_history_can_remove_one_or_reset_all(client_factory, db_session):
+    db_session.add(_session("u1"))
+    db_session.add(_session("u2"))
+    song = _song(db_session, artist_name="History Artist", title="History Track")
+    own_one = RecommendationFeedback(user_id="u1", song_id=song.id, action="like")
+    own_two = RecommendationFeedback(user_id="u1", song_id=song.id, action="skip")
+    other = RecommendationFeedback(user_id="u2", song_id=song.id, action="dislike")
+    db_session.add_all([own_one, own_two, other])
+    db_session.commit()
+    own_one_id = own_one.id
+    other_id = other.id
+
+    client = client_factory(insights_routes.router)
+    history = client.get("/insights/feedback-history", headers={"X-User-Id": "u1"})
+    assert history.status_code == 200
+    assert history.json()["total"] == 2
+    assert history.json()["items"][0]["song"]["artist"] == "History Artist"
+
+    assert client.delete(f"/insights/feedback/{other_id}", headers={"X-User-Id": "u1"}).status_code == 404
+    assert client.delete(f"/insights/feedback/{own_one_id}", headers={"X-User-Id": "u1"}).status_code == 200
+    reset = client.delete("/insights/feedback", headers={"X-User-Id": "u1"})
+    assert reset.status_code == 200
+    assert reset.json()["deleted"] == 1
+    assert db_session.query(RecommendationFeedback).filter_by(user_id="u2").count() == 1
+
+
 # ── /insights/goals & goals-status ───────────────────────────────────────────
 
 def test_create_goal_and_list_status(client_factory, db_session):
@@ -335,6 +362,55 @@ def test_goals_status_repeat_rate_type(client_factory, db_session):
     assert resp.status_code == 200
     goals = resp.json()["goals"]
     assert goals[0]["goal_type"] == "repeat_rate_max"
+    assert goals[0]["status"] == "on_track"
+
+
+def test_goal_counts_only_first_time_songs_in_period(client_factory, db_session):
+    now = utcnow_naive()
+    db_session.add(_session("u1"))
+    old_song = _song(db_session, artist_name="Goal Artist", title="Old Song")
+    new_song = _song(db_session, artist_name="Goal Artist", title="New Song")
+    db_session.add_all([
+        ListeningHistory(user_id="u1", song_id=old_song.id, played_at=now - timedelta(days=30)),
+        ListeningHistory(user_id="u1", song_id=old_song.id, played_at=now),
+        ListeningHistory(user_id="u1", song_id=new_song.id, played_at=now),
+        ListeningGoal(user_id="u1", goal_type="new_songs_per_week", target_value=1, period="weekly", active=True),
+    ])
+    db_session.commit()
+
+    client = client_factory(insights_routes.router)
+    response = client.get("/insights/goals-status", headers={"X-User-Id": "u1"})
+    assert response.json()["goals"][0]["progress"] == 1
+
+
+def test_goal_validation_and_pause_resume(client_factory, db_session):
+    db_session.add(_session("u1"))
+    db_session.commit()
+    client = client_factory(insights_routes.router)
+
+    invalid = client.post(
+        "/insights/goals",
+        json={"goal_type": "unsupported", "target_value": 5, "period": "yearly"},
+        headers={"X-User-Id": "u1"},
+    )
+    assert invalid.status_code == 400
+
+    created = client.post(
+        "/insights/goals",
+        json={"goal_type": "listening_days_per_week", "target_value": 3, "period": "monthly"},
+        headers={"X-User-Id": "u1"},
+    )
+    goal_id = created.json()["goal_id"]
+    paused = client.patch(
+        f"/insights/goals/{goal_id}",
+        json={"active": False, "target_value": 4},
+        headers={"X-User-Id": "u1"},
+    )
+    assert paused.status_code == 200
+    assert paused.json()["active"] is False
+    status = client.get("/insights/goals-status", headers={"X-User-Id": "u1"}).json()["goals"][0]
+    assert status["active"] is False
+    assert status["target"] == 4
 
 
 # ── /insights/data-quality ───────────────────────────────────────────────────

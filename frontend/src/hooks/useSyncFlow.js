@@ -62,7 +62,7 @@ export function useSyncFlow({ onSyncFinished, onEnrichmentFinished } = {}) {
           onSyncFinished?.(job)
           const result = job.result || {}
           // Spotify caps recent-plays at 50 tracks per call — warn the user.
-          if (job.status === 'succeeded' && (result.new_history_rows ?? 0) >= 50) {
+          if (job.status === 'succeeded' && result.sync_window_limited) {
             setSyncAtLimit(true)
           }
           if (result.enrichment_queued && result.enrichment_job_id) {

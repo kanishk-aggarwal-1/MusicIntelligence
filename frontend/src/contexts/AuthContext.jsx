@@ -111,11 +111,14 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  const can = (capability) => Boolean(user?.capabilities?.[capability])
+
   return (
-    <AuthContext.Provider value={{ user, loading, serverWarming, login, demoLogin, logout }}>
+    <AuthContext.Provider value={{ user, loading, serverWarming, login, demoLogin, logout, can }}>
       {children}
     </AuthContext.Provider>
   )
 }
 
 export const useAuth = () => useContext(AuthContext)
+export const useCapability = (capability) => Boolean(useContext(AuthContext)?.user?.capabilities?.[capability])

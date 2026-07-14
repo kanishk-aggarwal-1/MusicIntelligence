@@ -22,23 +22,24 @@ def main():
         print("ERROR: CRON_SECRET env var is not set", file=sys.stderr)
         sys.exit(1)
 
-    url = f"{API_URL}/ops/sync-all"
-    print(f"POST {url}")
-
     try:
-        resp = requests.post(
-            url,
-            headers={"X-Cron-Secret": CRON_SECRET},
-            timeout=300,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        print(
-            f"total={data.get('total_users')} "
-            f"synced={data.get('synced')} "
-            f"skipped={data.get('skipped')} "
-            f"failed={data.get('failed')}"
-        )
+        headers = {"X-Cron-Secret": CRON_SECRET}
+        for path in ("/ops/sync-all", "/ops/run-due-schedules"):
+            url = f"{API_URL}{path}"
+            print(f"POST {url}")
+            resp = requests.post(url, headers=headers, timeout=300)
+            resp.raise_for_status()
+            data = resp.json()
+            if path.endswith("sync-all"):
+                print(
+                    f"total={data.get('total_users')} synced={data.get('synced')} "
+                    f"skipped={data.get('skipped')} failed={data.get('failed')}"
+                )
+            else:
+                print(
+                    f"claimed={data.get('claimed')} succeeded={data.get('succeeded')} "
+                    f"failed={data.get('failed')}"
+                )
         sys.exit(0)
     except requests.HTTPError as exc:
         print(f"ERROR: HTTP {exc.response.status_code} — {exc.response.text}", file=sys.stderr)

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 
 from backend.app.models.artist import Artist
@@ -144,6 +144,57 @@ def test_dashboard_stats_are_user_scoped(client_factory, db_session):
     assert payload["top_artists"][0]["artist"] == "A"
 
 
+def test_dashboard_stats_include_engagement_metrics(client_factory, db_session):
+    db_session.add(_user_session("engagement-user"))
+    song = _song_with_tag(
+        db_session,
+        artist_name="Metrics Artist",
+        title="Metrics Song",
+        tag_name="electronic",
+        spotify_id="metrics-1",
+    )
+    now = datetime.now()
+    db_session.add_all([
+        ListeningHistory(user_id="engagement-user", song_id=song.id, played_at=now, ms_played=180_000, skipped=False),
+        ListeningHistory(user_id="engagement-user", song_id=song.id, played_at=now - timedelta(minutes=5), ms_played=60_000, skipped=True),
+        ListeningHistory(user_id="engagement-user", song_id=song.id, played_at=now - timedelta(minutes=10)),
+    ])
+    db_session.commit()
+
+    client = client_factory(dashboard_routes.router)
+    response = client.get("/dashboard/stats?days=30", headers={"X-User-Id": "engagement-user"})
+
+    assert response.status_code == 200
+    assert response.json()["minutes_listened"] == 4
+    assert response.json()["skip_rate_percent"] == 50.0
+
+
+def test_sync_preserves_extended_listening_fields(db_session):
+    result = sync_listening_history(
+        db_session,
+        "detail-user",
+        [{
+            "title": "Detailed Track",
+            "artist": "Detailed Artist",
+            "spotify_id": "detail-1",
+            "played_at": "2026-05-01T12:00:00Z",
+            "ms_played": 123_456,
+            "skipped": True,
+            "platform": "android",
+            "country": "US",
+            "offline": False,
+            "incognito": True,
+        }],
+        enrich_inline=False,
+    )
+
+    assert result["new_history_rows"] == 1
+    row = db_session.query(ListeningHistory).filter_by(user_id="detail-user").one()
+    assert (row.ms_played, row.skipped, row.platform, row.country) == (123_456, True, "android", "US")
+    assert row.offline is False
+    assert row.incognito is True
+
+
 def test_dedup_preview_apply_and_undo_are_user_scoped(client_factory, db_session):
     db_session.add_all([_user_session("user-1"), _user_session("user-2")])
     keep = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song", tag_name="pop", spotify_id="dup-1")
@@ -153,6 +204,7 @@ def test_dedup_preview_apply_and_undo_are_user_scoped(client_factory, db_session
         [
             ListeningHistory(user_id="user-1", song_id=keep.id, played_at=datetime(2026, 5, 1, 10, 0)),
             ListeningHistory(user_id="user-1", song_id=dup.id, played_at=datetime(2026, 5, 1, 11, 0)),
+            ListeningHistory(user_id="user-2", song_id=dup.id, played_at=datetime(2026, 5, 1, 11, 30)),
             ListeningHistory(user_id="user-2", song_id=other_user_song.id, played_at=datetime(2026, 5, 1, 12, 0)),
         ]
     )
@@ -168,15 +220,36 @@ def test_dedup_preview_apply_and_undo_are_user_scoped(client_factory, db_session
     applied = client.post("/insights/dedup-apply?limit_groups=10", headers={"X-User-Id": "user-1"})
     assert applied.status_code == 200
     batch_id = applied.json()["batch_id"]
-    db_session.refresh(dup)
-    db_session.refresh(other_user_song)
-    assert dup.is_deleted is True
-    assert other_user_song.is_deleted is False
+    assert db_session.query(ListeningHistory).filter_by(user_id="user-1", song_id=dup.id).count() == 0
+    assert db_session.query(ListeningHistory).filter_by(user_id="user-2", song_id=dup.id).count() == 1
+    assert dup.is_deleted is False
 
     undone = client.post(f"/insights/dedup-undo/{batch_id}", headers={"X-User-Id": "user-1"})
     assert undone.status_code == 200
-    db_session.refresh(dup)
-    assert dup.is_deleted is False
+    assert db_session.query(ListeningHistory).filter_by(user_id="user-1", song_id=dup.id).count() == 1
+    assert db_session.query(ListeningHistory).filter_by(user_id="user-2", song_id=dup.id).count() == 1
+
+
+def test_dedup_undo_restores_conflicting_history_row(client_factory, db_session):
+    db_session.add(_user_session("user-1"))
+    keep = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song", tag_name="pop", spotify_id="dup-a")
+    dup = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song (Live)", tag_name="pop", spotify_id="dup-b")
+    played_at = datetime(2026, 5, 1, 10, 0)
+    db_session.add_all([
+        ListeningHistory(user_id="user-1", song_id=keep.id, played_at=played_at),
+        ListeningHistory(user_id="user-1", song_id=dup.id, played_at=played_at),
+    ])
+    db_session.commit()
+
+    client = client_factory(insights_routes.router)
+    applied = client.post("/insights/dedup-apply", headers={"X-User-Id": "user-1"})
+    assert applied.status_code == 200
+    assert db_session.query(ListeningHistory).filter_by(user_id="user-1").count() == 1
+
+    batch_id = applied.json()["batch_id"]
+    undone = client.post(f"/insights/dedup-undo/{batch_id}", headers={"X-User-Id": "user-1"})
+    assert undone.status_code == 200
+    assert db_session.query(ListeningHistory).filter_by(user_id="user-1").count() == 2
 
 
 def test_playlist_preview_saves_history_without_mutating_songs(client_factory, db_session):
@@ -310,5 +383,3 @@ def test_song_detail_and_hide_restore(client_factory, db_session):
     assert restored.status_code == 200
     db_session.refresh(pref)
     assert pref.is_hidden is False
-
-

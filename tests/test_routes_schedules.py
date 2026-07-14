@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from backend.app.models.user_session import UserSession
 from backend.app.models.playlist_schedule import PlaylistSchedule
-from backend.app.routes import playlist_routes
+from backend.app.routes import ops_routes, playlist_routes
 from backend.app.services import playlist_schedule_service as svc
 from backend.app.time_utils import utcnow_naive
 
@@ -44,6 +44,22 @@ def test_due_schedules_filters_by_next_run(db_session):
     assert due.id in ids
     assert future.id not in ids
     assert inactive.id not in ids
+
+
+def test_claim_due_schedules_prevents_duplicate_claim(db_session):
+    now = utcnow_naive()
+    schedule = PlaylistSchedule(
+        user_id="u1", cadence="daily", active=True,
+        next_run_at=now - timedelta(minutes=1), created_at=now,
+    )
+    db_session.add(schedule)
+    db_session.commit()
+
+    first = svc.claim_due_schedules(db_session, now=now)
+    second = svc.claim_due_schedules(db_session, now=now)
+
+    assert [row.id for row in first] == [schedule.id]
+    assert second == []
 
 
 # ── routes ───────────────────────────────────────────────────────────────────
@@ -131,3 +147,28 @@ def test_schedules_require_auth(client_factory, db_session):
     client = client_factory(playlist_routes.router)
     assert client.get("/playlists/schedules").status_code == 401
     assert client.post("/playlists/schedules", json={"cadence": "weekly"}).status_code == 401
+
+
+def test_cron_processes_due_schedules(monkeypatch, client_factory, db_session):
+    now = utcnow_naive()
+    db_session.add(PlaylistSchedule(
+        user_id="u1", cadence="daily", active=True,
+        next_run_at=now - timedelta(minutes=1), created_at=now,
+    ))
+    db_session.commit()
+    monkeypatch.setattr(ops_routes.settings, "CRON_SECRET", "test-secret")
+    monkeypatch.setattr(playlist_routes, "_build_preview", _fake_preview(generated_id=77))
+    client = client_factory(ops_routes.router)
+
+    response = client.post(
+        "/ops/run-due-schedules",
+        headers={"X-Cron-Secret": "test-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Due schedules processed",
+        "claimed": 1,
+        "succeeded": 1,
+        "failed": 0,
+    }

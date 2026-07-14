@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from spotipy.exceptions import SpotifyException
 
 from ..database import get_db
+from ..authz import require_capability
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.listening_history import ListeningHistory
@@ -27,6 +28,7 @@ from ..services.playlist_schedule_service import (
     MAX_SCHEDULES_PER_USER,
     VALID_CADENCES,
     count_schedules,
+    claim_due_schedules,
     create_schedule,
     delete_schedule,
     due_schedules,
@@ -35,7 +37,6 @@ from ..services.playlist_schedule_service import (
     mark_ran,
     serialize_schedule,
 )
-from ..config import settings
 from ..services import live_metrics_service
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import recommend_songs
@@ -65,6 +66,14 @@ class PlaylistGeneratePayload(BaseModel):
 
 class PlaylistNamePayload(BaseModel):
     name: str
+
+
+class PlaylistReorderPayload(BaseModel):
+    track_ids: list[int]
+
+
+class PlaylistTrackPayload(BaseModel):
+    is_pinned: bool
 
 
 class ScheduleCreatePayload(BaseModel):
@@ -530,6 +539,7 @@ def update_generated_name(generated_playlist_id: int, payload: PlaylistNamePaylo
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
 
     name = (payload.name or "").strip()
     if not name:
@@ -548,12 +558,115 @@ def update_generated_name(generated_playlist_id: int, payload: PlaylistNamePaylo
     return serialize_generated_playlist(record, include_tracks=True)
 
 
+def _owned_playlist(db: Session, generated_playlist_id: int, user_id: str):
+    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Generated playlist not found")
+    return record
+
+
+def _normalize_track_positions(record):
+    for position, track in enumerate(sorted(record.tracks, key=lambda item: item.position), start=1):
+        track.position = position
+
+
+@router.delete("/generated/{generated_playlist_id}")
+def delete_generated_playlist(generated_playlist_id: int, request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
+    record = _owned_playlist(db, generated_playlist_id, user_id)
+    db.delete(record)
+    db.commit()
+    return {"message": "Generated playlist deleted", "id": generated_playlist_id}
+
+
+@router.patch("/generated/{generated_playlist_id}/tracks/reorder")
+def reorder_generated_tracks(generated_playlist_id: int, payload: PlaylistReorderPayload, request: Request, db: Session = Depends(get_db)):
+    user_id = load_request_user_session(db, request).get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
+    record = _owned_playlist(db, generated_playlist_id, user_id)
+    existing = {track.id: track for track in record.tracks}
+    if set(payload.track_ids) != set(existing) or len(payload.track_ids) != len(existing):
+        raise HTTPException(status_code=400, detail="track_ids must contain every playlist track exactly once")
+    for position, track_id in enumerate(payload.track_ids, start=1):
+        existing[track_id].position = position
+    db.commit()
+    db.refresh(record)
+    return serialize_generated_playlist(record, include_tracks=True)
+
+
+@router.patch("/generated/{generated_playlist_id}/tracks/{track_id}")
+def update_generated_track(generated_playlist_id: int, track_id: int, payload: PlaylistTrackPayload, request: Request, db: Session = Depends(get_db)):
+    user_id = load_request_user_session(db, request).get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
+    record = _owned_playlist(db, generated_playlist_id, user_id)
+    track = next((item for item in record.tracks if item.id == track_id), None)
+    if not track:
+        raise HTTPException(status_code=404, detail="Playlist track not found")
+    track.is_pinned = payload.is_pinned
+    db.commit()
+    return {"track_id": track.id, "is_pinned": bool(track.is_pinned)}
+
+
+@router.delete("/generated/{generated_playlist_id}/tracks/{track_id}")
+def remove_generated_track(generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)):
+    user_id = load_request_user_session(db, request).get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
+    record = _owned_playlist(db, generated_playlist_id, user_id)
+    track = next((item for item in record.tracks if item.id == track_id), None)
+    if not track:
+        raise HTTPException(status_code=404, detail="Playlist track not found")
+    db.delete(track)
+    db.flush()
+    record.tracks = [item for item in record.tracks if item.id != track_id]
+    _normalize_track_positions(record)
+    db.commit()
+    db.refresh(record)
+    return serialize_generated_playlist(record, include_tracks=True)
+
+
+@router.post("/generated/{generated_playlist_id}/tracks/{track_id}/replace")
+def replace_generated_track(generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)):
+    user_id = load_request_user_session(db, request).get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
+    record = _owned_playlist(db, generated_playlist_id, user_id)
+    track = next((item for item in record.tracks if item.id == track_id), None)
+    if not track:
+        raise HTTPException(status_code=404, detail="Playlist track not found")
+    if track.is_pinned:
+        raise HTTPException(status_code=400, detail="Unpin this track before replacing it")
+    existing_song_ids = {item.song_id for item in record.tracks}
+    candidates = recommend_songs(db, user_id, return_details=True, allow_discovery=False, context_type=record.context_type, limit=100)
+    replacement = next((item for item in candidates if item["song"].id not in existing_song_ids), None)
+    if not replacement:
+        raise HTTPException(status_code=409, detail="No unused replacement candidate is available")
+    track.song_id = replacement["song"].id
+    track.final_score = float(replacement.get("score") or 0)
+    track.score_breakdown_json = json.dumps(replacement.get("components") or {})
+    track.explanation_json = json.dumps({"reasons": replacement.get("reasons") or [], "replaced": True})
+    db.commit()
+    db.refresh(record)
+    return serialize_generated_playlist(record, include_tracks=True)
+
+
 @router.post("/preview")
 def preview(payload: PlaylistGeneratePayload, request: Request, db: Session = Depends(get_db)):
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "preview_playlists")
 
     return _build_preview(db, user_id, payload)
 
@@ -566,6 +679,7 @@ def create_from_preview(generated_playlist_id: int, request: Request, db: Sessio
     token = session.get("token")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "create_spotify_playlists", spotify_connected=bool(token))
     if not token:
         raise HTTPException(status_code=401, detail="spotify_token_expired")
 
@@ -608,6 +722,7 @@ def regenerate_preview(generated_playlist_id: int, request: Request, db: Session
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "preview_playlists")
 
     record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
     if not record:
@@ -647,6 +762,7 @@ def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = D
     if not token or not user_id:
         logger.info("playlist.generate.unauthorized")
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "create_spotify_playlists", spotify_connected=bool(token))
 
     preview_response = _build_preview(db, user_id, payload)
     generated_playlist = preview_response["generated_playlist"]
@@ -748,15 +864,30 @@ def _run_schedule(db: Session, schedule):
         context_type=schedule.context_type,
     )
     generated_id = None
+    error = None
     try:
         preview = _build_preview(db, schedule.user_id, payload)
         generated_id = preview["generated_playlist"]["id"]
-    except Exception:
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:1000]
         logger.exception("playlist.schedule.run_failed schedule_id=%s user_id=%s", schedule.id, schedule.user_id)
     # Always advance the clock so a persistently failing schedule doesn't run on
     # every single request — it retries next cadence instead.
-    mark_ran(db, schedule=schedule, generated_playlist_id=generated_id)
+    mark_ran(db, schedule=schedule, generated_playlist_id=generated_id, error=error)
     return generated_id
+
+
+def process_all_due_schedules(db: Session, *, limit: int = 50) -> dict:
+    claimed = claim_due_schedules(db, limit=limit)
+    succeeded = 0
+    failed = 0
+    for schedule in claimed:
+        generated_id = _run_schedule(db, schedule)
+        if generated_id is None:
+            failed += 1
+        else:
+            succeeded += 1
+    return {"claimed": len(claimed), "succeeded": succeeded, "failed": failed}
 
 
 def _process_due_schedules(db: Session, user_id: str) -> int:
@@ -787,8 +918,7 @@ def post_schedule(payload: ScheduleCreatePayload, request: Request, db: Session 
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    if user_id == settings.DEMO_USER_ID:
-        raise HTTPException(status_code=403, detail="Not available in demo mode")
+    require_capability(user_id, "manage_schedules")
 
     if payload.cadence not in VALID_CADENCES:
         raise HTTPException(status_code=400, detail=f"Unknown cadence. Use one of: {', '.join(sorted(VALID_CADENCES))}")
@@ -815,6 +945,7 @@ def run_schedule_now(schedule_id: int, request: Request, db: Session = Depends(g
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "manage_schedules")
 
     schedule = get_schedule(db, schedule_id=schedule_id, user_id=user_id)
     if not schedule:
@@ -831,8 +962,7 @@ def remove_schedule(schedule_id: int, request: Request, db: Session = Depends(ge
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    if user_id == settings.DEMO_USER_ID:
-        raise HTTPException(status_code=403, detail="Not available in demo mode")
+    require_capability(user_id, "manage_schedules")
 
     if not delete_schedule(db, schedule_id=schedule_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="Schedule not found")

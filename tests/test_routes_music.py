@@ -8,6 +8,8 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.models.user_song_pref import UserSongPref
+from backend.app.models.generated_playlist import GeneratedPlaylist
+from backend.app.models.generated_playlist_track import GeneratedPlaylistTrack
 from backend.app.routes import music_routes
 from backend.app.services import enrichment_service
 from backend.app.services.recommendation_service import _apply_enrichment
@@ -245,6 +247,26 @@ def test_song_detail_includes_tags(client_factory, db_session):
     assert data["title"] == "Detail Track"
     assert "shoegaze" in data["tags"]
     assert data["listening_count"] == 1
+
+
+def test_playlist_inclusion_count_is_scoped_to_current_user(client_factory, db_session):
+    db_session.add_all([_session("u1"), _session("u2")])
+    song = _song(db_session, artist_name="Shared Artist", title="Shared Track", spotify_id="shared")
+    db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 10, 8, 0)))
+    p1 = GeneratedPlaylist(user_id="u1", name="Mine")
+    p2 = GeneratedPlaylist(user_id="u2", name="Theirs")
+    db_session.add_all([p1, p2])
+    db_session.flush()
+    db_session.add_all([
+        GeneratedPlaylistTrack(generated_playlist_id=p1.id, song_id=song.id, position=0),
+        GeneratedPlaylistTrack(generated_playlist_id=p2.id, song_id=song.id, position=0),
+    ])
+    db_session.commit()
+
+    client = client_factory(music_routes.router)
+    response = client.get(f"/songs/{song.id}", headers={"X-User-Id": "u1"})
+    assert response.status_code == 200
+    assert response.json()["playlist_inclusion_count"] == 1
 
 
 # ── POST /songs/{id}/hide  /restore ──────────────────────────────────────────

@@ -6,6 +6,7 @@ import SongCard from '../components/ui/SongCard'
 import SongModal from '../components/ui/SongModal'
 import Spinner from '../components/ui/Spinner'
 import { usePlayer } from '../contexts/PlayerContext'
+import { useCapability } from '../contexts/AuthContext'
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All songs' },
@@ -55,6 +56,7 @@ function SongListRow({ song, index, style }) {
   const { play, isPlaying } = usePlayer()
   const active = isPlaying(song)
   const [feedback, setFeedback] = useState(null)
+  const canGiveFeedback = useCapability('submit_feedback')
 
   async function sendFeedback(action) {
     try {
@@ -97,7 +99,7 @@ function SongListRow({ song, index, style }) {
           </span>
         )}
 
-        <div className="hidden group-hover:flex items-center gap-1 shrink-0">
+        {canGiveFeedback && <div className="hidden group-hover:flex items-center gap-1 shrink-0">
           {QUICK_FEEDBACK.map(({ action, icon: Icon, tip }) => (
             <button
               key={action}
@@ -109,7 +111,7 @@ function SongListRow({ song, index, style }) {
               <Icon className="w-3 h-3" />
             </button>
           ))}
-        </div>
+        </div>}
 
         {song.spotify_id && (
           <a

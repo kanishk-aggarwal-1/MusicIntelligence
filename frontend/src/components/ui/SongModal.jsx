@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { X, EyeOff, Eye, RefreshCw, ThumbsUp, ThumbsDown, SkipForward, Ban, Heart, Calendar, Headphones, ListMusic } from 'lucide-react'
 import { api } from '../../lib/api'
 import { usePlayer } from '../../contexts/PlayerContext'
 import Spinner from './Spinner'
+import CapabilityNotice from './CapabilityNotice'
+import { useCapability } from '../../contexts/AuthContext'
 
 function formatDate(value) {
   if (!value) return null
@@ -25,12 +27,30 @@ const STATUS_STYLE = {
 }
 
 export default function SongModal({ song: initial, onClose, onUpdate }) {
+  const dialogRef = useRef(null)
+  const titleId = useId()
   const { play, isPlaying } = usePlayer()
   const [song, setSong]             = useState(initial)
   const [submittedFeedback, setFb]  = useState(null)
   const [actionLoading, setAL]      = useState(false)
   const [enriching, setEnriching]   = useState(false)
   const [enrichMsg, setEnrichMsg]   = useState(null)
+  const canMutateLibrary = useCapability('mutate_library')
+  const canGiveFeedback = useCapability('submit_feedback')
+  const canEnrich = useCapability('enrich_metadata')
+
+  useEffect(() => {
+    const previousFocus = document.activeElement
+    dialogRef.current?.focus()
+    function onKeyDown(event) {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previousFocus?.focus?.()
+    }
+  }, [onClose])
 
   async function hide() {
     setAL(true)
@@ -72,6 +92,11 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" onClick={onClose}>
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="bg-zinc-900 rounded-2xl w-full max-w-sm border border-zinc-800 overflow-hidden shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
@@ -81,12 +106,16 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
             ? <img src={song.image_url} alt="" className="w-full aspect-square object-cover" />
             : <div className="w-full aspect-square bg-zinc-800 flex items-center justify-center text-5xl">♪</div>}
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Close song details"
             className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/60 flex items-center justify-center hover:bg-black/80"
           ><X className="w-4 h-4" /></button>
           {song.preview_url && (
             <button
+              type="button"
               onClick={() => play(song)}
+              aria-label={isPlaying(song) ? `Pause ${song.title}` : `Play ${song.title}`}
               className="absolute bottom-3 right-3 w-10 h-10 rounded-full bg-brand flex items-center justify-center text-black font-bold text-lg hover:bg-green-400"
             >{isPlaying(song) ? '⏸' : '▶'}</button>
           )}
@@ -95,7 +124,7 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
         <div className="p-4 space-y-4">
           {/* Info */}
           <div>
-            <h2 className="text-white font-bold truncate">{song.title}</h2>
+            <h2 id={titleId} className="text-white font-bold truncate">{song.title}</h2>
             <p className="text-zinc-400 text-sm truncate">{song.artist}</p>
             <div className="flex flex-wrap gap-1.5 mt-2">
               {song.genre && <span className="text-xs px-2 py-0.5 bg-zinc-800 text-brand rounded-full">{song.genre}</span>}
@@ -128,13 +157,15 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
           </div>
 
           {/* Feedback */}
-          <div>
+          {canGiveFeedback && <div>
             <p className="text-zinc-500 text-xs mb-2 uppercase tracking-wide">Feedback</p>
             <div className="flex flex-wrap gap-1.5">
               {FEEDBACK.map(({ action, label, icon: Icon, color }) => (
                 <button
                   key={action}
+                  type="button"
                   onClick={() => sendFeedback(action)}
+                  aria-pressed={submittedFeedback === action}
                   className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs border transition-all ${
                     submittedFeedback === action
                       ? `${color} border-current bg-current/10 font-medium`
@@ -145,10 +176,11 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* Actions */}
-          <div className="flex gap-2 flex-wrap pt-3 border-t border-zinc-800">
+          {(canMutateLibrary || canEnrich) ? <div className="flex gap-2 flex-wrap pt-3 border-t border-zinc-800">
+            {canEnrich &&
             <button
               onClick={retryEnrichment}
               disabled={enriching}
@@ -156,8 +188,8 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
             >
               {enriching ? <Spinner size="sm" /> : <RefreshCw className="w-3 h-3" />}
               Retry enrichment
-            </button>
-            {song.is_deleted
+            </button>}
+            {canMutateLibrary && (song.is_deleted
               ? <button onClick={restore} disabled={actionLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-zinc-800 text-green-400 hover:bg-zinc-700 disabled:opacity-50">
                   <Eye className="w-3 h-3" />Restore
@@ -166,9 +198,9 @@ export default function SongModal({ song: initial, onClose, onUpdate }) {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-zinc-800 text-red-400 hover:bg-zinc-700 disabled:opacity-50">
                   <EyeOff className="w-3 h-3" />Hide
                 </button>
-            }
-          </div>
-          {enrichMsg && <p className={`text-xs ${enrichMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>{enrichMsg}</p>}
+            )}
+          </div> : <CapabilityNotice>Guest mode keeps the showcased library read-only.</CapabilityNotice>}
+          {enrichMsg && <p role="status" aria-live="polite" className={`text-xs ${enrichMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>{enrichMsg}</p>}
         </div>
       </div>
     </div>

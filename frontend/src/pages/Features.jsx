@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { RefreshCw, Trash2, BarChart2, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import Spinner from '../components/ui/Spinner'
+import CapabilityNotice from '../components/ui/CapabilityNotice'
+import { useCapability } from '../contexts/AuthContext'
 
 function Section({ title, description, children }) {
   return (
@@ -214,6 +216,10 @@ function ImportSection() {
             played_at:  e.ts || null,
             ms_played:  e.ms_played || 0,
             skipped:    reason === 'fwdbtn' || reason === 'endplay',
+            platform:   e.platform || null,
+            country:    e.conn_country || null,
+            offline:    e.offline ?? null,
+            incognito:  e.incognito_mode ?? null,
           }
         })
 
@@ -301,6 +307,9 @@ export default function Features() {
 
   const [cacheClearing, setCacheClearing] = useState(false)
   const [cacheResult, setCacheResult] = useState(null)
+  const canImport = useCapability('import_history')
+  const canEnrich = useCapability('enrich_metadata')
+  const canMutateLibrary = useCapability('mutate_library')
 
   // Fetch pending count once on mount so the button label is informative
   useEffect(() => {
@@ -494,13 +503,17 @@ export default function Features() {
         title="Import Spotify History"
         description="Bootstrap your library instantly using Spotify's full data export — includes years of listening history, not just the last 50 tracks."
       >
-        <ImportSection />
+        {canImport
+          ? <ImportSection />
+          : <CapabilityNotice>History import is disabled in the shared demo. Connect Spotify to build your own library.</CapabilityNotice>}
       </Section>
 
       <Section
         title="Metadata Enrichment"
         description="Fetch Last.fm tags and genre data for songs in your library."
       >
+        {!canEnrich && <CapabilityNotice>The demo already contains enriched sample data. Connect Spotify to enrich your own library.</CapabilityNotice>}
+        {canEnrich && <>
         <div className="flex items-center gap-4 flex-wrap">
           <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
             <input type="checkbox" checked={retryPartial} onChange={e => setRetryPartial(e.target.checked)} className="accent-brand" />
@@ -534,6 +547,7 @@ export default function Features() {
 
         <JobProgress job={backfillResult} onRetry={handleBackfill} />
         {backfillPoll?.error && <p className="text-red-400 text-sm">{backfillPoll.error}</p>}
+        </>}
       </Section>
 
       <Section title="Data Quality" description="Check enrichment coverage across your library.">
@@ -555,9 +569,10 @@ export default function Features() {
       </Section>
 
       <Section title="Deduplication" description="Find and merge duplicate songs in your library.">
+        {!canMutateLibrary && <CapabilityNotice>Duplicate analysis is available, but merging is disabled to preserve the shared demo.</CapabilityNotice>}
         <div className="flex gap-2 flex-wrap">
           <ActionButton onClick={handleDedupPreview} loading={dedupLoading} icon={BarChart2} label="Preview Duplicates" />
-          {dedupPreview?.duplicate_groups?.length > 0 && (
+          {canMutateLibrary && dedupPreview?.duplicate_groups?.length > 0 && (
             <ActionButton onClick={handleDedupApply} loading={dedupApplying} icon={Trash2} label={`Merge ${dedupPreview.duplicate_groups.length} groups`} variant="danger" />
           )}
         </div>
@@ -568,7 +583,9 @@ export default function Features() {
       </Section>
 
       <Section title="Cache" description="Clear the Last.fm API response cache to force fresh enrichment.">
-        <ActionButton onClick={handleClearCache} loading={cacheClearing} icon={Trash2} label="Clear Last.fm Cache" variant="danger" />
+        {canMutateLibrary
+          ? <ActionButton onClick={handleClearCache} loading={cacheClearing} icon={Trash2} label="Clear Last.fm Cache" variant="danger" />
+          : <CapabilityNotice>Cache management is disabled in the shared demo.</CapabilityNotice>}
         <Result data={cacheResult} />
       </Section>
     </div>
