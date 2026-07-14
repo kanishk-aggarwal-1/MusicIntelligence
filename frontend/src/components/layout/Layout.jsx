@@ -19,13 +19,29 @@ const PAGE_TITLES = {
 }
 
 function DemoBanner() {
-  const { user } = useAuth()
+  const { user, login } = useAuth()
+  const [connecting, setConnecting] = useState(false)
   if (!user?.is_demo) return null
+
+  async function connectSpotify() {
+    setConnecting(true)
+    try { await login() } catch { /* keep the demo active */ }
+    finally { setConnecting(false) }
+  }
+
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-2 bg-brand/10 border-b border-brand/20">
       <p className="text-brand text-xs sm:text-sm min-w-0">
-        You&apos;re viewing a demo account &mdash; sign in with Spotify to use all features.
+        Portfolio demo &mdash; explore the seeded library and recommendation system safely in read-only mode.
       </p>
+      <button
+        type="button"
+        onClick={connectSpotify}
+        disabled={connecting}
+        className="shrink-0 rounded-lg bg-brand px-3 py-1 text-xs font-semibold text-black hover:bg-green-400 disabled:opacity-60"
+      >
+        {connecting ? 'Connecting…' : 'Use my Spotify'}
+      </button>
     </div>
   )
 }

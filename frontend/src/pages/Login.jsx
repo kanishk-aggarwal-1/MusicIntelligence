@@ -82,8 +82,11 @@ export default function Login() {
           className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-zinc-800 text-zinc-300 font-medium text-sm hover:bg-zinc-700 transition-colors disabled:opacity-60 border border-zinc-700"
         >
           {demoLoading ? <Spinner size="sm" /> : null}
-          {demoLoading ? 'Loading demo...' : 'Try Demo (no sign-in required)'}
+          {demoLoading ? 'Loading demo...' : 'Explore the portfolio demo'}
         </button>
+        <p className="-mt-5 text-xs text-zinc-500">
+          No account required. Explore seeded analytics, recommendations, and playlist previews in read-only mode.
+        </p>
 
         {serverWarming && !configError && (
           <div className="flex items-center gap-2 justify-center text-zinc-400 text-sm bg-zinc-900 rounded-lg px-4 py-2.5 border border-zinc-800">

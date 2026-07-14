@@ -2,16 +2,17 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..models.user_session import UserSession
+from ..models.listening_history import ListeningHistory
 from ..services.metrics_service import get_metrics_snapshot
 from ..services.artist_enrichment_service import enrich_artist_genres
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
-from ..services.spotify_service import fetch_recent_tracks, get_spotify_client, load_user_session
+from ..services.spotify_service import INCREMENTAL_SYNC_MAX_TRACKS, fetch_recent_tracks, get_spotify_client, load_user_session
 from ..time_utils import utcnow
 
 router = APIRouter(prefix="/ops", tags=["Operations"])
@@ -19,23 +20,37 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
-def health(db: Session = Depends(get_db)):
-    database = {"status": "ok"}
-    status = "ok"
+def health():
+    # No DB query — Render pings this every ~10 s and a SELECT 1 on every ping
+    # keeps Neon's compute awake 24/7, preventing auto-suspend.
+    body = {
+        "status": "ok",
+        "time_utc": utcnow().isoformat(),
+        "database": {"status": "unchecked"},
+    }
+    return JSONResponse(content=body, status_code=200)
+
+
+@router.get("/ready")
+def ready(db: Session = Depends(get_db)):
+    """Readiness probe for operators; unlike liveness, this checks the DB."""
     try:
         db.execute(text("SELECT 1"))
     except Exception as exc:
-        logger.exception("health.database_failed")
-        database = {"status": "error", "message": type(exc).__name__}
-        status = "degraded"
-
-    body = {
-        "status": status,
+        logger.exception("readiness.database_failed")
+        return JSONResponse(
+            content={
+                "status": "degraded",
+                "time_utc": utcnow().isoformat(),
+                "database": {"status": "error", "message": type(exc).__name__},
+            },
+            status_code=503,
+        )
+    return {
+        "status": "ok",
         "time_utc": utcnow().isoformat(),
-        "database": database,
+        "database": {"status": "ok"},
     }
-    http_status = 503 if status != "ok" else 200
-    return JSONResponse(content=body, status_code=http_status)
 
 
 @router.get("/metrics")
@@ -75,7 +90,8 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
                 continue
 
             sp = get_spotify_client(token)
-            tracks = fetch_recent_tracks(sp, max_tracks=50)
+            checkpoint = db.query(func.max(ListeningHistory.played_at)).filter(ListeningHistory.user_id == user_id).scalar()
+            tracks = fetch_recent_tracks(sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint)
             sync_result = sync_listening_history(db, user_id, tracks)
 
             new_songs = sync_result.get("new_songs", 0)
@@ -106,3 +122,17 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
         "skipped": skipped,
         "failed": failed,
     }
+
+
+@router.post("/run-due-schedules")
+def run_due_schedules(request: Request, limit: int = 50, db: Session = Depends(get_db)):
+    expected = settings.CRON_SECRET or ""
+    if not expected or request.headers.get("X-Cron-Secret", "") != expected:
+        raise HTTPException(status_code=401, detail="Missing or invalid cron secret")
+
+    # Local import avoids coupling the route modules during application startup.
+    from .playlist_routes import process_all_due_schedules
+
+    result = process_all_due_schedules(db, limit=max(1, min(limit, 200)))
+    logger.info("schedules.cron_done claimed=%s succeeded=%s failed=%s", result["claimed"], result["succeeded"], result["failed"])
+    return {"message": "Due schedules processed", **result}

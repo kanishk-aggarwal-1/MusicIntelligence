@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "musicintel_session"
 SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
+INCREMENTAL_SYNC_MAX_TRACKS = 10_000
 
 SCOPES = (
     "user-read-recently-played "
@@ -342,9 +343,15 @@ def _played_at_to_ms(played_at: str):
     return int(dt.astimezone(timezone.utc).timestamp() * 1000)
 
 
-def fetch_recent_tracks(sp, max_tracks: int = 1000):
+def fetch_recent_tracks(sp, max_tracks: int = 1000, *, since_played_at=None):
+    """Fetch newest-to-oldest plays, stopping once the stored checkpoint is reached."""
     tracks = []
     before = None
+    if isinstance(since_played_at, datetime):
+        cutoff = since_played_at.replace(tzinfo=timezone.utc) if since_played_at.tzinfo is None else since_played_at.astimezone(timezone.utc)
+    else:
+        cutoff = parse_utc_datetime(since_played_at) if since_played_at else None
+    reached_cutoff = False
 
     while len(tracks) < max_tracks:
         batch_size = min(50, max_tracks - len(tracks))
@@ -356,6 +363,11 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
             break
 
         for item in items:
+            played_at = item.get("played_at")
+            played_dt = parse_utc_datetime(played_at) if played_at else None
+            if cutoff and played_dt and played_dt <= cutoff:
+                reached_cutoff = True
+                break
             track = item.get("track")
             if not track:
                 continue
@@ -373,7 +385,7 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
                     "artist": first_artist.get("name"),
                     "artist_spotify_id": first_artist.get("id"),
                     "spotify_id": spotify_id,
-                    "played_at": item.get("played_at"),
+                    "played_at": played_at,
                     "duration_ms": track.get("duration_ms"),
                     "image_url": images[0].get("url") if images else None,
                     "preview_url": track.get("preview_url"),
@@ -382,6 +394,9 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000):
 
             if len(tracks) >= max_tracks:
                 break
+
+        if reached_cutoff:
+            break
 
         last_played_at = items[-1].get("played_at")
         if not last_played_at:

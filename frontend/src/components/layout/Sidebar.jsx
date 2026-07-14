@@ -45,14 +45,21 @@ function JobToast({ job, label, onRetry }) {
   const failed = job.status === 'failed'
   const detail = failed ? (job.error || job.message || 'Job failed') : job.message
   return (
-    <div className={`mx-1 px-3 py-2 rounded-lg border text-xs space-y-1.5 ${failed ? 'bg-red-950/30 border-red-900/60' : 'bg-zinc-800 border-zinc-700'}`}>
+    <div role="status" aria-live="polite" className={`mx-1 px-3 py-2 rounded-lg border text-xs space-y-1.5 ${failed ? 'bg-red-950/30 border-red-900/60' : 'bg-zinc-800 border-zinc-700'}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-zinc-300 truncate">{label || job.job_type?.replace(/_/g, ' ')}</span>
         {job.status === 'succeeded' && <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />}
         {job.status === 'failed'    && <XCircle    className="w-3.5 h-3.5 text-red-400 shrink-0"   />}
       </div>
       {job.progress_total > 0 && (
-        <div className="h-1 bg-zinc-700 rounded-full overflow-hidden">
+        <div
+          role="progressbar"
+          aria-label={label || job.job_type?.replace(/_/g, ' ')}
+          aria-valuemin="0"
+          aria-valuemax={job.progress_total}
+          aria-valuenow={job.progress_current || 0}
+          className="h-1 bg-zinc-700 rounded-full overflow-hidden"
+        >
           <div
             className="h-full bg-brand rounded-full transition-all"
             style={{ width: `${Math.min(100, ((job.progress_current || 0) / job.progress_total) * 100)}%` }}
@@ -74,7 +81,7 @@ function JobToast({ job, label, onRetry }) {
 }
 
 export default function Sidebar({ onNavigate }) {
-  const { user, logout } = useAuth()
+  const { user, logout, can } = useAuth()
   const navigate = useNavigate()
   const { syncing, syncJob, enrichmentJob, importJob, syncStatus, syncAtLimit, startSync, startEnrichment } = useSyncFlow()
 
@@ -149,11 +156,12 @@ export default function Sidebar({ onNavigate }) {
       <div className="px-3 py-4 border-t border-zinc-800 space-y-1">
         <button
           onClick={handleSync}
-          disabled={syncing}
+          disabled={syncing || !can('sync_spotify')}
+          title={!can('sync_spotify') ? 'Connect Spotify to sync your own listening history' : undefined}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-          {syncing ? 'Syncing…' : 'Sync Now'}
+          {syncing ? 'Syncing…' : can('sync_spotify') ? 'Sync Now' : 'Demo library'}
         </button>
 
         <button
@@ -170,7 +178,7 @@ export default function Sidebar({ onNavigate }) {
           <JobToast job={enrichmentJob} label="Enriching tags" onRetry={handleEnrichmentRetry} />
           {syncAtLimit && !syncJob && (
             <p className="mx-1 px-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-xs text-zinc-400 leading-snug">
-              Spotify limits recent history to 50 tracks. Sync regularly to grow your library.
+              The recent-history window was unusually large. Import your Spotify data export to guarantee complete coverage.
             </p>
           )}
         </div>

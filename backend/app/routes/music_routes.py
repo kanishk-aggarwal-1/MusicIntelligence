@@ -5,7 +5,9 @@ from sqlalchemy import func, nullslast
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
+from ..authz import require_capability
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
+from ..models.generated_playlist import GeneratedPlaylist
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..models.song_tag import SongTag
@@ -102,6 +104,8 @@ def get_songs(
             GeneratedPlaylistTrack.song_id.label("song_id"),
             func.count(GeneratedPlaylistTrack.id).label("playlist_inclusion_count"),
         )
+        .join(GeneratedPlaylist, GeneratedPlaylist.id == GeneratedPlaylistTrack.generated_playlist_id)
+        .filter(GeneratedPlaylist.user_id == user_id)
         .group_by(GeneratedPlaylistTrack.song_id)
         .subquery()
     )
@@ -266,7 +270,11 @@ def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db
     )
     playlist_inclusion_count = (
         db.query(func.count(GeneratedPlaylistTrack.id))
-        .filter(GeneratedPlaylistTrack.song_id == song.id)
+        .join(GeneratedPlaylist, GeneratedPlaylist.id == GeneratedPlaylistTrack.generated_playlist_id)
+        .filter(
+            GeneratedPlaylistTrack.song_id == song.id,
+            GeneratedPlaylist.user_id == user_id,
+        )
         .scalar()
     ) or 0
 
@@ -300,6 +308,7 @@ def hide_song(song_id: int, request: Request, db: Session = Depends(get_db)):
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
 
     if not db.query(Song).filter(Song.id == song_id).first():
         raise HTTPException(status_code=404, detail="Song not found")
@@ -319,6 +328,7 @@ def restore_song(song_id: int, request: Request, db: Session = Depends(get_db)):
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "mutate_library")
 
     if not db.query(Song).filter(Song.id == song_id).first():
         raise HTTPException(status_code=404, detail="Song not found")
@@ -333,8 +343,10 @@ def restore_song(song_id: int, request: Request, db: Session = Depends(get_db)):
 @router.post("/{song_id}/retry-enrichment")
 def retry_enrichment(song_id: int, request: Request, db: Session = Depends(get_db)):
     session = load_request_user_session(db, request)
-    if not session.get("user_id"):
+    user_id = session.get("user_id")
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "enrich_metadata")
 
     song = (
         db.query(Song)

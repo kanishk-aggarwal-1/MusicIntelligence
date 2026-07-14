@@ -112,6 +112,9 @@ export default function GlobalSearch() {
           onClick={close}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search MusicIntelligence"
             className="bg-zinc-900 rounded-2xl border border-zinc-700 w-full max-w-lg shadow-2xl overflow-hidden"
             onClick={e => e.stopPropagation()}
             onKeyDown={onDialogKey}
@@ -121,13 +124,14 @@ export default function GlobalSearch() {
               <Search className="w-4 h-4 text-zinc-500 shrink-0" />
               <input
                 ref={inputRef}
+                aria-label="Search songs or pages"
                 value={query}
                 onChange={e => { setQuery(e.target.value); setActiveIdx(0) }}
                 placeholder="Search songs or go to a page…"
                 className="flex-1 bg-transparent text-white text-sm outline-none placeholder-zinc-500"
               />
               {loading && <Spinner size="sm" />}
-              <button onClick={close} className="text-zinc-600 hover:text-zinc-400 shrink-0">
+              <button type="button" onClick={close} aria-label="Close search" className="text-zinc-600 hover:text-zinc-400 shrink-0">
                 <X className="w-4 h-4" />
               </button>
             </div>

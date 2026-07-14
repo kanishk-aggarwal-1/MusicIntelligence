@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { ExternalLink, Music, Pause, Play, Target, CheckCircle, X, RefreshCw, Sparkles, Heart } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { useCapability } from '../contexts/AuthContext'
+import CapabilityNotice from '../components/ui/CapabilityNotice'
 import { usePlayer } from '../contexts/PlayerContext'
 import Spinner from '../components/ui/Spinner'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
@@ -305,6 +307,7 @@ function GoalsSection() {
   const [creating, setCreating] = useState(false)
   const [form, setForm]         = useState({ goal_type: 'new_songs_per_week', target_value: 5, period: 'weekly' })
   const [toast, setToast]       = useState(null)
+  const canManageGoals = useCapability('manage_goals')
 
   function loadGoals() {
     setLoading(true)
@@ -334,6 +337,13 @@ function GoalsSection() {
     } catch (e) { console.error(e) }
   }
 
+  async function toggleGoal(goal) {
+    try {
+      await api.patch(`/insights/goals/${goal.goal_id}`, { active: !goal.active })
+      loadGoals()
+    } catch (e) { console.error(e) }
+  }
+
   return (
     <div className="space-y-4">
       {toast && (
@@ -341,7 +351,7 @@ function GoalsSection() {
           {toast}
         </div>
       )}
-      <div className="flex flex-wrap gap-3 items-end">
+      {canManageGoals ? <div className="flex flex-wrap gap-3 items-end">
         <div className="space-y-1">
           <label className="text-xs text-zinc-500">Goal type</label>
           <select
@@ -350,6 +360,18 @@ function GoalsSection() {
             className="bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand"
           >
             {GOAL_TYPES.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-zinc-500">Period</label>
+          <select
+            value={form.period}
+            onChange={e => setForm(f => ({ ...f, period: e.target.value }))}
+            className="bg-zinc-800 border border-zinc-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand"
+          >
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
           </select>
         </div>
         <div className="space-y-1">
@@ -369,7 +391,7 @@ function GoalsSection() {
           {creating ? <Spinner size="sm" /> : <Target className="w-4 h-4" />}
           Add Goal
         </button>
-      </div>
+      </div> : <CapabilityNotice>These are example goals from the demo account. Connect Spotify to create and manage your own.</CapabilityNotice>}
 
       {loading ? <Spinner /> : goals.length === 0 ? (
         <p className="text-zinc-500 text-sm">No active goals yet.</p>
@@ -387,14 +409,21 @@ function GoalsSection() {
                     <span className={`text-xs font-medium ${onTrack ? 'text-green-400' : 'text-yellow-400'}`}>
                       {g.progress} / {g.target}
                     </span>
-                    <button
+                    {canManageGoals && <button
+                      type="button"
+                      onClick={() => toggleGoal(g)}
+                      className="rounded px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                    >
+                      {g.active ? 'Pause' : 'Resume'}
+                    </button>}
+                    {canManageGoals && <button
                       type="button"
                       title="Remove goal"
                       onClick={() => removeGoal(g.goal_id)}
                       className="w-5 h-5 rounded flex items-center justify-center text-zinc-600 hover:text-red-400 hover:bg-zinc-800"
                     >
                       <X className="w-3 h-3" />
-                    </button>
+                    </button>}
                   </div>
                 </div>
                 <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">

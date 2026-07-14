@@ -82,6 +82,16 @@ def _playlist_record(db, user_id: str, song: Song, name: str = "Test Playlist") 
     )
 
 
+def _playlist_with_songs(db, user_id, songs):
+    items = [{"song": song, "score": 0.8, "components": {}, "reasons": [], "tag_names": []} for song in songs]
+    for song in songs:
+        song.artist = db.query(Artist).filter_by(id=song.artist_id).first()
+    return create_playlist_preview_record(
+        db, user_id=user_id, name="Editable", context_type=None,
+        request_params={"max_tracks": len(songs)}, candidate_pool_size=len(songs), items=items,
+    )
+
+
 # ── GET /playlists/generated ─────────────────────────────────────────────────
 
 def test_generated_history_empty(client_factory, db_session):
@@ -330,3 +340,44 @@ def test_build_playlist_name_uses_genre_and_context(db_session):
     name = build_playlist_name([item], context_type="focus")
 
     assert name.startswith("Indie Focus Mix - ")
+def test_generated_playlist_tracks_can_be_edited_and_deleted(client_factory, db_session):
+    db_session.add(_session("u1"))
+    songs = [_song(db_session, artist_name="Editor", title=f"Song {i}") for i in range(3)]
+    record = _playlist_with_songs(db_session, "u1", songs)
+    client = client_factory(playlist_routes.router)
+    tracks = sorted(record.tracks, key=lambda track: track.position)
+
+    reordered = client.patch(
+        f"/playlists/generated/{record.id}/tracks/reorder",
+        json={"track_ids": [tracks[2].id, tracks[0].id, tracks[1].id]},
+        headers={"X-User-Id": "u1"},
+    )
+    assert [item["id"] for item in reordered.json()["tracks"]] == [tracks[2].id, tracks[0].id, tracks[1].id]
+    pinned = client.patch(
+        f"/playlists/generated/{record.id}/tracks/{tracks[0].id}",
+        json={"is_pinned": True}, headers={"X-User-Id": "u1"},
+    )
+    assert pinned.json()["is_pinned"] is True
+    removed = client.delete(
+        f"/playlists/generated/{record.id}/tracks/{tracks[1].id}", headers={"X-User-Id": "u1"},
+    )
+    assert [item["position"] for item in removed.json()["tracks"]] == [1, 2]
+    assert client.delete(f"/playlists/generated/{record.id}", headers={"X-User-Id": "u1"}).status_code == 200
+    assert db_session.query(GeneratedPlaylist).filter_by(id=record.id).first() is None
+
+
+def test_replace_track_uses_unused_candidate(monkeypatch, client_factory, db_session):
+    db_session.add(_session("u1"))
+    original = _song(db_session, artist_name="Editor", title="Original")
+    replacement = _song(db_session, artist_name="Editor", title="Replacement")
+    record = _playlist_with_songs(db_session, "u1", [original])
+    monkeypatch.setattr(playlist_routes, "recommend_songs", lambda *args, **kwargs: [{
+        "song": replacement, "score": 0.75, "components": {"base": 0.75}, "reasons": ["fresh pick"],
+    }])
+    client = client_factory(playlist_routes.router)
+    response = client.post(
+        f"/playlists/generated/{record.id}/tracks/{record.tracks[0].id}/replace",
+        headers={"X-User-Id": "u1"},
+    )
+    assert response.status_code == 200
+    assert response.json()["tracks"][0]["song_id"] == replacement.id

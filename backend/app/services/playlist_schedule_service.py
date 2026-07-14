@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models.playlist_schedule import PlaylistSchedule
@@ -37,6 +38,8 @@ def serialize_schedule(schedule: PlaylistSchedule) -> dict:
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
         "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
         "last_generated_playlist_id": schedule.last_generated_playlist_id,
+        "last_error": schedule.last_error,
+        "consecutive_failures": int(schedule.consecutive_failures or 0),
         "created_at": schedule.created_at.isoformat() if schedule.created_at else None,
     }
 
@@ -114,6 +117,7 @@ def due_schedules(db: Session, *, user_id: str, now=None, limit: int = 5) -> lis
             PlaylistSchedule.active.is_(True),
             PlaylistSchedule.next_run_at.isnot(None),
             PlaylistSchedule.next_run_at <= now,
+            PlaylistSchedule.running_since.is_(None),
         )
         .order_by(PlaylistSchedule.next_run_at.asc())
         .limit(max(1, limit))
@@ -121,10 +125,37 @@ def due_schedules(db: Session, *, user_id: str, now=None, limit: int = 5) -> lis
     )
 
 
-def mark_ran(db: Session, *, schedule: PlaylistSchedule, generated_playlist_id: int | None, now=None):
+def claim_due_schedules(db: Session, *, now=None, limit: int = 50) -> list[PlaylistSchedule]:
+    """Claim due work so overlapping cron invocations cannot run it twice."""
+    now = now or utcnow_naive()
+    stale_before = now - timedelta(minutes=30)
+    rows = (
+        db.query(PlaylistSchedule)
+        .filter(
+            PlaylistSchedule.active.is_(True),
+            PlaylistSchedule.next_run_at.isnot(None),
+            PlaylistSchedule.next_run_at <= now,
+            or_(PlaylistSchedule.running_since.is_(None), PlaylistSchedule.running_since < stale_before),
+        )
+        .order_by(PlaylistSchedule.next_run_at.asc())
+        .with_for_update(skip_locked=True)
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    for row in rows:
+        row.running_since = now
+        db.add(row)
+    db.commit()
+    return rows
+
+
+def mark_ran(db: Session, *, schedule: PlaylistSchedule, generated_playlist_id: int | None, error: str | None = None, now=None):
     now = now or utcnow_naive()
     schedule.last_run_at = now
     schedule.next_run_at = compute_next_run(schedule.cadence, now=now)
+    schedule.running_since = None
+    schedule.last_error = error
+    schedule.consecutive_failures = (int(schedule.consecutive_failures or 0) + 1) if error else 0
     if generated_playlist_id is not None:
         schedule.last_generated_playlist_id = generated_playlist_id
     db.add(schedule)

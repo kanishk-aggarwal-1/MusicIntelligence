@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text
 
 from ..database import Base
 
@@ -30,4 +30,7 @@ class PlaylistSchedule(Base):
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True, index=True)
     last_generated_playlist_id = Column(Integer, nullable=True)
+    running_since = Column(DateTime, nullable=True, index=True)
+    last_error = Column(Text, nullable=True)
+    consecutive_failures = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, nullable=True)

@@ -1,5 +1,7 @@
 import json
 import logging
+import base64
+import secrets
 import threading
 from functools import partial
 from html import escape
@@ -12,22 +14,27 @@ from sqlalchemy.orm import Session
 import spotipy
 
 from ..database import get_db, engine as _db_engine
+from ..authz import capabilities_for, require_capability
 from ..config import settings
 from ..models.artist import Artist
-from ..models.api_cache import ApiCache
 from ..models.generated_playlist import GeneratedPlaylist
+from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.job import Job
 from ..models.listening_goal import ListeningGoal
 from ..models.listening_history import ListeningHistory
 from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.user_session import UserSession
+from ..models.user_song_pref import UserSongPref
+from ..models.playlist_schedule import PlaylistSchedule
+from ..models.dedup_merge_log import DedupMergeLog
 from ..time_utils import utcnow_naive
 from ..services.job_service import create_job, get_active_job, run_job, serialize_job
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services import live_metrics_service
 from ..services.spotify_service import (
     SESSION_COOKIE_NAME,
+    INCREMENTAL_SYNC_MAX_TRACKS,
     clear_user_session,
     create_session_cookie_value,
     fetch_recent_tracks,
@@ -51,12 +58,8 @@ router = APIRouter(prefix="/user", tags=["User"])
 logger = logging.getLogger(__name__)
 
 IMPORT_RATE_LIMIT_NAMESPACE = "import_history_job"
-
-
-def _require_non_demo(user_id: str | None):
-    """Raise 403 if the request is from the demo account."""
-    if user_id and user_id == settings.DEMO_USER_ID:
-        raise HTTPException(status_code=403, detail="Not available in demo mode")
+OAUTH_STATE_COOKIE_NAME = "musicintel_oauth_state"
+OAUTH_STATE_MAX_AGE = 10 * 60
 
 
 def _allowed_frontend_origin(origin: str | None):
@@ -102,6 +105,22 @@ def _login_popup_response(*, success: bool, message: str, frontend_origin: str, 
     )
 
 
+def _encode_oauth_state(nonce: str, frontend_origin: str | None) -> str:
+    payload = json.dumps({"nonce": nonce, "origin": frontend_origin}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_oauth_state(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 @router.post("/demo-login")
 def demo_login(db: Session = Depends(get_db)):
     """Log in as the demo account — no Spotify OAuth required."""
@@ -128,6 +147,7 @@ def demo_login(db: Session = Depends(get_db)):
         "user_id": demo_user_id,
         "spotify_connected": False,
         "is_demo": True,
+        "capabilities": capabilities_for(demo_user_id, spotify_connected=False),
     })
     response.set_cookie(value=create_session_cookie_value(demo_user_id), **get_session_cookie_options())
     return response
@@ -137,15 +157,40 @@ def demo_login(db: Session = Depends(get_db)):
 def login(request: Request):
     sp_oauth = get_spotify_oauth()
     frontend_origin = _allowed_frontend_origin(request.query_params.get("frontend_origin"))
-    auth_url = sp_oauth.get_authorize_url(state=frontend_origin)
+    nonce = secrets.token_urlsafe(32)
+    state = _encode_oauth_state(nonce, frontend_origin)
+    auth_url = sp_oauth.get_authorize_url(state=state)
     logger.info("spotify.login.start frontend_origin=%s", frontend_origin)
-    return RedirectResponse(auth_url)
+    response = RedirectResponse(auth_url)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE_NAME,
+        create_session_cookie_value(nonce),
+        max_age=OAUTH_STATE_MAX_AGE,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="lax",
+        path="/user/callback",
+    )
+    return response
 
 
 @router.get("/callback", response_class=HTMLResponse)
 def callback(request: Request, db: Session = Depends(get_db)):
     sp_oauth = get_spotify_oauth()
-    frontend_origin = _frontend_message_origin(request.query_params.get("state"))
+    state = _decode_oauth_state(request.query_params.get("state"))
+    nonce = state.get("nonce")
+    cookie_nonce = read_session_cookie_value(request.cookies.get(OAUTH_STATE_COOKIE_NAME))
+    frontend_origin = _frontend_message_origin(state.get("origin"))
+    if not nonce or not cookie_nonce or not secrets.compare_digest(str(nonce), str(cookie_nonce)):
+        logger.warning("spotify.callback.invalid_state")
+        response = _login_popup_response(
+            success=False,
+            message="Spotify login session expired or is invalid. Please try again.",
+            frontend_origin=frontend_origin,
+            status_code=400,
+        )
+        response.delete_cookie(OAUTH_STATE_COOKIE_NAME, path="/user/callback")
+        return response
     error = request.query_params.get("error")
     if error:
         logger.warning("spotify.callback.denied error=%s", error)
@@ -209,6 +254,7 @@ def callback(request: Request, db: Session = Depends(get_db)):
         message="Login successful. You can close this window.",
         frontend_origin=frontend_origin,
     )
+    response.delete_cookie(OAUTH_STATE_COOKIE_NAME, path="/user/callback")
     response.set_cookie(value=create_session_cookie_value(user["id"]), **get_session_cookie_options())
     return response
 
@@ -221,11 +267,13 @@ def session_status(request: Request, db: Session = Depends(get_db)):
     # spotify_connected separately tracks whether the Spotify OAuth token is
     # still usable — it expires every hour and can fail to refresh. Keeping
     # these separate lets the app stay accessible even while Spotify reconnects.
+    spotify_connected = bool(session.get("token") and user_id)
     return {
         "logged_in": bool(user_id),
-        "spotify_connected": bool(session.get("token") and user_id),
+        "spotify_connected": spotify_connected,
         "user_id": user_id,
         "is_demo": bool(user_id and user_id == settings.DEMO_USER_ID),
+        "capabilities": capabilities_for(user_id, spotify_connected=spotify_connected),
     }
 
 
@@ -281,6 +329,36 @@ def sync_status(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/onboarding-status")
+def onboarding_status(request: Request, db: Session = Depends(get_db)):
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+
+    history_count = db.query(func.count(ListeningHistory.id)).filter(ListeningHistory.user_id == user_id).scalar() or 0
+    pending = int(_pending_enrichment_count(db, user_id))
+    playlist_count = db.query(func.count(GeneratedPlaylist.id)).filter(GeneratedPlaylist.user_id == user_id).scalar() or 0
+    spotify_playlist_count = db.query(func.count(GeneratedPlaylist.id)).filter(
+        GeneratedPlaylist.user_id == user_id,
+        GeneratedPlaylist.spotify_playlist_id.is_not(None),
+    ).scalar() or 0
+
+    steps = {
+        "spotify_connected": bool(session.get("token")),
+        "history_synced": history_count > 0,
+        "metadata_ready": history_count > 0 and pending == 0,
+        "playlist_previewed": playlist_count > 0,
+        "playlist_saved": spotify_playlist_count > 0,
+    }
+    return {
+        "complete": all(steps.values()),
+        "steps": steps,
+        "history_rows": int(history_count),
+        "pending_enrichment": pending,
+    }
+
+
 @router.get("/profile")
 def get_profile(request: Request, db: Session = Depends(get_db)):
     """Return Spotify profile data for the logged-in user."""
@@ -319,6 +397,92 @@ def get_profile(request: Request, db: Session = Depends(get_db)):
         "images": spotify_user.get("images") or [],
         "product": spotify_user.get("product"),
         "spotify_url": (spotify_user.get("external_urls") or {}).get("spotify"),
+    }
+
+
+def _export_datetime(value):
+    return value.isoformat() if value else None
+
+
+@router.get("/export-data")
+def export_user_data(request: Request, db: Session = Depends(get_db)):
+    """Return a portable JSON snapshot without credentials or shared catalog internals."""
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "manage_account")
+
+    history_rows = (
+        db.query(ListeningHistory, Song, Artist)
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .join(Artist, Artist.id == Song.artist_id)
+        .filter(ListeningHistory.user_id == user_id)
+        .order_by(ListeningHistory.played_at.asc())
+        .all()
+    )
+    feedback_rows = (
+        db.query(RecommendationFeedback, Song, Artist)
+        .join(Song, Song.id == RecommendationFeedback.song_id)
+        .join(Artist, Artist.id == Song.artist_id)
+        .filter(RecommendationFeedback.user_id == user_id)
+        .order_by(RecommendationFeedback.created_at.asc())
+        .all()
+    )
+    playlists = db.query(GeneratedPlaylist).filter_by(user_id=user_id).order_by(GeneratedPlaylist.created_at.asc()).all()
+
+    return {
+        "schema_version": 1,
+        "exported_at": utcnow_naive().isoformat(),
+        "user_id": user_id,
+        "listening_history": [{
+            "title": song.title,
+            "artist": artist.name,
+            "spotify_id": song.spotify_id,
+            "played_at": _export_datetime(history.played_at),
+            "ms_played": history.ms_played,
+            "skipped": history.skipped,
+            "platform": history.platform,
+            "country": history.country,
+            "offline": history.offline,
+            "incognito": history.incognito,
+        } for history, song, artist in history_rows],
+        "feedback": [{
+            "id": feedback.id,
+            "action": feedback.action,
+            "song": {"title": song.title, "artist": artist.name, "spotify_id": song.spotify_id},
+            "created_at": _export_datetime(feedback.created_at),
+        } for feedback, song, artist in feedback_rows],
+        "goals": [{
+            "goal_type": goal.goal_type,
+            "target_value": goal.target_value,
+            "period": goal.period,
+            "active": goal.active,
+            "created_at": _export_datetime(goal.created_at),
+        } for goal in db.query(ListeningGoal).filter_by(user_id=user_id).all()],
+        "hidden_songs": [{"song_id": pref.song_id} for pref in db.query(UserSongPref).filter_by(user_id=user_id, is_hidden=True).all()],
+        "generated_playlists": [{
+            "id": playlist.id,
+            "name": playlist.name,
+            "context_type": playlist.context_type,
+            "spotify_playlist_id": playlist.spotify_playlist_id,
+            "algorithm_version": playlist.algorithm_version,
+            "created_at": _export_datetime(playlist.created_at),
+            "tracks": [{
+                "position": track.position,
+                "song_id": track.song_id,
+                "is_pinned": bool(track.is_pinned),
+                "final_score": track.final_score,
+            } for track in sorted(playlist.tracks, key=lambda item: item.position)],
+        } for playlist in playlists],
+        "playlist_schedules": [{
+            "name": item.name,
+            "context_type": item.context_type,
+            "cadence": item.cadence,
+            "active": item.active,
+            "next_run_at": _export_datetime(item.next_run_at),
+            "last_run_at": _export_datetime(item.last_run_at),
+        } for item in db.query(PlaylistSchedule).filter_by(user_id=user_id).all()],
     }
 
 
@@ -363,7 +527,7 @@ def delete_user_data(request: Request, db: Session = Depends(get_db)):
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    _require_non_demo(user_id)
+    require_capability(user_id, "manage_account")
 
     deleted: dict[str, int] = {}
 
@@ -375,8 +539,15 @@ def delete_user_data(request: Request, db: Session = Depends(get_db)):
     _del(ListeningGoal,          user_id=user_id)
     _del(RecommendationFeedback, user_id=user_id)
     _del(Job,                    user_id=user_id)
-    # Playlists cascade to tracks via the DB FK relationship
+    playlist_ids = [row[0] for row in db.query(GeneratedPlaylist.id).filter(GeneratedPlaylist.user_id == user_id).all()]
+    if playlist_ids:
+        db.query(GeneratedPlaylistTrack).filter(
+            GeneratedPlaylistTrack.generated_playlist_id.in_(playlist_ids)
+        ).delete(synchronize_session=False)
     _del(GeneratedPlaylist,      user_id=user_id)
+    _del(UserSongPref,           user_id=user_id)
+    _del(PlaylistSchedule,       user_id=user_id)
+    _del(DedupMergeLog,          user_id=user_id)
     _del(UserSession,            user_id=user_id)
 
     db.commit()
@@ -423,19 +594,24 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
     token = session.get("token")
     user_id = session.get("user_id")
 
-    if not token or not user_id:
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    _require_non_demo(user_id)
+    require_capability(user_id, "sync_spotify", spotify_connected=bool(token))
+    if not token:
+        raise HTTPException(status_code=401, detail="spotify_token_expired")
     # Shared namespace with sync_history_job so both paths count against the same budget.
     enforce_rate_limit(request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60)
 
     sp = spotipy.Spotify(auth=token)
-    tracks = fetch_recent_tracks(sp, max_tracks=50)
+    checkpoint = db.query(func.max(ListeningHistory.played_at)).filter(ListeningHistory.user_id == user_id).scalar()
+    tracks = fetch_recent_tracks(sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint)
     sync_result = sync_listening_history(db, user_id, tracks)
 
     return {
         "message": "History synced",
         "fetched_items": len(tracks),
+        "checkpoint_reached": len(tracks) < INCREMENTAL_SYNC_MAX_TRACKS,
+        "sync_window_limited": len(tracks) >= INCREMENTAL_SYNC_MAX_TRACKS,
         **sync_result,
     }
 
@@ -488,7 +664,8 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
 
     progress.update(total=3, current=0, message="Fetching recent Spotify plays")
     sp = get_spotify_client(token)
-    tracks = fetch_recent_tracks(sp, max_tracks=50)
+    checkpoint = db.query(func.max(ListeningHistory.played_at)).filter(ListeningHistory.user_id == user_id).scalar()
+    tracks = fetch_recent_tracks(sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint)
 
     progress.update(current=1, message="Syncing listening history")
     sync_result = sync_listening_history(db, user_id, tracks)
@@ -498,6 +675,8 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
     return {
         "message": "History sync completed",
         "fetched_items": len(tracks),
+        "checkpoint_reached": len(tracks) < INCREMENTAL_SYNC_MAX_TRACKS,
+        "sync_window_limited": len(tracks) >= INCREMENTAL_SYNC_MAX_TRACKS,
         "progress_current": 3,
         "progress_total": 3,
         "enrichment_queued": bool(enrichment_job),
@@ -512,7 +691,7 @@ def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Se
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    _require_non_demo(user_id)
+    require_capability(user_id, "sync_spotify", spotify_connected=bool(session.get("token")))
 
     # Check for a running job first — returning it is free and must not burn tokens.
     existing = get_active_job(db, user_id=user_id, job_type="sync_history")
@@ -539,7 +718,7 @@ def backfill_metadata(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    _require_non_demo(user_id)
+    require_capability(user_id, "enrich_metadata")
     enforce_rate_limit(request, namespace="backfill", user_id=user_id, limit=5, window_seconds=60)
 
     result = backfill_missing_metadata(
@@ -774,6 +953,12 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
             "user_id": user_id,
             "song_id": song_id,
             "played_at": played_at,
+            "ms_played": t.get("ms_played"),
+            "skipped": t.get("skipped"),
+            "platform": t.get("platform"),
+            "country": t.get("country"),
+            "offline": t.get("offline"),
+            "incognito": t.get("incognito"),
         })
 
     total_to_insert = len(rows_to_insert)
@@ -850,6 +1035,10 @@ def _parse_extended_history(data: list) -> list:
             "played_at": entry.get("ts"),
             "ms_played": ms_played,
             "skipped": skipped,
+            "platform": entry.get("platform"),
+            "country": entry.get("conn_country"),
+            "offline": entry.get("offline"),
+            "incognito": entry.get("incognito_mode"),
         })
     return tracks
 
@@ -859,7 +1048,8 @@ def _run_import_history_job(db, progress, *, user_id: str, tracks: list, entry_c
 
     ``tracks``      — output of _parse_extended_history (or equivalent
                       client-side logic): list of dicts with keys
-                      title / artist / spotify_id / played_at / ms_played / skipped.
+                      title / artist / spotify_id / played_at / ms_played /
+                      skipped / platform / country / offline / incognito.
     ``entry_count`` — original number of raw entries (for reporting).
     """
     total_tracks = len(tracks)
@@ -922,19 +1112,11 @@ def _clear_previous_import_requests(db: Session, user_id: str):
         .delete(synchronize_session=False)
     )
 
-    cleared_rate_limits = (
-        db.query(ApiCache)
-        .filter(
-            ApiCache.provider == "rate_limit",
-            ApiCache.cache_key == f"rate_limit:{IMPORT_RATE_LIMIT_NAMESPACE}:{user_id}",
-        )
-        .delete(synchronize_session=False)
-    )
     db.commit()
     return {
         "cancelled_active_imports": len(active_jobs),
         "deleted_previous_imports": int(deleted_terminal or 0),
-        "cleared_import_rate_limits": int(cleared_rate_limits or 0),
+        "cleared_import_rate_limits": 0,
     }
 
 
@@ -950,7 +1132,8 @@ async def import_history_job(
     JSON body path (new, used by the frontend):
       POST /user/import-history/job
       Content-Type: application/json
-      Body: [{title, artist, spotify_id, played_at, ms_played, skipped}, ...]
+      Body: [{title, artist, spotify_id, played_at, ms_played, skipped,
+              platform, country, offline, incognito}, ...]
 
       The browser runs _parse_extended_history logic client-side before
       sending, cutting the payload from ~12 MB to ~1 MB and avoiding
@@ -965,9 +1148,8 @@ async def import_history_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    _require_non_demo(user_id)
+    require_capability(user_id, "import_history")
 
-    cleanup = _clear_previous_import_requests(db, user_id)
     enforce_rate_limit(request, namespace=IMPORT_RATE_LIMIT_NAMESPACE, user_id=user_id, limit=20, window_seconds=600)
 
     content_type = request.headers.get("content-type", "")
@@ -1011,6 +1193,7 @@ async def import_history_job(
             detail="Expected application/json body or multipart/form-data file upload",
         )
 
+    cleanup = _clear_previous_import_requests(db, user_id)
     job = create_job(
         db,
         user_id=user_id,
@@ -1041,7 +1224,7 @@ def backfill_metadata_job(
     user_id = session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
-    _require_non_demo(user_id)
+    require_capability(user_id, "enrich_metadata")
 
     # Return existing job without consuming a rate-limit token.
     existing = get_active_job(db, user_id=user_id, job_type="backfill_metadata")

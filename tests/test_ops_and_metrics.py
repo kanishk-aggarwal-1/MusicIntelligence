@@ -41,7 +41,7 @@ def test_metrics_snapshot_includes_jobs_failures_requests_and_timings():
     assert snapshot["timings"]["job.sync_history"]["avg_seconds"] >= 1.5
 
 
-def test_ops_health_checks_database(client_factory, db_session):
+def test_ops_health_is_liveness_only(client_factory, db_session):
     client = client_factory(ops_routes.router)
 
     resp = client.get("/ops/health")
@@ -49,8 +49,15 @@ def test_ops_health_checks_database(client_factory, db_session):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["status"] == "ok"
-    assert payload["database"]["status"] == "ok"
+    assert payload["database"]["status"] == "unchecked"
     assert payload["time_utc"]
+
+
+def test_ops_ready_checks_database(client_factory, db_session):
+    client = client_factory(ops_routes.router)
+    resp = client.get("/ops/ready")
+    assert resp.status_code == 200
+    assert resp.json()["database"]["status"] == "ok"
 
 
 def test_security_and_request_headers_are_added(db_session):
