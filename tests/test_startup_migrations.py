@@ -57,26 +57,38 @@ def test_migrations_add_expected_columns(sqlite_engine, monkeypatch):
     assert "token_info_json" in session_cols
 
 
-def test_migrations_no_ms_played_column(sqlite_engine, monkeypatch):
-    """ms_played and skipped should be dropped if they exist."""
-    # Manually add the legacy columns
+def test_migrations_preserve_listening_engagement_columns(sqlite_engine, monkeypatch):
+    """Startup migrations should keep the engagement columns used by dashboard stats."""
+    monkeypatch.setattr("backend.app.database.engine", sqlite_engine)
+    run_startup_migrations()
+
+    inspector = inspect(sqlite_engine)
+    lh_cols = {c["name"] for c in inspector.get_columns("listening_history")}
+    assert "ms_played" in lh_cols
+    assert "skipped" in lh_cols
+    assert "platform" in lh_cols
+    assert "country" in lh_cols
+    assert "offline" in lh_cols
+    assert "incognito" in lh_cols
+
+
+def test_migrations_add_missing_listening_engagement_columns(sqlite_engine, monkeypatch):
+    """Older databases without engagement fields should be repaired at startup."""
     with sqlite_engine.begin() as conn:
-        try:
-            conn.execute(text("ALTER TABLE listening_history ADD COLUMN ms_played INTEGER"))
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE listening_history ADD COLUMN skipped BOOLEAN"))
-        except Exception:
-            pass
+        for column in ("ms_played", "skipped", "platform", "country", "offline", "incognito"):
+            conn.execute(text(f"ALTER TABLE listening_history DROP COLUMN {column}"))
 
     monkeypatch.setattr("backend.app.database.engine", sqlite_engine)
     run_startup_migrations()
 
     inspector = inspect(sqlite_engine)
     lh_cols = {c["name"] for c in inspector.get_columns("listening_history")}
-    assert "ms_played" not in lh_cols
-    assert "skipped" not in lh_cols
+    assert "ms_played" in lh_cols
+    assert "skipped" in lh_cols
+    assert "platform" in lh_cols
+    assert "country" in lh_cols
+    assert "offline" in lh_cols
+    assert "incognito" in lh_cols
 
 
 def test_migrations_song_tag_columns(sqlite_engine, monkeypatch):

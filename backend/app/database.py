@@ -292,13 +292,25 @@ def run_startup_migrations():
             if "listening_history" in table_names:
                 lh_cols = _column_type_map(inspector, "listening_history")
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE listening_history DROP COLUMN IF EXISTS ms_played"))
-                    conn.execute(text("ALTER TABLE listening_history DROP COLUMN IF EXISTS skipped"))
+                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS ms_played INTEGER"))
+                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS skipped BOOLEAN"))
+                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS platform VARCHAR"))
+                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS country VARCHAR"))
+                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS offline BOOLEAN"))
+                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS incognito BOOLEAN"))
                 else:
-                    if "ms_played" in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history DROP COLUMN ms_played"))
-                    if "skipped" in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history DROP COLUMN skipped"))
+                    if "ms_played" not in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN ms_played INTEGER"))
+                    if "skipped" not in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN skipped BOOLEAN"))
+                    if "platform" not in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN platform VARCHAR"))
+                    if "country" not in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN country VARCHAR"))
+                    if "offline" not in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN offline BOOLEAN"))
+                    if "incognito" not in lh_cols:
+                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN incognito BOOLEAN"))
 
                 if dialect == "postgresql":
                     conn.execute(
