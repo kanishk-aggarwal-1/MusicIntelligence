@@ -1091,7 +1091,22 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
             is_deleted=False,
         )
         db.add(song)
-        db.flush()
+        try:
+            sp = db.begin_nested()
+            db.flush()
+            sp.commit()
+        except IntegrityError:
+            sp.rollback()
+            # Race condition: another concurrent request inserted the same song.
+            # Re-fetch and continue as if it already existed.
+            song = db.query(Song).filter(
+                Song.title == title,
+                Song.artist_id == artist.id,
+                Song.is_deleted.is_(False),
+            ).first()
+            if not song:
+                logger.warning("store_discovered_songs.recheck_miss title=%s artist_id=%s", title, artist.id)
+                continue
 
         data = enrich_song(song)
         _apply_enrichment(db, song, data)

@@ -70,6 +70,37 @@ def run_startup_migrations():
         dialect = engine.dialect.name
         table_names = set(inspector.get_table_names())
 
+        # On PostgreSQL, skip the entire migration block when the schema is
+        # already fully up to date.  Every ALTER TABLE takes AccessExclusiveLock
+        # even with IF NOT EXISTS, so running them on every startup (when they're
+        # no-ops) races with live user requests and can cause deadlocks.
+        if dialect == "postgresql" and table_names:
+            existing_indexes = {
+                idx["name"]
+                for tbl in table_names
+                for idx in inspector.get_indexes(tbl)
+            }
+            sentinel_indexes = {
+                "uq_artists_spotify_id",
+                "uq_songs_title_artist_id_active",
+                "uq_listening_history_user_song_played_at",
+            }
+            sentinel_cols = {
+                "songs": {"image_url", "is_deleted", "discovery_source", "enrichment_status"},
+                "song_tags": {"weight", "popularity"},
+                "listening_history": {"platform", "country"},
+                "user_sessions": {"token_expires_at"},
+            }
+            cols_ok = all(
+                col in {c["name"] for c in inspector.get_columns(tbl)}
+                for tbl, cols in sentinel_cols.items()
+                if tbl in table_names
+                for col in cols
+            )
+            if sentinel_indexes.issubset(existing_indexes) and cols_ok:
+                logger.info("Startup migrations: schema up to date, skipping")
+                return
+
         with engine.begin() as conn:
             # On PostgreSQL, acquire an advisory lock so that concurrent Render
             # instances (zero-downtime deploys spin up 2 processes at once) don't
@@ -83,6 +114,9 @@ def run_startup_migrations():
                 if not got_lock:
                     logger.info("Startup migrations skipped — another instance is running them")
                     return
+                # Fail fast if a table lock can't be acquired within 3 s rather
+                # than waiting indefinitely and deadlocking with a live request.
+                conn.execute(text("SET LOCAL lock_timeout = '3s'"))
             if "artists" in table_names:
                 cols = _column_type_map(inspector, "artists")
                 if dialect == "postgresql":
