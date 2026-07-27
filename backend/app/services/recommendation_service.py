@@ -311,7 +311,6 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
                     postgres_insert(ListeningHistory.__table__)
                     .values(
                         user_id=user_id, song_id=song.id, played_at=played_at,
-                        ms_played=item.get("ms_played"), skipped=item.get("skipped"),
                         platform=item.get("platform"), country=item.get("country"),
                         offline=item.get("offline"), incognito=item.get("incognito"),
                     )
@@ -329,8 +328,6 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
                     user_id=user_id,
                     song_id=song.id,
                     played_at=played_at,
-                    ms_played=item.get("ms_played"),
-                    skipped=item.get("skipped"),
                     platform=item.get("platform"),
                     country=item.get("country"),
                     offline=item.get("offline"),

@@ -16,8 +16,6 @@ class ListeningHistory(Base):
     user_id = Column(String, index=True)
     song_id = Column(Integer, ForeignKey("songs.id"))
     played_at = Column(DateTime, default=utcnow_naive)
-    ms_played = Column(Integer, nullable=True)
-    skipped = Column(Boolean, nullable=True)
     platform = Column(String, nullable=True)
     country = Column(String, nullable=True)
     offline = Column(Boolean, nullable=True)
