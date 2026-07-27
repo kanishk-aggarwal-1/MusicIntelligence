@@ -168,12 +168,18 @@ def get_stats(
 
     total_plays = base_history.count()
 
-    total_ms = (
-        base_history.with_entities(func.sum(ListeningHistory.ms_played)).scalar() or 0
-    )
-
-    known_skip_rows = base_history.filter(ListeningHistory.skipped.is_not(None)).count()
-    skipped_rows = base_history.filter(ListeningHistory.skipped.is_(True)).count()
+    try:
+        total_ms = (
+            base_history.with_entities(func.sum(ListeningHistory.ms_played)).scalar() or 0
+        )
+        known_skip_rows = base_history.filter(ListeningHistory.skipped.is_not(None)).count()
+        skipped_rows = base_history.filter(ListeningHistory.skipped.is_(True)).count()
+    except Exception:
+        # Columns may not exist yet on older DB instances; degrade gracefully.
+        db.rollback()
+        total_ms = 0
+        known_skip_rows = 0
+        skipped_rows = 0
 
     compare_payload = None
     if compare_previous:
