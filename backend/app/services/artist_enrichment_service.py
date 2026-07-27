@@ -39,7 +39,14 @@ def enrich_artist_genres(db, sp, batch_size: int = 50) -> dict:
                 if artist is not None:
                     artist.genres = json.dumps(artist_data.get("genres") or [])
                     enriched += 1
-        except Exception:
+        except Exception as exc:
+            status = getattr(exc, "http_status", None)
+            if status == 403:
+                # 403 is systemic (dev-mode user limit or daily quota exceeded) —
+                # subsequent batches will also fail, so stop immediately.
+                logger.warning("enrich_artist_genres.forbidden — stopping (offset=%s). "
+                               "Check Spotify app quota or dev-mode allowlist.", i)
+                break
             logger.exception("enrich_artist_genres batch failed (offset=%s)", i)
 
     if enriched:

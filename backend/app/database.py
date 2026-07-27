@@ -88,7 +88,7 @@ def run_startup_migrations():
             sentinel_cols = {
                 "songs": {"image_url", "is_deleted", "discovery_source", "enrichment_status"},
                 "song_tags": {"weight", "popularity"},
-                "listening_history": {"platform", "country"},
+                "listening_history": {"platform", "country", "ms_played", "skipped"},
                 "user_sessions": {"token_expires_at"},
             }
             cols_ok = all(

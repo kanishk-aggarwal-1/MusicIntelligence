@@ -440,6 +440,8 @@ def export_user_data(request: Request, db: Session = Depends(get_db)):
             "artist": artist.name,
             "spotify_id": song.spotify_id,
             "played_at": _export_datetime(history.played_at),
+            "ms_played": history.ms_played,
+            "skipped": history.skipped,
             "platform": history.platform,
             "country": history.country,
             "offline": history.offline,
