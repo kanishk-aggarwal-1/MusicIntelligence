@@ -1,5 +1,8 @@
 import logging
+import threading
 import time
+from datetime import timedelta
+from functools import partial
 from math import ceil
 import json
 
@@ -13,6 +16,7 @@ from ..database import get_db
 from ..authz import require_capability
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
+from ..models.job import Job
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..services.generated_playlist_service import (
@@ -24,6 +28,7 @@ from ..services.generated_playlist_service import (
     mark_generated_playlist_created,
     serialize_generated_playlist,
 )
+from ..services.job_service import create_job, get_active_job, run_job
 from ..services.playlist_schedule_service import (
     MAX_SCHEDULES_PER_USER,
     VALID_CADENCES,
@@ -39,7 +44,11 @@ from ..services.playlist_schedule_service import (
 )
 from ..services import live_metrics_service
 from ..services.rate_limit_service import enforce_rate_limit
-from ..services.recommendation_service import recommend_songs
+from ..services.recommendation_service import (
+    discover_new_songs,
+    recommend_songs,
+    store_discovered_songs,
+)
 from ..services.spotify_service import (
     clear_user_session,
     create_playlist,
@@ -49,10 +58,65 @@ from ..services.spotify_service import (
     load_user_session,
     resolve_track_id,
 )
-from ..time_utils import utcnow
+from ..time_utils import utcnow, utcnow_naive
 
 router = APIRouter(prefix="/playlists", tags=["Playlists"])
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Background discovery job
+# ---------------------------------------------------------------------------
+_DISCOVERY_JOB_TYPE = "refresh_discovery_pool"
+_DISCOVERY_COOLDOWN = timedelta(hours=6)
+
+
+def _run_discovery_job(db, progress, *, user_id: str):
+    progress.update(total=3, current=0, message="Selecting seed artists")
+    discovered, summary = discover_new_songs(
+        db, user_id,
+        include_summary=True,
+        seed_limit=10,
+        max_similar_per_seed=5,
+    )
+    progress.update(current=1, message=f"Found {len(discovered)} candidates — enriching")
+    store_summary = store_discovered_songs(
+        db, discovered,
+        user_id=user_id,
+        resolve_spotify=True,
+    )
+    progress.update(current=3, message="Discovery pool refreshed")
+    return {
+        "message": f"Stored {store_summary.get('store_attempted', 0)} songs",
+        "seed_artists": summary.get("seed_artists", 0),
+        "candidates_found": len(discovered),
+        "progress_current": 3,
+        "progress_total": 3,
+    }
+
+
+def _maybe_trigger_discovery(db, user_id: str) -> None:
+    """Start a background discovery job unless one is already running or ran recently."""
+    if get_active_job(db, user_id=user_id, job_type=_DISCOVERY_JOB_TYPE):
+        return
+    last = (
+        db.query(Job)
+        .filter(
+            Job.user_id == user_id,
+            Job.job_type == _DISCOVERY_JOB_TYPE,
+            Job.status == "succeeded",
+        )
+        .order_by(Job.finished_at.desc())
+        .first()
+    )
+    if last and last.finished_at and (utcnow_naive() - last.finished_at) < _DISCOVERY_COOLDOWN:
+        return
+    job = create_job(db, user_id=user_id, job_type=_DISCOVERY_JOB_TYPE, message="Queued", progress_total=3)
+    threading.Thread(
+        target=run_job,
+        args=(job.id, partial(_run_discovery_job, user_id=user_id)),
+        daemon=True,
+    ).start()
+    logger.info("discovery.job_started job_id=%s user_id=%s", job.id, user_id)
 
 
 class PlaylistGeneratePayload(BaseModel):
@@ -432,30 +496,24 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     # familiarity=0.0 → all new discoveries → discovery_ratio=1.0
     _discovery_ratio = max(0.0, min(1.0, 1.0 - payload.familiarity))
 
-    # When discovery is needed, run a quick Last.fm fan-out (top 5 artists →
-    # 4 similar artists each → up to 100 tracks) and store them WITHOUT Spotify
-    # resolution (fast). Spotify IDs are resolved lazily when the user saves.
-    # seed_limit=5 + max_similar=4 = at most 20 Last.fm calls, all cached after
-    # first run so repeated previews are instant.
-    _allow_disc = _discovery_ratio > 0.0
+    # Fire-and-forget background job to refresh the discovery pool.
+    # The ML step below scores whatever is already in the DB; the job
+    # populates more songs for future requests without blocking this one.
+    if _discovery_ratio > 0.0:
+        try:
+            _maybe_trigger_discovery(db, user_id)
+        except Exception:
+            logger.warning("discovery.trigger_failed user_id=%s", user_id, exc_info=True)
 
-    recommendation_result = recommend_songs(
+    details = recommend_songs(
         db,
         user_id,
         return_details=True,
         min_known_ratio=payload.min_known_ratio,
-        include_discovery_summary=True,
-        allow_discovery=_allow_disc,
-        discovery_seed_limit=5 if _allow_disc else None,
-        discovery_store_limit=60 if _allow_disc else None,
-        discovery_max_similar=4 if _allow_disc else None,
         context_type=payload.context_type,
         limit=candidate_limit,
         discovery_ratio=_discovery_ratio,
-        resolve_spotify=False,  # skip Spotify during preview; resolved at save time
     )
-
-    details = recommendation_result["items"]
     details = _apply_quality_controls(details, payload.diversity, payload.familiarity)
     details = _enforce_known_ratio(details, requested_tracks, payload.min_known_ratio)
     details = _cap_artist_repetition(details, requested_tracks, payload.diversity)
@@ -481,7 +539,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
         request_params=request_params,
         candidate_pool_size=len(details),
         items=selected,
-        algorithm_version=recommendation_result.get("algorithm_version") or ALGORITHM_VERSION,
+        algorithm_version=ALGORITHM_VERSION,
     )
 
     serialized = serialize_generated_playlist(record, include_tracks=True)
