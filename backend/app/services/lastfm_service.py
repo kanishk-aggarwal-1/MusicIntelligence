@@ -1,5 +1,7 @@
 import json
+import threading
 import time
+from collections import OrderedDict
 
 import requests
 
@@ -10,6 +12,34 @@ from .metrics_service import record_external_call
 
 
 CACHE_TTL_SECONDS = 3600
+
+# ---------------------------------------------------------------------------
+# In-process LRU cache
+# ---------------------------------------------------------------------------
+# Avoids a Neon round-trip for repeated lookups of the same track/artist
+# within a single Render worker session (e.g. during batch enrichment).
+# Stores successful responses only; errors always fall through to DB.
+_mem_cache: OrderedDict[str, dict] = OrderedDict()
+_mem_lock = threading.Lock()
+_MEM_MAX = 2048
+
+
+def _mem_get(key: str) -> dict | None:
+    with _mem_lock:
+        if key in _mem_cache:
+            _mem_cache.move_to_end(key)
+            return _mem_cache[key]
+        return None
+
+
+def _mem_set(key: str, value: dict) -> None:
+    with _mem_lock:
+        if key in _mem_cache:
+            _mem_cache.move_to_end(key)
+        else:
+            if len(_mem_cache) >= _MEM_MAX:
+                _mem_cache.popitem(last=False)
+        _mem_cache[key] = value
 
 
 def _make_cache_key(method: str, params: dict):
@@ -30,17 +60,27 @@ def lastfm_request(method: str, params=None):
     )
 
     cache_key = _make_cache_key(method, request_params)
+
+    # 1. In-process memory hit — no DB round-trip.
+    mem = _mem_get(cache_key)
+    if mem is not None:
+        live_metrics_service.increment(live_metrics_service.CACHE_HITS)
+        record_external_call("lastfm_cache", ok=True)
+        return mem
+
+    # 2. PostgreSQL cache hit.
     cached = get_cached_response("lastfm", cache_key)
     if cached is not None:
-        # Cache hit — a real Last.fm call was avoided.
         live_metrics_service.increment(live_metrics_service.CACHE_HITS)
         if cached.get("error"):
             record_external_call("lastfm_cache", ok=False)
             raise RuntimeError(cached["error"])
         record_external_call("lastfm_cache", ok=True)
-        return cached.get("payload") or {}
+        payload = cached.get("payload") or {}
+        _mem_set(cache_key, payload)
+        return payload
 
-    # Cache miss — we are about to make a real external Last.fm request.
+    # 3. Cache miss — real Last.fm request.
     live_metrics_service.increment_many({
         live_metrics_service.CACHE_MISSES: 1,
         live_metrics_service.LASTFM_CALLS: 1,
@@ -57,6 +97,7 @@ def lastfm_request(method: str, params=None):
         data = response.json()
         store_cached_response("lastfm", cache_key, payload=data, status_code=response.status_code)
         record_external_call("lastfm", ok=True)
+        _mem_set(cache_key, data)
         return data
     except Exception as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)

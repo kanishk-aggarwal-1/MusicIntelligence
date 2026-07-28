@@ -225,6 +225,7 @@ def _score_discovery_songs(
     centroid,            # shape (1, n_features)
     excluded: set,       # song IDs to skip (never-show / disliked)
     limit: int,
+    user_song_ids: list[int] | None = None,   # user's library ids for tag pre-filter
 ) -> list[dict]:
     """Score enriched songs *not* in the user's listening history against the
     taste centroid built from their library.
@@ -233,32 +234,48 @@ def _score_discovery_songs(
     whole listening-history id list into Python.  Returns up to *limit* dicts
     with keys ``song_id`` and ``similarity``.
     """
-    # Anti-join: enriched songs the user has never played — regardless of
-    # whether they know the artist.  This covers both cases the user wants:
-    #   • new songs from artists they already love (deep cuts / B-sides)
-    #   • songs from artists they've never heard of at all
-    # Both are valid discovery; the TF-IDF centroid score decides which surface
-    # first based on taste fit.
-    disc_rows = (
-        db.query(Song.id, Song.artist_id)
-        .outerjoin(
-            ListeningHistory,
-            (ListeningHistory.song_id == Song.id)
-            & (ListeningHistory.user_id == user_id),
+    # Tag pre-filter: restrict discovery pool to songs sharing at least one
+    # Last.fm tag with the user's library.  This cuts the pool from 2 000 to
+    # a smaller, taste-relevant set without the scoring step (which is the
+    # expensive vectorizer.transform call).  Songs that have genre overlap but
+    # zero tag overlap are rare edge cases — if the pool ends up empty we fall
+    # back to the unfiltered query.
+    tag_subq = None
+    if user_song_ids:
+        tag_subq = (
+            db.query(SongTag.tag_id)
+            .filter(SongTag.song_id.in_(user_song_ids))
+            .distinct()
+            .subquery()
         )
-        .filter(
-            ListeningHistory.id.is_(None),         # not this specific song in history
-            Song.is_deleted.is_(False),
-            # Accept both "complete" and "partial" — songs enriched before the
-            # fix that required genre+tags to reach "complete" may sit at
-            # "partial" despite having usable tags.  Empty-doc songs are
-            # filtered out later by the `if doc:` guard.
-            Song.enrichment_status.in_(["complete", "partial"]),
+
+    def _build_disc_query(with_tag_filter: bool):
+        q = (
+            db.query(Song.id, Song.artist_id)
+            .outerjoin(
+                ListeningHistory,
+                (ListeningHistory.song_id == Song.id)
+                & (ListeningHistory.user_id == user_id),
+            )
+            .filter(
+                ListeningHistory.id.is_(None),
+                Song.is_deleted.is_(False),
+                Song.enrichment_status.in_(["complete", "partial"]),
+            )
         )
-        .order_by(Song.popularity_score.desc().nullslast())
-        .limit(_DISCOVERY_POOL_CAP)
-        .all()
-    )
+        if with_tag_filter and tag_subq is not None:
+            q = (
+                q.join(SongTag, SongTag.song_id == Song.id)
+                 .filter(SongTag.tag_id.in_(tag_subq))
+                 .distinct()
+            )
+        return q.order_by(Song.popularity_score.desc().nullslast()).limit(_DISCOVERY_POOL_CAP)
+
+    disc_rows = _build_disc_query(with_tag_filter=True).all()
+    if not disc_rows:
+        # Fall back to unfiltered if the tag pre-filter produced nothing
+        # (e.g. user's library has no enriched tags yet).
+        disc_rows = _build_disc_query(with_tag_filter=False).all()
 
     if not disc_rows:
         return []
@@ -537,6 +554,7 @@ def knn_recommend(
             centroid,
             excluded=excluded,
             limit=discovery_n * 6,   # over-fetch for temperature sampling
+            user_song_ids=model_ids,
         )
 
     # ── Phase 4: load full ORM objects for BOTH pools (single query) ─────────
