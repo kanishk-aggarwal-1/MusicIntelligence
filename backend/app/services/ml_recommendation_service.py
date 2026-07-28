@@ -12,6 +12,7 @@ generations produce different tracks rather than always the same deterministic t
 """
 import json
 import logging
+import threading
 from collections import defaultdict
 from datetime import timedelta
 from math import log
@@ -30,6 +31,30 @@ from ..models.tag import Tag
 from ..time_utils import utcnow_naive
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-process model cache
+# ---------------------------------------------------------------------------
+# Keyed by (user_id, latest_played_at_isoformat).  Invalidates automatically
+# the next time the user's listening history gains a new row (max played_at
+# advances).  Stores the expensive parts — fitted TF-IDF vectorizer, sparse
+# matrix, play counts, and co-occurrence — so successive requests within the
+# same Render worker skip all DB fan-out and sklearn fitting.
+_cache_lock = threading.Lock()
+_user_model_cache: dict[str, dict] = {}   # user_id → {"key": str, "model": dict}
+
+
+def _cache_get(user_id: str, key: str) -> dict | None:
+    with _cache_lock:
+        entry = _user_model_cache.get(user_id)
+        if entry and entry["key"] == key:
+            return entry["model"]
+        return None
+
+
+def _cache_set(user_id: str, key: str, model: dict) -> None:
+    with _cache_lock:
+        _user_model_cache[user_id] = {"key": key, "model": model}
 
 ALGORITHM_VERSION = "tfidf-knn-v1"
 
@@ -112,19 +137,24 @@ def _get_temporal_play_counts(db, user_id: str, hour: int) -> dict[int, int]:
     return {sid: int(cnt or 0) for sid, cnt in rows}
 
 
-def _build_cooccurrence(db, user_id: str, session_gap_minutes: int = 30) -> dict[int, dict[int, int]]:
+def _build_cooccurrence(db, user_id: str, session_gap_minutes: int = 30, days: int = 90) -> dict[int, dict[int, int]]:
     """
     Implicit collaborative signal from listening sessions.
 
     Songs played within `session_gap_minutes` of each other belong to the same
     session. We count how often each pair appears in the same session; songs
     co-occurring with the user's most-played tracks get a score boost.
+
+    `days` caps how far back we look — older sessions are less taste-relevant
+    and scanning all history for users with 100k+ rows is expensive.
     """
+    cutoff = utcnow_naive() - timedelta(days=days)
     rows = (
         db.query(ListeningHistory.song_id, ListeningHistory.played_at)
         .filter(
             ListeningHistory.user_id == user_id,
             ListeningHistory.played_at.is_not(None),
+            ListeningHistory.played_at >= cutoff,
         )
         .order_by(ListeningHistory.played_at)
         .all()
@@ -339,103 +369,127 @@ def knn_recommend(
     """
     excluded = excluded_song_ids or set()
 
-    # ── Phase 1: lightweight scalars only ────────────────────────────────────
-    # get_play_counts returns {song_id: int} — no ORM objects.
-    play_counts = _get_play_counts(db, user_id)
-    if not play_counts:
-        return []
-    max_plays = max(play_counts.values(), default=1)
-
-    # Top-N song IDs by play count — the recommendation centroid is
-    # play-count-weighted so songs beyond the cap have negligible influence.
-    # This prevents loading 20 k ORM objects when the model only needs 5 k.
-    _MODEL_CAP = 5_000
-    user_song_ids = sorted(
-        (sid for sid in play_counts if sid not in excluded),
-        key=lambda s: play_counts[s],
-        reverse=True,
-    )[:_MODEL_CAP]
-
-    if not user_song_ids:
-        return []
-
-    # ── Phase 2: build TF-IDF documents without loading ORM objects ──────────
-    # Query only the three lightweight columns needed for ML:
-    #   song_id (int), tag_names (list[str]), artist_genres (list[str])
-    # Returning plain tuples keeps memory proportional to raw data size
-    # rather than to SQLAlchemy ORM object overhead (~8-10 KB per object).
-
-    # 2a — (song_id, artist_id) for songs in the cap
-    song_meta = (
-        db.query(Song.id, Song.artist_id)
-        .filter(Song.id.in_(user_song_ids), Song.is_deleted.is_(False))
-        .all()
+    # ── Cache lookup ─────────────────────────────────────────────────────────
+    # The model only changes when new history is added.  Use max(played_at) as
+    # a cheap invalidation key — one indexed aggregate query.
+    latest_ts = (
+        db.query(func.max(ListeningHistory.played_at))
+        .filter(ListeningHistory.user_id == user_id)
+        .scalar()
     )
-    song_id_to_artist: dict[int, int] = {row[0]: row[1] for row in song_meta}
-    valid_ids = list(song_id_to_artist)
+    cache_key = latest_ts.isoformat() if latest_ts else None
+    cached = _cache_get(user_id, cache_key) if cache_key else None
 
-    if not valid_ids:
-        return []
+    if cached:
+        vectorizer      = cached["vectorizer"]
+        tfidf_matrix    = cached["tfidf_matrix"]
+        model_ids       = cached["model_ids"]
+        play_counts     = cached["play_counts"]
+        song_id_to_artist = cached["song_id_to_artist"]
+        cooccurrence    = cached["cooccurrence"]
+        max_plays       = cached["max_plays"]
+        logger.info("knn_recommend.cache_hit user_id=%s", user_id)
+    else:
+        # ── Phase 1: lightweight scalars only ──────────────────────────────
+        play_counts = _get_play_counts(db, user_id)
+        if not play_counts:
+            return []
+        max_plays = max(play_counts.values(), default=1)
 
-    # 2b — (song_id, tag_name) pairs — one row per tag
-    tag_rows = (
-        db.query(SongTag.song_id, Tag.name)
-        .join(Tag, Tag.id == SongTag.tag_id)
-        .filter(SongTag.song_id.in_(valid_ids))
-        .all()
-    )
-    song_tags_map: dict[int, list[str]] = defaultdict(list)
-    for song_id, tag_name in tag_rows:
-        if tag_name:
-            song_tags_map[song_id].append(_norm_term(tag_name))
+        _MODEL_CAP = 5_000
+        user_song_ids = sorted(
+            (sid for sid in play_counts if sid not in excluded),
+            key=lambda s: play_counts[s],
+            reverse=True,
+        )[:_MODEL_CAP]
 
-    # 2c — (artist_id, genres_json)
-    artist_ids = list({aid for aid in song_id_to_artist.values() if aid})
-    artist_genres: dict[int, list[str]] = {}
-    if artist_ids:
-        for artist_id, genres_json in (
-            db.query(Artist.id, Artist.genres)
-            .filter(Artist.id.in_(artist_ids))
+        if not user_song_ids:
+            return []
+
+        # ── Phase 2: build TF-IDF documents ────────────────────────────────
+        song_meta = (
+            db.query(Song.id, Song.artist_id)
+            .filter(Song.id.in_(user_song_ids), Song.is_deleted.is_(False))
             .all()
-        ):
-            try:
-                artist_genres[artist_id] = [
-                    _norm_term(g)
-                    for g in json.loads(genres_json or "[]")
-                    if g
-                ]
-            except Exception:
-                pass
-
-    # 2d — assemble document strings; skip songs with no tags/genres
-    model_ids: list[int] = []
-    documents: list[str] = []
-    for sid in user_song_ids:          # preserve play-count order
-        if sid not in song_id_to_artist:
-            continue
-        aid = song_id_to_artist[sid]
-        tags = song_tags_map.get(sid, [])
-        genres = artist_genres.get(aid, [])
-        doc = _build_doc(tags, genres)
-        if doc:
-            model_ids.append(sid)
-            documents.append(doc)
-
-    if len(model_ids) < 2:
-        logger.info(
-            "knn_recommend.insufficient_tagged_songs user_id=%s count=%s",
-            user_id, len(model_ids),
         )
-        return []
+        song_id_to_artist: dict[int, int] = {row[0]: row[1] for row in song_meta}
+        valid_ids = list(song_id_to_artist)
 
-    # ── Phase 3: TF-IDF + KNN (pure numpy/scipy, no ORM objects) ────────────
-    vectorizer = TfidfVectorizer(
-        min_df=2 if len(documents) >= 50 else 1,
-        max_features=400,
-        ngram_range=(1, 2),
-        sublinear_tf=True,
-    )
-    tfidf_matrix = vectorizer.fit_transform(documents)   # sparse (N × 400)
+        if not valid_ids:
+            return []
+
+        tag_rows = (
+            db.query(SongTag.song_id, Tag.name)
+            .join(Tag, Tag.id == SongTag.tag_id)
+            .filter(SongTag.song_id.in_(valid_ids))
+            .all()
+        )
+        song_tags_map: dict[int, list[str]] = defaultdict(list)
+        for song_id, tag_name in tag_rows:
+            if tag_name:
+                song_tags_map[song_id].append(_norm_term(tag_name))
+
+        artist_ids = list({aid for aid in song_id_to_artist.values() if aid})
+        artist_genres: dict[int, list[str]] = {}
+        if artist_ids:
+            for artist_id, genres_json in (
+                db.query(Artist.id, Artist.genres)
+                .filter(Artist.id.in_(artist_ids))
+                .all()
+            ):
+                try:
+                    artist_genres[artist_id] = [
+                        _norm_term(g)
+                        for g in json.loads(genres_json or "[]")
+                        if g
+                    ]
+                except Exception:
+                    pass
+
+        model_ids: list[int] = []
+        documents: list[str] = []
+        for sid in user_song_ids:
+            if sid not in song_id_to_artist:
+                continue
+            aid = song_id_to_artist[sid]
+            tags = song_tags_map.get(sid, [])
+            genres = artist_genres.get(aid, [])
+            doc = _build_doc(tags, genres)
+            if doc:
+                model_ids.append(sid)
+                documents.append(doc)
+
+        if len(model_ids) < 2:
+            logger.info(
+                "knn_recommend.insufficient_tagged_songs user_id=%s count=%s",
+                user_id, len(model_ids),
+            )
+            return []
+
+        # ── Phase 3: TF-IDF fit + co-occurrence ────────────────────────────
+        vectorizer = TfidfVectorizer(
+            min_df=2 if len(documents) >= 50 else 1,
+            max_features=400,
+            ngram_range=(1, 2),
+            sublinear_tf=True,
+        )
+        tfidf_matrix = vectorizer.fit_transform(documents)
+
+        # Co-occurrence is expensive; always compute and cache it here so it
+        # doesn't have to run per-request.
+        cooccurrence = _build_cooccurrence(db, user_id)
+
+        if cache_key:
+            _cache_set(user_id, cache_key, {
+                "vectorizer":       vectorizer,
+                "tfidf_matrix":     tfidf_matrix,
+                "model_ids":        model_ids,
+                "play_counts":      play_counts,
+                "song_id_to_artist": song_id_to_artist,
+                "cooccurrence":     cooccurrence,
+                "max_plays":        max_plays,
+            })
+            logger.info("knn_recommend.cache_set user_id=%s model_songs=%s", user_id, len(model_ids))
 
     now_hour = utcnow_naive().hour
     temporal_counts = _get_temporal_play_counts(db, user_id, now_hour)
@@ -504,14 +558,7 @@ def knn_recommend(
     }
 
     # ── Phase 5: build familiar candidate dicts ───────────────────────────────
-    # _build_cooccurrence does a full history scan + O(k²) Python loop — skip
-    # it entirely when familiar_n == 0 (100% discovery mode) because the
-    # co-occurrence boost is only applied to familiar candidates.
-    cooccurrence: dict = {}
-    top_anchor_ids: list = []
-    if familiar_n > 0:
-        cooccurrence   = _build_cooccurrence(db, user_id)
-        top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15]
+    top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15] if familiar_n > 0 else []
 
     familiar_candidates: list[dict] = []
     for dist, song_id in zip(ranked_dists, ranked_ids):

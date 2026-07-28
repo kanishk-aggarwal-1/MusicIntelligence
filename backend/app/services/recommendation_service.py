@@ -1,7 +1,7 @@
 from collections import Counter
 from datetime import timedelta
 import logging
-from math import log, sqrt
+from math import log
 import random
 
 
@@ -447,122 +447,9 @@ def backfill_missing_metadata(
     }
 
 
-def build_user_profile(db, user_id):
-
-    history = db.query(ListeningHistory).join(Song, Song.id == ListeningHistory.song_id).filter(
-        ListeningHistory.user_id == user_id,
-        Song.is_deleted.is_(False),
-    ).all()
-
-    tag_counter = Counter()
-
-    for h in history:
-
-        song = h.song
-
-        if not song.song_tags:
-            continue
-
-        for st in song.song_tags:
-
-            tag_counter[st.tag.name] += 1
-
-    return tag_counter
-
-
-def build_song_vector(song):
-
-    vector = {}
-
-    for st in song.song_tags:
-
-        vector[st.tag.name] = 1
-
-    return vector
-
-
-def build_user_vector(profile):
-
-    return dict(profile)
-
-
-def cosine_similarity(vec1, vec2):
-
-    intersection = set(vec1.keys()) & set(vec2.keys())
-
-    numerator = sum(vec1[x] * vec2[x] for x in intersection)
-
-    sum1 = sum(v ** 2 for v in vec1.values())
-
-    sum2 = sum(v ** 2 for v in vec2.values())
-
-    denominator = sqrt(sum1) * sqrt(sum2)
-
-    if denominator == 0:
-
-        return 0
-
-    score = numerator / denominator
-    if abs(score - 1.0) < 1e-12:
-        return 1.0
-    return score
-
-
 def _tag_names(song):
     return [st.tag.name for st in song.song_tags if st.tag and st.tag.name]
 
-
-def _norm_log(value, max_value):
-    if max_value <= 0 or value <= 0:
-        return 0.0
-    return min(1.0, log(value + 1) / log(max_value + 1))
-
-
-def _listening_stats(db, user_id):
-    song_rows = (
-        db.query(
-            ListeningHistory.song_id,
-            func.count(ListeningHistory.id).label("plays"),
-            func.max(ListeningHistory.played_at).label("last_played"),
-        )
-        .filter(ListeningHistory.user_id == user_id)
-        .group_by(ListeningHistory.song_id)
-        .all()
-    )
-    artist_rows = (
-        db.query(
-            Song.artist_id,
-            func.count(ListeningHistory.id).label("plays"),
-        )
-        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
-        .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
-        .group_by(Song.artist_id)
-        .all()
-    )
-
-    now = to_naive_utc(utcnow())
-    recent_cutoff = now - timedelta(days=14)
-    recent_song_rows = (
-        db.query(ListeningHistory.song_id, func.count(ListeningHistory.id))
-        .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= recent_cutoff)
-        .group_by(ListeningHistory.song_id)
-        .all()
-    )
-
-    song_play_counts = {song_id: int(plays or 0) for song_id, plays, _ in song_rows}
-    last_played_map = {song_id: last_played for song_id, _, last_played in song_rows}
-    artist_play_counts = {artist_id: int(plays or 0) for artist_id, plays in artist_rows if artist_id is not None}
-    recent_song_counts = {song_id: int(plays or 0) for song_id, plays in recent_song_rows}
-
-    return {
-        "song_play_counts": song_play_counts,
-        "artist_play_counts": artist_play_counts,
-        "recent_song_counts": recent_song_counts,
-        "last_played_map": last_played_map,
-        "max_song_plays": max(song_play_counts.values(), default=0),
-        "max_artist_plays": max(artist_play_counts.values(), default=0),
-        "now": now,
-    }
 
 
 def _context_match(song, context_type: str | None):
@@ -721,7 +608,7 @@ def recommend_songs(
     min_known_ratio: float = 0.6,
     include_discovery_summary: bool = False,
     allow_discovery: bool = True,
-    discovery_seed_limit: int | None = None,
+    discovery_seed_limit: int = 10,
     discovery_store_limit: int | None = None,
     context_type: str | None = None,
     limit: int = 30,
