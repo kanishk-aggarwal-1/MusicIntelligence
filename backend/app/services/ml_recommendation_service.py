@@ -20,7 +20,7 @@ from math import log
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.neighbors import NearestNeighbors
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
 from ..models.artist import Artist
@@ -242,16 +242,19 @@ def _score_discovery_songs(
     # back to the unfiltered query.
     tag_subq = None
     if user_song_ids:
+        # Use select() form (not .subquery()) so SQLAlchemy's .in_() accepts it
+        # without coercion warnings.
         tag_subq = (
-            db.query(SongTag.tag_id)
-            .filter(SongTag.song_id.in_(user_song_ids))
+            select(SongTag.tag_id)
+            .where(SongTag.song_id.in_(user_song_ids))
             .distinct()
-            .subquery()
         )
 
     def _build_disc_query(with_tag_filter: bool):
+        # Include popularity_score in the SELECT so that PostgreSQL's DISTINCT
+        # rule (ORDER BY expressions must appear in the select list) is satisfied.
         q = (
-            db.query(Song.id, Song.artist_id)
+            db.query(Song.id, Song.artist_id, Song.popularity_score)
             .outerjoin(
                 ListeningHistory,
                 (ListeningHistory.song_id == Song.id)
@@ -281,9 +284,9 @@ def _score_discovery_songs(
         return []
 
     disc_id_to_artist: dict[int, int] = {
-        row_id: row_artist_id
-        for row_id, row_artist_id in disc_rows
-        if row_id not in excluded
+        row.id: row.artist_id
+        for row in disc_rows
+        if row.id not in excluded
     }
 
     if not disc_id_to_artist:
