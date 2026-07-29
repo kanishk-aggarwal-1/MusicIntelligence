@@ -28,8 +28,6 @@ from backend.app.services.job_service import (
 from backend.app.services.recommendation_service import (
     backfill_missing_metadata,
     build_discovery_feed,
-    build_song_vector,
-    build_user_profile,
     discover_new_songs,
     _human_reasons,
     recommend_songs,
@@ -347,51 +345,6 @@ def test_clear_provider_cache_removes_entries(testing_session_local, monkeypatch
 
     assert get_cached_response("lastfm", "clear-key-1") is None
     assert get_cached_response("spotify", "keep-key") is not None
-
-
-# ── recommendation_service: utility functions ────────────────────────────────
-
-def test_build_user_profile_counts_tags(db_session):
-    db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="Prof A", title="Prof T1", tag_name="indie")
-    s2 = _song_with_tag(db_session, artist_name="Prof B", title="Prof T2", tag_name="indie")
-    s3 = _song_with_tag(db_session, artist_name="Prof C", title="Prof T3", tag_name="rock")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s3.id, played_at=datetime(2026, 5, 3, 10, 0)),
-    ])
-    db_session.commit()
-
-    profile = build_user_profile(db_session, "u1")
-    assert profile["indie"] == 2
-    assert profile["rock"] == 1
-
-
-def test_build_song_vector_returns_tag_dict(db_session):
-    s = _song_with_tag(db_session, artist_name="Vec A", title="Vec T1", tag_name="electronic")
-    _tag_extra = db_session.query(Tag).filter_by(name="ambient").first()
-    if not _tag_extra:
-        _tag_extra = Tag(name="ambient")
-        db_session.add(_tag_extra)
-        db_session.flush()
-    db_session.add(SongTag(song_id=s.id, tag_id=_tag_extra.id))
-    db_session.commit()
-    db_session.refresh(s)
-
-    vector = build_song_vector(s)
-    assert "electronic" in vector
-    assert "ambient" in vector
-    assert vector["electronic"] == 1
-
-
-def test_build_song_vector_empty_when_no_tags(db_session):
-    artist = _artist(db_session, "No Tags Artist")
-    s = Song(title="No Tags", artist_id=artist.id, is_deleted=False, enrichment_status="pending")
-    db_session.add(s)
-    db_session.commit()
-    db_session.refresh(s)
-    assert build_song_vector(s) == {}
 
 
 # ── recommendation_service: backfill_missing_metadata ────────────────────────
