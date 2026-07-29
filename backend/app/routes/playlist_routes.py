@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from datetime import timedelta
@@ -148,6 +149,11 @@ class ScheduleCreatePayload(BaseModel):
     diversity: float = 0.5
     familiarity: float = 0.5
     max_tracks: int = 30
+
+
+class DJPayload(BaseModel):
+    prompt: str
+    max_tracks: int = 20
 
 
 CONTEXT_DEFAULTS = {
@@ -556,6 +562,103 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
             "notes": quality_notes,
         },
     }
+
+
+_VALID_CONTEXT_TYPES = set(CONTEXT_DEFAULTS)
+
+
+def _call_claude_dj(prompt: str, api_key: str) -> dict:
+    """Parse a free-text DJ prompt into playlist params + a one-sentence DJ note."""
+    try:
+        import anthropic
+    except ImportError:
+        raise RuntimeError("anthropic package not installed — add it to requirements.txt")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        system=(
+            "You are an AI DJ for a personal music app. "
+            "Given the user's vibe request, output ONLY a JSON object with these exact keys — no markdown fences, no extra text:\n"
+            '{\n'
+            '  "context_type": one of ["focus","workout","late-night","chill"] or null,\n'
+            '  "familiarity": float 0.0–1.0  (1.0 = only songs the user already knows, 0.0 = all new discoveries),\n'
+            '  "diversity": float 0.0–1.0  (1.0 = maximum artist variety, 0.0 = repeat artists OK),\n'
+            '  "dj_note": one sentence in DJ voice explaining the vibe and what to expect\n'
+            '}\n\n'
+            "context_type guidance:\n"
+            "  focus → ambient, instrumental, lo-fi, study\n"
+            "  workout → energetic, hip-hop, EDM, hype\n"
+            "  late-night → moody, soul, jazz, downtempo\n"
+            "  chill → relaxed, acoustic, indie, dream-pop\n"
+            "  null → mixed or does not match any preset"
+        ),
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = (msg.content[0].text or "").strip()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        logger.warning("dj.parse_failed raw=%r", raw[:200])
+        data = {}
+
+    # Sanitise values so bad Claude output can't crash _build_preview.
+    context_type = data.get("context_type")
+    if context_type not in _VALID_CONTEXT_TYPES:
+        context_type = None
+    familiarity = float(max(0.0, min(1.0, data.get("familiarity", 0.5))))
+    diversity   = float(max(0.0, min(1.0, data.get("diversity",   0.5))))
+    dj_note     = str(data.get("dj_note") or f"Tuned to your request: {prompt}")
+
+    return {
+        "context_type": context_type,
+        "familiarity":  familiarity,
+        "diversity":    diversity,
+        "dj_note":      dj_note,
+    }
+
+
+@router.post("/dj")
+def dj_playlist(payload: DJPayload, request: Request, db: Session = Depends(get_db)):
+    """Generate a playlist from a natural-language prompt via an AI DJ layer."""
+    session = load_request_user_session(db, request)
+    user_id = session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not logged in")
+    require_capability(user_id, "preview_playlists")
+
+    prompt = (payload.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI DJ is not configured — set ANTHROPIC_API_KEY")
+
+    try:
+        dj = _call_claude_dj(prompt, api_key)
+    except Exception as exc:
+        logger.warning("dj.claude_error %s", exc)
+        raise HTTPException(status_code=502, detail=f"AI DJ unavailable: {str(exc)[:200]}")
+
+    playlist_payload = PlaylistGeneratePayload(
+        context_type=dj["context_type"],
+        familiarity=dj["familiarity"],
+        diversity=dj["diversity"],
+        max_tracks=max(1, min(payload.max_tracks, 50)),
+    )
+
+    result = _build_preview(db, user_id, playlist_payload)
+    result["dj_note"]   = dj["dj_note"]
+    result["dj_prompt"] = prompt
+    result["dj_params"] = {
+        "context_type": dj["context_type"],
+        "familiarity":  dj["familiarity"],
+        "diversity":    dj["diversity"],
+    }
+    return result
 
 
 @router.get("/generated")
