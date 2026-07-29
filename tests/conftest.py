@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend.app.database import Base, get_db
 from backend.app.models import api_cache, artist, dedup_merge_log, generated_playlist, generated_playlist_track, job, listening_goal, listening_history, recommendation_feedback, song, song_tag, tag, user_session  # noqa: F401
+import backend.app.services.ml_recommendation_service as _ml_svc
 
 
 def _date_trunc(part, value):
@@ -28,6 +29,15 @@ def _date_trunc(part, value):
     if part == "month":
         return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(sep=" ")
     return dt.isoformat(sep=" ")
+
+
+@pytest.fixture(autouse=True)
+def _clear_ml_cache():
+    """Wipe the in-process TF-IDF model cache before every test so cache hits
+    from one test cannot bleed state (excluded songs, stale models) into the next."""
+    _ml_svc._user_model_cache.clear()
+    yield
+    _ml_svc._user_model_cache.clear()
 
 
 @pytest.fixture()

@@ -580,6 +580,8 @@ def knn_recommend(
 
     familiar_candidates: list[dict] = []
     for dist, song_id in zip(ranked_dists, ranked_ids):
+        if song_id in excluded:
+            continue
         song = songs_by_id.get(song_id)
         if not song:
             continue
