@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, nullslast, select
@@ -15,6 +16,7 @@ from ..models.user_song_pref import UserSongPref
 from ..services.enrichment_service import enrich_song
 from ..services.recommendation_service import _apply_enrichment
 from ..services.spotify_service import load_request_user_session
+from ..time_utils import utcnow_naive
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
 
@@ -117,9 +119,10 @@ def get_songs(
         .outerjoin(playlist_use_subq, playlist_use_subq.c.song_id == Song.id)
     )
 
-    # Fetch hidden IDs into Python only for quick_filter/q paths that need per-row checks.
+    # Fetch hidden IDs for Python-path per-row checks and the "is_deleted" response field.
+    # Only needed when quick_filter/q paths must perform per-row hidden status checks.
     hidden_song_ids: set = set()
-    if quick_filter or q:
+    if q or quick_filter in ("hidden", "active", "duplicate_candidates"):
         hidden_song_ids = {
             r[0]
             for r in db.query(UserSongPref.song_id)
@@ -127,14 +130,49 @@ def get_songs(
             .all()
         }
 
-    # SQL-paginated path: correlated subquery keeps hidden IDs out of the wire.
-    if not include_deleted and not quick_filter and not q:
+    # Exclude hidden songs in SQL for all paths that don't specifically request them.
+    if not include_deleted and quick_filter != "hidden":
         query = query.filter(
             ~Song.id.in_(
                 select(UserSongPref.song_id)
                 .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
             )
         )
+
+    # Push quick_filter conditions into SQL to avoid full-table scans.
+    # duplicate_candidates needs Python grouping; q needs Python artist-name search.
+    _needs_python_filter = bool(q) or quick_filter == "duplicate_candidates"
+    if quick_filter == "failed_enrichment":
+        query = query.filter(Song.enrichment_status == "failed")
+    elif quick_filter == "partial_enrichment":
+        query = query.filter(Song.enrichment_status == "partial")
+    elif quick_filter == "missing_tags":
+        query = query.filter(~Song.id.in_(select(SongTag.song_id).distinct()))
+    elif quick_filter == "missing_popularity":
+        query = query.filter(
+            (Song.listeners.is_(None) | (Song.listeners == 0)),
+            (Song.playcount.is_(None) | (Song.playcount == 0)),
+        )
+    elif quick_filter == "high_popularity":
+        query = query.filter(Song.popularity_score >= 3)
+    elif quick_filter == "never_used_in_playlist":
+        query = query.filter(playlist_use_subq.c.playlist_inclusion_count.is_(None))
+    elif quick_filter == "hidden":
+        query = query.filter(Song.id.in_(
+            select(UserSongPref.song_id)
+            .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+        ))
+    elif quick_filter == "active":
+        query = query.filter(
+            ~Song.id.in_(
+                select(UserSongPref.song_id)
+                .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+            )
+        )
+    elif quick_filter == "recently_played":
+        cutoff = utcnow_naive() - timedelta(days=safe_days)
+        query = query.filter(last_listen_subq.c.last_listened_at >= cutoff)
+    # "duplicate_candidates": Python grouping required — no SQL shortcut.
 
     if genre:
         query = query.filter(Song.genre == genre)
@@ -144,9 +182,8 @@ def get_songs(
 
     safe_sort = sort if sort in VALID_SORTS else "recent"
 
-    # Push ORDER BY + LIMIT into SQL only for the simple case.
-    # When quick_filter or q is set we need Python-side filtering first.
-    if not quick_filter and not q:
+    # Apply ORDER BY + LIMIT + OFFSET in SQL on all paths where Python filtering is not needed.
+    if not _needs_python_filter:
         query = query.order_by(
             _sort_col(safe_sort, last_listen_subq),
             Song.title,
@@ -169,42 +206,27 @@ def get_songs(
         popularity_value = s.popularity_score or 0
         playlist_count = int(playlist_inclusion_count or 0)
 
+        # Text search: Python match (title + artist name) — artist name requires a JOIN not yet in base query.
         if q:
             q_lower = q.lower()
             artist_name = (s.artist.name if s.artist else "").lower()
             if q_lower not in (s.title or "").lower() and q_lower not in artist_name:
                 continue
 
-        if quick_filter == "failed_enrichment" and s.enrichment_status != "failed":
-            continue
-        if quick_filter == "partial_enrichment" and s.enrichment_status != "partial":
-            continue
-        if quick_filter == "missing_tags" and tag_count > 0:
-            continue
-        if quick_filter == "missing_popularity" and ((s.listeners or 0) > 0 or (s.playcount or 0) > 0):
-            continue
-        if quick_filter == "high_popularity" and popularity_value < 3:
-            continue
-        if quick_filter == "never_used_in_playlist" and playlist_count > 0:
-            continue
-        is_hidden_for_user = s.id in hidden_song_ids
-        # Also exclude hidden songs in the Python-filtered path (quick_filter / q).
-        if not include_deleted and (quick_filter not in ("hidden", None) or q):
-            if is_hidden_for_user and quick_filter != "hidden":
-                continue
-
-        if quick_filter == "hidden" and not is_hidden_for_user:
-            continue
-        if quick_filter == "active" and is_hidden_for_user:
-            continue
+        # duplicate_candidates: Python grouping.
         if quick_filter == "duplicate_candidates":
             key = f"{(s.artist.name if s.artist else '').lower().strip()}::{_canonical_title(s.title)}"
             if key not in duplicate_keys:
                 continue
 
-        if quick_filter == "recently_played":
-            from ..time_utils import utcnow_naive
-            if not last_listened_at or (utcnow_naive() - last_listened_at).days > safe_days:
+        # Hidden checks only on Python-filter path (SQL handles other paths).
+        if _needs_python_filter:
+            is_hidden_for_user = s.id in hidden_song_ids
+            if not include_deleted and is_hidden_for_user and quick_filter != "hidden":
+                continue
+            if quick_filter == "hidden" and not is_hidden_for_user:
+                continue
+            if quick_filter == "active" and is_hidden_for_user:
                 continue
 
         filtered.append(
@@ -232,7 +254,7 @@ def get_songs(
             }
         )
 
-    if quick_filter or q:
+    if _needs_python_filter:
         # Python-filtered results: sort and paginate here
         if safe_sort == "plays":
             filtered.sort(key=lambda r: (-(r["listening_count"] or 0), r["title"]))
@@ -244,7 +266,7 @@ def get_songs(
             filtered.sort(key=lambda r: (r["last_listened_at"] is None, r["last_listened_at"] or "", r["title"]), reverse=True)
         return filtered[safe_offset:safe_offset + safe_limit]
 
-    # Common path: SQL already applied ORDER BY + LIMIT + OFFSET
+    # SQL already applied ORDER BY + LIMIT + OFFSET
     return filtered
 
 

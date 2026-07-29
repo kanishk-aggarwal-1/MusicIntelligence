@@ -88,6 +88,7 @@ def _duplicate_groups(db: Session, user_id: str):
         .join(Artist, Artist.id == Song.artist_id)
         .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
         .distinct()
+        .limit(5000)
         .all()
     )
 
@@ -330,6 +331,7 @@ def _compute_new_for_you(db: Session, user_id: str) -> dict:
         .join(Artist, Artist.id == Song.artist_id)
         .join(user_song_ids, user_song_ids.c.song_id == Song.id)
         .filter(Song.is_deleted.is_(False))
+        .limit(3000)
         .all()
     )
     listened_spotify_ids = {spotify_id for _, _, spotify_id in listened_rows if spotify_id}
@@ -599,31 +601,56 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
     )
 
     now = utcnow_naive()
-    statuses = []
 
-    for goal in goals:
-        period_start = _period_start(now, goal.period)
-        window = db.query(ListeningHistory).filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= period_start,
+    # Pre-compute stats for each unique period_start in 2 queries per period
+    # instead of 4 queries per goal. Goals sharing the same period reuse results.
+    unique_periods = {_period_start(now, g.period) for g in goals}
+    period_stats: dict = {}
+    for period_start in unique_periods:
+        _agg = (
+            db.query(
+                func.count(ListeningHistory.id),
+                func.count(func.distinct(ListeningHistory.song_id)),
+                func.count(func.distinct(func.date(ListeningHistory.played_at))),
+            )
+            .filter(
+                ListeningHistory.user_id == user_id,
+                ListeningHistory.played_at >= period_start,
+            )
+            .one()
         )
-        total_events = window.count()
-        distinct_songs = window.with_entities(func.count(func.distinct(ListeningHistory.song_id))).scalar() or 0
-        active_days = window.with_entities(func.count(func.distinct(func.date(ListeningHistory.played_at)))).scalar() or 0
+        total_events, distinct_songs, active_days = _agg
         first_play_subq = (
             db.query(ListeningHistory.song_id, func.min(ListeningHistory.played_at).label("first_played_at"))
             .filter(ListeningHistory.user_id == user_id)
             .group_by(ListeningHistory.song_id)
             .subquery()
         )
-        new_songs = db.query(func.count(first_play_subq.c.song_id)).filter(first_play_subq.c.first_played_at >= period_start).scalar() or 0
+        new_songs = (
+            db.query(func.count(first_play_subq.c.song_id))
+            .filter(first_play_subq.c.first_played_at >= period_start)
+            .scalar() or 0
+        )
+        period_stats[period_start] = {
+            "total_events": int(total_events or 0),
+            "distinct_songs": int(distinct_songs or 0),
+            "active_days": int(active_days or 0),
+            "new_songs": int(new_songs),
+        }
+
+    statuses = []
+    for goal in goals:
+        period_start = _period_start(now, goal.period)
+        stats = period_stats[period_start]
+        total_events = stats["total_events"]
+        distinct_songs = stats["distinct_songs"]
         repeat_rate = ((total_events - distinct_songs) / total_events) if total_events > 0 else 0
         progress = 0
 
         if goal.goal_type == "new_songs_per_week":
-            progress = int(new_songs)
+            progress = stats["new_songs"]
         elif goal.goal_type == "listening_days_per_week":
-            progress = active_days
+            progress = stats["active_days"]
         elif goal.goal_type == "repeat_rate_max":
             progress = round(repeat_rate * 100)
 
@@ -690,36 +717,43 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
         .subquery()
     )
 
-    base_songs = db.query(Song.id).join(user_song_ids, user_song_ids.c.song_id == Song.id).filter(Song.is_deleted.is_(False))
-    total_songs = base_songs.count()
-
-    with_genre = (
-        db.query(func.count(Song.id))
-        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
-        .filter(Song.genre.is_not(None), Song.is_deleted.is_(False))
-        .scalar()
-    ) or 0
-    with_spotify = (
-        db.query(func.count(Song.id))
-        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
-        .filter(Song.spotify_id.is_not(None), Song.is_deleted.is_(False))
-        .scalar()
-    ) or 0
-
-    with_tags = (
-        db.query(func.count(func.distinct(SongTag.song_id)))
-        .join(Song, Song.id == SongTag.song_id)
+    # Single aggregate query for the five scalar metrics that share the same
+    # base filter — replaces five separate COUNT round-trips.
+    _basic = (
+        db.query(
+            func.count(Song.id).label("total"),
+            func.count(Song.id).filter(Song.genre.is_not(None)).label("with_genre"),
+            func.count(Song.id).filter(Song.spotify_id.is_not(None)).label("with_spotify"),
+            func.count(Song.id).filter(
+                (Song.listeners.is_(None) | (Song.listeners == 0)),
+                (Song.playcount.is_(None) | (Song.playcount == 0)),
+            ).label("missing_popularity"),
+        )
         .join(user_song_ids, user_song_ids.c.song_id == Song.id)
         .filter(Song.is_deleted.is_(False))
-        .scalar()
-    ) or 0
+        .one()
+    )
+    total_songs = int(_basic.total or 0)
+    with_genre = int(_basic.with_genre or 0)
+    with_spotify = int(_basic.with_spotify or 0)
+    missing_popularity = int(_basic.missing_popularity or 0)
 
-    with_history = (
-        db.query(func.count(func.distinct(ListeningHistory.song_id)))
-        .join(Song, Song.id == ListeningHistory.song_id)
-        .filter(ListeningHistory.user_id == user_id, Song.is_deleted.is_(False))
-        .scalar()
-    ) or 0
+    # with_tags + missing_tags need a LEFT JOIN on SongTag — one additional query.
+    _tag_counts = (
+        db.query(
+            func.count(func.distinct(SongTag.song_id)).label("with_tags"),
+            func.count(func.distinct(case((SongTag.id.is_(None), Song.id), else_=None))).label("missing_tags"),
+        )
+        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
+        .outerjoin(SongTag, SongTag.song_id == Song.id)
+        .filter(Song.is_deleted.is_(False))
+        .one()
+    )
+    with_tags = int(_tag_counts.with_tags or 0)
+    missing_tags = int(_tag_counts.missing_tags or 0)
+
+    # All songs joined via user_song_ids have listening history by definition.
+    with_history = total_songs
 
     status_rows = (
         db.query(Song.enrichment_status, func.count(Song.id))
@@ -728,25 +762,6 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
         .group_by(Song.enrichment_status)
         .all()
     )
-
-    missing_tags = (
-        db.query(func.count(Song.id))
-        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
-        .outerjoin(SongTag, SongTag.song_id == Song.id)
-        .filter(Song.is_deleted.is_(False), SongTag.id.is_(None))
-        .scalar()
-    ) or 0
-
-    missing_popularity = (
-        db.query(func.count(Song.id))
-        .join(user_song_ids, user_song_ids.c.song_id == Song.id)
-        .filter(
-            Song.is_deleted.is_(False),
-            (Song.listeners.is_(None) | (Song.listeners == 0)),
-            (Song.playcount.is_(None) | (Song.playcount == 0)),
-        )
-        .scalar()
-    ) or 0
 
     error_rows = (
         db.query(Song.enrichment_error, func.count(Song.id))
@@ -844,22 +859,32 @@ def dedup_apply(request: Request, limit_groups: int = 20, dry_run: bool = False,
     for group in duplicates:
         songs = group["songs"]
         keep_id = songs[0]["song_id"]
+        all_dup_ids = [d["song_id"] for d in songs[1:]]
+
+        # Hoist keep_pairs outside the inner loop — same data for every duplicate.
+        keep_pairs = {
+            (r.user_id, r.played_at)
+            for r in db.query(ListeningHistory.user_id, ListeningHistory.played_at)
+            .filter(ListeningHistory.user_id == user_id, ListeningHistory.song_id == keep_id)
+            .all()
+        }
+
+        # Batch-load all duplicate history rows in one query instead of one per dup.
+        from collections import defaultdict as _defaultdict
+        _all_dup_rows = db.query(ListeningHistory).filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.song_id.in_(all_dup_ids),
+        ).all()
+        _dup_rows_by_id: dict = _defaultdict(list)
+        for _r in _all_dup_rows:
+            _dup_rows_by_id[_r.song_id].append(_r)
 
         for duplicate in songs[1:]:
             dup_id = duplicate["song_id"]
 
             # This is a per-user cleanup. Songs and tags are shared globally, so
             # only the requesting user's history may be rewritten.
-            keep_pairs = {
-                (r.user_id, r.played_at)
-                for r in db.query(ListeningHistory.user_id, ListeningHistory.played_at)
-                .filter(ListeningHistory.user_id == user_id, ListeningHistory.song_id == keep_id)
-                .all()
-            }
-            dup_rows = db.query(ListeningHistory).filter(
-                ListeningHistory.user_id == user_id,
-                ListeningHistory.song_id == dup_id,
-            ).all()
+            dup_rows = _dup_rows_by_id[dup_id]
             conflict_ids = {r.id for r in dup_rows if (r.user_id, r.played_at) in keep_pairs}
             history_row_ids = [r.id for r in dup_rows if r.id not in conflict_ids]
             conflict_rows = [
