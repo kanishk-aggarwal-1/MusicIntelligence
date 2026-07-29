@@ -419,26 +419,41 @@ def knn_recommend(
         max_plays = max(play_counts.values(), default=1)
 
         _MODEL_CAP = 5_000
-        user_song_ids = sorted(
-            (sid for sid in play_counts if sid not in excluded),
-            key=lambda s: play_counts[s],
-            reverse=True,
-        )[:_MODEL_CAP]
-
-        if not user_song_ids:
-            return []
 
         # ── Phase 2: build TF-IDF documents ────────────────────────────────
+        # Use a subquery for the top-played songs instead of sending up to
+        # 5 000 literal IDs as an IN list.
+        _top_played_subq = (
+            select(ListeningHistory.song_id)
+            .where(ListeningHistory.user_id == user_id)
+            .group_by(ListeningHistory.song_id)
+            .order_by(func.count().desc())
+            .limit(_MODEL_CAP)
+            .subquery()
+        )
         song_meta = (
             db.query(Song.id, Song.artist_id)
-            .filter(Song.id.in_(user_song_ids), Song.is_deleted.is_(False))
+            .join(_top_played_subq, _top_played_subq.c.song_id == Song.id)
+            .filter(Song.is_deleted.is_(False))
             .all()
         )
-        song_id_to_artist: dict[int, int] = {row[0]: row[1] for row in song_meta}
+        # Apply excluded filter in Python — excluded set is small (user feedback only).
+        song_id_to_artist: dict[int, int] = {
+            row.id: row.artist_id
+            for row in song_meta
+            if row.id not in excluded
+        }
         valid_ids = list(song_id_to_artist)
 
         if not valid_ids:
             return []
+
+        # Ordered list for TF-IDF document building (play-count descending).
+        user_song_ids = sorted(
+            valid_ids,
+            key=lambda s: play_counts.get(s, 0),
+            reverse=True,
+        )
 
         tag_rows = (
             db.query(SongTag.song_id, Tag.name)

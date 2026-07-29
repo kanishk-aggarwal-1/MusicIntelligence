@@ -70,48 +70,65 @@ def _ensure_song_tags(db, song, tag_names):
         seen_names.add(tag_key)
         normalized_names.append(tag_name)
 
-    added = 0
-    for tag_name in normalized_names:
-        tag = db.query(Tag).filter(Tag.name == tag_name).first()
-        if not tag:
-            if is_postgres:
-                # Two concurrent enrichment threads can both find the tag
-                # missing and both try to INSERT — second one hits
-                # tags_name_key UniqueViolation.  Use ON CONFLICT DO NOTHING
-                # then re-fetch so we always get the tag.id safely.
-                db.execute(
-                    postgres_insert(Tag.__table__)
-                    .values(name=tag_name)
-                    .on_conflict_do_nothing(index_elements=["name"])
-                )
-                db.flush()
-                tag = db.query(Tag).filter(Tag.name == tag_name).first()
-            else:
-                tag = Tag(name=tag_name)
-                db.add(tag)
-                db.flush()
+    if not normalized_names:
+        return 0
 
-        if not tag:
-            continue  # shouldn't happen, but skip rather than crash
+    # Bulk-fetch all existing tags in one query instead of one SELECT per name.
+    existing_tags: dict[str, Tag] = {
+        t.name: t
+        for t in db.query(Tag).filter(Tag.name.in_(normalized_names)).all()
+    }
+    missing_names = [n for n in normalized_names if n not in existing_tags]
 
+    if missing_names:
         if is_postgres:
-            result = db.execute(
-                postgres_insert(SongTag.__table__)
-                .values(song_id=song.id, tag_id=tag.id)
-                .on_conflict_do_nothing(index_elements=["song_id", "tag_id"])
+            db.execute(
+                postgres_insert(Tag.__table__)
+                .values([{"name": n} for n in missing_names])
+                .on_conflict_do_nothing(index_elements=["name"])
             )
-            added += result.rowcount or 0
+            db.flush()
+            for t in db.query(Tag).filter(Tag.name.in_(missing_names)).all():
+                existing_tags[t.name] = t
         else:
-            # SQLite fallback (tests) — check then insert
-            exists = db.query(SongTag).filter_by(
-                song_id=song.id, tag_id=tag.id
-            ).first()
-            if not exists:
-                db.add(SongTag(song_id=song.id, tag_id=tag.id))
-                added += 1
+            for name in missing_names:
+                db.add(Tag(name=name))
+            db.flush()
+            for t in db.query(Tag).filter(Tag.name.in_(missing_names)).all():
+                existing_tags[t.name] = t
 
-    if added:
-        db.flush()
+    tag_values = [
+        {"song_id": song.id, "tag_id": existing_tags[n].id}
+        for n in normalized_names
+        if n in existing_tags
+    ]
+    if not tag_values:
+        return 0
+
+    added = 0
+    if is_postgres:
+        result = db.execute(
+            postgres_insert(SongTag.__table__)
+            .values(tag_values)
+            .on_conflict_do_nothing(index_elements=["song_id", "tag_id"])
+        )
+        added = result.rowcount or 0
+        if added:
+            db.flush()
+    else:
+        existing_tag_ids = {
+            row[0]
+            for row in db.query(SongTag.tag_id).filter(
+                SongTag.song_id == song.id,
+                SongTag.tag_id.in_([v["tag_id"] for v in tag_values]),
+            ).all()
+        }
+        for v in tag_values:
+            if v["tag_id"] not in existing_tag_ids:
+                db.add(SongTag(song_id=v["song_id"], tag_id=v["tag_id"]))
+                added += 1
+        if added:
+            db.flush()
 
     return added
 
@@ -216,13 +233,32 @@ def _normalize_enrichment_status(song):
 
 
 def sync_listening_history(db, user_id, tracks, enrich_inline=True):
+    is_postgres = _db_engine.dialect.name == "postgresql"
+
+    # Pre-load all artists and spotify-keyed songs in two bulk queries
+    # instead of one SELECT per track.
+    valid_items = [
+        item for item in tracks
+        if item.get("title") and item.get("artist")
+    ]
+    unique_artist_names = {item["artist"] for item in valid_items}
+    artist_by_name: dict[str, Artist] = {
+        a.name: a
+        for a in db.query(Artist).filter(Artist.name.in_(unique_artist_names)).all()
+    } if unique_artist_names else {}
+
+    unique_spotify_ids = {item["spotify_id"] for item in valid_items if item.get("spotify_id")}
+    song_by_spotify: dict[str, Song] = {
+        s.spotify_id: s
+        for s in db.query(Song).filter(Song.spotify_id.in_(unique_spotify_ids)).all()
+    } if unique_spotify_ids else {}
 
     new_songs = 0
     new_history_rows = 0
     existing_history_rows = 0
     pending_history_keys = set()
 
-    for item in tracks:
+    for item in valid_items:
         title = item.get("title")
         artist_name = item.get("artist")
         spotify_id = item.get("spotify_id")
@@ -230,22 +266,16 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
         image_url = item.get("image_url")
         preview_url = item.get("preview_url")
 
-        if not title or not artist_name:
-            continue
-
-        artist = db.query(Artist).filter(Artist.name == artist_name).first()
-
+        artist = artist_by_name.get(artist_name)
         if not artist:
             artist = Artist(name=artist_name, spotify_id=artist_spotify_id)
             db.add(artist)
             db.flush()
+            artist_by_name[artist_name] = artist
         elif artist_spotify_id and not artist.spotify_id:
             artist.spotify_id = artist_spotify_id
 
-        song = None
-
-        if spotify_id:
-            song = db.query(Song).filter(Song.spotify_id == spotify_id).first()
+        song = song_by_spotify.get(spotify_id) if spotify_id else None
 
         if not song:
             song = db.query(Song).filter(
@@ -293,54 +323,45 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
             existing_history_rows += 1
             continue
 
-        if played_at:
+        if is_postgres:
+            # ON CONFLICT DO NOTHING handles duplicates — pre-check SELECT not needed.
+            result = db.execute(
+                postgres_insert(ListeningHistory.__table__)
+                .values(
+                    user_id=user_id, song_id=song.id, played_at=played_at,
+                    ms_played=item.get("ms_played"), skipped=item.get("skipped"),
+                    platform=item.get("platform"), country=item.get("country"),
+                    offline=item.get("offline"), incognito=item.get("incognito"),
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["user_id", "song_id", "played_at"],
+                )
+            )
+            if result.rowcount:
+                new_history_rows += 1
+                pending_history_keys.add(history_key)
+            else:
+                existing_history_rows += 1
+        else:
             existing = db.query(ListeningHistory).filter(
                 ListeningHistory.user_id == user_id,
                 ListeningHistory.song_id == song.id,
-                ListeningHistory.played_at == played_at
-            ).first()
-        else:
-            existing = db.query(ListeningHistory).filter(
+                ListeningHistory.played_at == played_at,
+            ).first() if played_at else db.query(ListeningHistory).filter(
                 ListeningHistory.user_id == user_id,
-                ListeningHistory.song_id == song.id
+                ListeningHistory.song_id == song.id,
             ).first()
-
-        if not existing:
-            if _db_engine.dialect.name == "postgresql":
-                result = db.execute(
-                    postgres_insert(ListeningHistory.__table__)
-                    .values(
-                        user_id=user_id, song_id=song.id, played_at=played_at,
-                        ms_played=item.get("ms_played"), skipped=item.get("skipped"),
-                        platform=item.get("platform"), country=item.get("country"),
-                        offline=item.get("offline"), incognito=item.get("incognito"),
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=["user_id", "song_id", "played_at"],
-                    )
-                )
-                if result.rowcount:
-                    new_history_rows += 1
-                    pending_history_keys.add(history_key)
-                else:
-                    existing_history_rows += 1
-            else:
-                history = ListeningHistory(
-                    user_id=user_id,
-                    song_id=song.id,
-                    played_at=played_at,
-                    ms_played=item.get("ms_played"),
-                    skipped=item.get("skipped"),
-                    platform=item.get("platform"),
-                    country=item.get("country"),
-                    offline=item.get("offline"),
-                    incognito=item.get("incognito"),
-                )
-                db.add(history)
+            if not existing:
+                db.add(ListeningHistory(
+                    user_id=user_id, song_id=song.id, played_at=played_at,
+                    ms_played=item.get("ms_played"), skipped=item.get("skipped"),
+                    platform=item.get("platform"), country=item.get("country"),
+                    offline=item.get("offline"), incognito=item.get("incognito"),
+                ))
                 pending_history_keys.add(history_key)
                 new_history_rows += 1
-        else:
-            existing_history_rows += 1
+            else:
+                existing_history_rows += 1
 
     try:
         db.commit()
