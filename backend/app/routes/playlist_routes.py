@@ -8,7 +8,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from spotipy.exceptions import SpotifyException
 
@@ -285,26 +285,18 @@ def _cap_artist_repetition(details, max_tracks: int, diversity: float):
 
 
 def _recent_generated_song_ids(db: Session, user_id: str, limit: int = 5):
-    recent_playlist_ids = [
-        row[0]
-        for row in (
-            db.query(GeneratedPlaylist.id)
-            .filter(GeneratedPlaylist.user_id == user_id)
-            .order_by(GeneratedPlaylist.created_at.desc())
-            .limit(max(1, limit))
-            .all()
-        )
-    ]
-    if not recent_playlist_ids:
-        return set()
-
+    recent_subq = (
+        select(GeneratedPlaylist.id)
+        .where(GeneratedPlaylist.user_id == user_id)
+        .order_by(GeneratedPlaylist.created_at.desc())
+        .limit(max(1, limit))
+        .scalar_subquery()
+    )
     return {
         row[0]
-        for row in (
-            db.query(GeneratedPlaylistTrack.song_id)
-            .filter(GeneratedPlaylistTrack.generated_playlist_id.in_(recent_playlist_ids))
-            .all()
-        )
+        for row in db.query(GeneratedPlaylistTrack.song_id)
+        .filter(GeneratedPlaylistTrack.generated_playlist_id.in_(recent_subq))
+        .all()
     }
 
 

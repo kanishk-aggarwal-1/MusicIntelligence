@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import String, cast, func
+from sqlalchemy import String, case, cast, func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -166,17 +166,33 @@ def get_stats(
         .all()
     )
 
-    total_plays = base_history.count()
-
     try:
-        total_ms = (
-            base_history.with_entities(func.sum(ListeningHistory.ms_played)).scalar() or 0
+        _stats = (
+            db.query(
+                func.count(ListeningHistory.id),
+                func.coalesce(func.sum(ListeningHistory.ms_played), 0),
+                func.count(ListeningHistory.id).filter(ListeningHistory.skipped.is_not(None)),
+                func.count(ListeningHistory.id).filter(ListeningHistory.skipped.is_(True)),
+            )
+            .filter(
+                ListeningHistory.user_id == user_id,
+                ListeningHistory.played_at >= start_dt,
+                ListeningHistory.played_at <= end_dt,
+            )
+            .one()
         )
-        known_skip_rows = base_history.filter(ListeningHistory.skipped.is_not(None)).count()
-        skipped_rows = base_history.filter(ListeningHistory.skipped.is_(True)).count()
+        total_plays, total_ms, known_skip_rows, skipped_rows = _stats
+        total_ms = int(total_ms or 0)
+        known_skip_rows = int(known_skip_rows or 0)
+        skipped_rows = int(skipped_rows or 0)
     except Exception:
         # Columns may not exist yet on older DB instances; degrade gracefully.
         db.rollback()
+        total_plays = (
+            db.query(func.count(ListeningHistory.id))
+            .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= start_dt, ListeningHistory.played_at <= end_dt)
+            .scalar() or 0
+        )
         total_ms = 0
         known_skip_rows = 0
         skipped_rows = 0

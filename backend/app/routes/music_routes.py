@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, nullslast
+from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
@@ -117,18 +117,24 @@ def get_songs(
         .outerjoin(playlist_use_subq, playlist_use_subq.c.song_id == Song.id)
     )
 
-    # Fetch the set of song IDs this user has hidden (per-user, not global).
-    _hidden_ids_rows = (
-        db.query(UserSongPref.song_id)
-        .filter(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
-        .all()
-    )
-    hidden_song_ids = {r[0] for r in _hidden_ids_rows}
+    # Fetch hidden IDs into Python only for quick_filter/q paths that need per-row checks.
+    hidden_song_ids: set = set()
+    if quick_filter or q:
+        hidden_song_ids = {
+            r[0]
+            for r in db.query(UserSongPref.song_id)
+            .filter(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+            .all()
+        }
 
-    # For the SQL-paginated path, exclude hidden songs at the DB level.
+    # SQL-paginated path: correlated subquery keeps hidden IDs out of the wire.
     if not include_deleted and not quick_filter and not q:
-        if hidden_song_ids:
-            query = query.filter(Song.id.notin_(hidden_song_ids))
+        query = query.filter(
+            ~Song.id.in_(
+                select(UserSongPref.song_id)
+                .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+            )
+        )
 
     if genre:
         query = query.filter(Song.genre == genre)
