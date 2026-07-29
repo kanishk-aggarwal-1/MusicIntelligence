@@ -225,7 +225,6 @@ def _score_discovery_songs(
     centroid,            # shape (1, n_features)
     excluded: set,       # song IDs to skip (never-show / disliked)
     limit: int,
-    user_song_ids: list[int] | None = None,   # user's library ids for tag pre-filter
 ) -> list[dict]:
     """Score enriched songs *not* in the user's listening history against the
     taste centroid built from their library.
@@ -240,15 +239,18 @@ def _score_discovery_songs(
     # expensive vectorizer.transform call).  Songs that have genre overlap but
     # zero tag overlap are rare edge cases — if the pool ends up empty we fall
     # back to the unfiltered query.
-    tag_subq = None
-    if user_song_ids:
-        # Use select() form (not .subquery()) so SQLAlchemy's .in_() accepts it
-        # without coercion warnings.
-        tag_subq = (
-            select(SongTag.tag_id)
-            .where(SongTag.song_id.in_(user_song_ids))
-            .distinct()
-        )
+    #
+    # Fully correlated subquery — no Python list of IDs sent over the wire.
+    listened_song_subq = (
+        select(ListeningHistory.song_id)
+        .where(ListeningHistory.user_id == user_id)
+        .distinct()
+    )
+    tag_subq = (
+        select(SongTag.tag_id)
+        .where(SongTag.song_id.in_(listened_song_subq))
+        .distinct()
+    )
 
     def _build_disc_query(with_tag_filter: bool):
         # Include popularity_score in the SELECT so that PostgreSQL's DISTINCT
@@ -266,7 +268,7 @@ def _score_discovery_songs(
                 Song.enrichment_status.in_(["complete", "partial"]),
             )
         )
-        if with_tag_filter and tag_subq is not None:
+        if with_tag_filter:
             q = (
                 q.join(SongTag, SongTag.song_id == Song.id)
                  .filter(SongTag.tag_id.in_(tag_subq))
@@ -557,7 +559,6 @@ def knn_recommend(
             centroid,
             excluded=excluded,
             limit=discovery_n * 6,   # over-fetch for temperature sampling
-            user_song_ids=model_ids,
         )
 
     # ── Phase 4: load full ORM objects for BOTH pools (single query) ─────────
