@@ -22,7 +22,7 @@ MusicIntelligence/
 │     ├─ config.py         Environment config
 │     ├─ database.py       DB engine and startup migrations
 │     └─ main.py           FastAPI app entrypoint
-├─ frontend/               Static HTML/CSS/JS UI
+├─ frontend/               React (Vite) single-page app
 ├─ tests/                  Pytest tests
 ├─ create_tables.py        Create/migrate tables
 ├─ requirements.txt        Python dependencies
@@ -73,24 +73,28 @@ Start the backend:
 python -m uvicorn backend.app.main:app --reload
 ```
 
-Start a simple frontend server:
+Start the frontend dev server:
 
 ```powershell
-python -m http.server 5500 --directory frontend
+cd frontend
+npm install
+npm run dev
 ```
 
 Then open:
 
 - Backend: `http://127.0.0.1:8000`
-- Frontend: `http://127.0.0.1:5500/index.html`
+- Frontend: `http://127.0.0.1:5173`
+
+In development the frontend targets `http://127.0.0.1:8000` automatically; set
+`VITE_API_BASE_URL` to point at a different backend.
 
 ## Basic Usage
 
 1. Open the frontend
-2. Set API base URL to `http://127.0.0.1:8000`
-3. Click `Spotify Login`
-4. Click `Sync Recent History`
-5. Use Dashboard, Song Explorer, Playlists, and Features pages
+2. Click `Spotify Login`
+3. Click `Sync Recent History`
+4. Use Dashboard, Song Explorer, Playlists, and Features pages
 
 ## Tests
 
