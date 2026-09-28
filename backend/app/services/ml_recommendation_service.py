@@ -671,15 +671,15 @@ def knn_recommend(
     # Interleave familiar and discovery so new tracks appear throughout the
     # playlist rather than being clumped at the end.
     output: list[dict] = []
-    fi = iter(fam_final)
-    di = iter(disc_final)
-    f_item, d_item = next(fi, None), next(di, None)
+    familiar_iter = iter(fam_final)
+    discovery_iter = iter(disc_final)
+    f_item, d_item = next(familiar_iter, None), next(discovery_iter, None)
     while len(output) < limit and (f_item or d_item):
         if f_item:
             output.append(f_item)
-            f_item = next(fi, None)
+            f_item = next(familiar_iter, None)
         if d_item and len(output) < limit:
             output.append(d_item)
-            d_item = next(di, None)
+            d_item = next(discovery_iter, None)
 
     return output[:limit]

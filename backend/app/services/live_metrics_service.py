@@ -165,13 +165,13 @@ def _pct(numerator: float, denominator: float) -> float:
 
 def build_stats(counters: dict[str, int] | None = None) -> dict:
     """Shape the raw counters into the public, non-sensitive /stats payload."""
-    c = counters if counters is not None else get_counters()
-    hits = c[CACHE_HITS]
-    misses = c[CACHE_MISSES]
+    counts = counters if counters is not None else get_counters()
+    hits = counts[CACHE_HITS]
+    misses = counts[CACHE_MISSES]
     cache_total = hits + misses
-    requested = c[PLAYLIST_TRACKS_REQUESTED]
-    resolved = c[PLAYLIST_TRACKS_RESOLVED]
-    external_actual = c[SPOTIFY_CALLS] + c[LASTFM_CALLS]
+    requested = counts[PLAYLIST_TRACKS_REQUESTED]
+    resolved = counts[PLAYLIST_TRACKS_RESOLVED]
+    external_actual = counts[SPOTIFY_CALLS] + counts[LASTFM_CALLS]
 
     hit_rate = _pct(hits, cache_total)
 
@@ -192,20 +192,20 @@ def build_stats(counters: dict[str, int] | None = None) -> dict:
             "api_calls_saved_pct": api_calls_saved_pct,
         },
         "external_api_calls": {
-            "spotify": c[SPOTIFY_CALLS],
-            "lastfm": c[LASTFM_CALLS],
-            "total": c[SPOTIFY_CALLS] + c[LASTFM_CALLS],
+            "spotify": counts[SPOTIFY_CALLS],
+            "lastfm": counts[LASTFM_CALLS],
+            "total": counts[SPOTIFY_CALLS] + counts[LASTFM_CALLS],
         },
         "tracks": {
-            "synced": c[TRACKS_SYNCED],
-            "enriched": c[TRACKS_ENRICHED],
+            "synced": counts[TRACKS_SYNCED],
+            "enriched": counts[TRACKS_ENRICHED],
         },
         "playlists": {
-            "generated": c[PLAYLISTS_GENERATED],
+            "generated": counts[PLAYLISTS_GENERATED],
             "tracks_requested": requested,
             "tracks_resolved": resolved,
             "resolution_rate_pct": _pct(resolved, requested),
         },
-        "updated_at": c["_updated_at"],
+        "updated_at": counts["_updated_at"],
         "note": "Cumulative since first deploy. Persisted in Postgres; survives restarts.",
     }

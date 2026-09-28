@@ -618,13 +618,13 @@ def dj_playlist(payload: DJPayload, request: Request, db: Session = Depends(get_
         )
 
     def _build_fn(db, user_id, *, context_type, familiarity, diversity, max_tracks):
-        pl = PlaylistGeneratePayload(
+        payload = PlaylistGeneratePayload(
             context_type=context_type,
             familiarity=familiarity,
             diversity=diversity,
             max_tracks=max_tracks,
         )
-        return _build_preview(db, user_id, pl)
+        return _build_preview(db, user_id, payload)
 
     try:
         result = _run_dj_agent(

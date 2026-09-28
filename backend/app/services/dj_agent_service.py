@@ -116,10 +116,7 @@ def _top_artists(db: Session, user_id: str, *, limit: int, since=None) -> list[d
     if since is not None:
         q = q.filter(ListeningHistory.played_at >= since)
     rows = (
-        q.group_by(Artist.name)
-        .order_by(func.count(ListeningHistory.id).desc())
-        .limit(limit)
-        .all()
+        q.group_by(Artist.name).order_by(func.count(ListeningHistory.id).desc()).limit(limit).all()
     )
     return [{"name": n, "plays": int(p)} for n, p in rows]
 
@@ -216,14 +213,14 @@ def _dispatch(
             diversity=diversity,
             max_tracks=max_tracks,
         )
-        gp = preview.get("generated_playlist") or {}
+        generated_playlist = preview.get("generated_playlist") or {}
         tracks_slim = [
             {
                 "title": t.get("title"),
                 "artist": t.get("artist"),
                 "is_discovery": t.get("is_discovery", False),
             }
-            for t in (gp.get("tracks") or [])
+            for t in (generated_playlist.get("tracks") or [])
         ]
         return {
             "_preview": preview,
