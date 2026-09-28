@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..authz import require_capability
 from ..database import get_db
+from ..deps import require_user_id
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.listening_history import ListeningHistory
@@ -15,7 +16,6 @@ from ..models.song_tag import SongTag
 from ..models.user_song_pref import UserSongPref
 from ..services.enrichment_service import enrich_song
 from ..services.recommendation_service import _apply_enrichment
-from ..services.spotify_service import load_request_user_session
 from ..time_utils import utcnow_naive
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
@@ -78,10 +78,7 @@ def get_songs(
     recently_played_days: int = 30,
     db: Session = Depends(get_db),
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
 
     safe_limit = max(1, min(limit, 500))
     safe_offset = max(0, offset)
@@ -294,10 +291,7 @@ def get_songs(
 
 @router.get("/{song_id}")
 def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
 
     song = (
         db.query(Song)
@@ -356,10 +350,7 @@ def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db
 
 @router.post("/{song_id}/hide")
 def hide_song(song_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
 
     if not db.query(Song).filter(Song.id == song_id).first():
@@ -376,10 +367,7 @@ def hide_song(song_id: int, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/{song_id}/restore")
 def restore_song(song_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
 
     if not db.query(Song).filter(Song.id == song_id).first():
@@ -394,10 +382,7 @@ def restore_song(song_id: int, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/{song_id}/retry-enrichment")
 def retry_enrichment(song_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "enrich_metadata")
 
     song = (
