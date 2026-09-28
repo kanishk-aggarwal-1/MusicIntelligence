@@ -10,6 +10,7 @@ songs frequently heard in the same listening session score higher.
 Temperature sampling is applied before returning results so consecutive playlist
 generations produce different tracks rather than always the same deterministic top-N.
 """
+
 import json
 import logging
 import threading
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 # matrix, play counts, and co-occurrence — so successive requests within the
 # same Render worker skip all DB fan-out and sklearn fitting.
 _cache_lock = threading.Lock()
-_user_model_cache: dict[str, dict] = {}   # user_id → {"key": str, "model": dict}
+_user_model_cache: dict[str, dict] = {}  # user_id → {"key": str, "model": dict}
 
 
 def _cache_get(user_id: str, key: str) -> dict | None:
@@ -56,13 +57,14 @@ def _cache_set(user_id: str, key: str, model: dict) -> None:
     with _cache_lock:
         _user_model_cache[user_id] = {"key": key, "model": model}
 
+
 ALGORITHM_VERSION = "tfidf-knn-v1"
 
 CONTEXT_TERMS = {
-    "focus":      ["ambient", "instrumental", "classical", "lofi", "piano", "minimal", "study"],
-    "workout":    ["hip_hop", "edm", "dance", "energetic", "gym", "trap", "electronic"],
+    "focus": ["ambient", "instrumental", "classical", "lofi", "piano", "minimal", "study"],
+    "workout": ["hip_hop", "edm", "dance", "energetic", "gym", "trap", "electronic"],
     "late-night": ["chill", "soul", "jazz", "ambient", "downtempo", "rnb", "night"],
-    "chill":      ["chill", "acoustic", "indie", "relax", "ambient", "dream_pop", "lofi"],
+    "chill": ["chill", "acoustic", "indie", "relax", "ambient", "dream_pop", "lofi"],
 }
 
 
@@ -70,10 +72,11 @@ CONTEXT_TERMS = {
 # Feature helpers
 # ---------------------------------------------------------------------------
 
+
 def _song_document(song) -> str:
     """One text document per song: Last.fm tags + Spotify artist genres as space-joined terms."""
     terms = []
-    for st in (song.song_tags or []):
+    for st in song.song_tags or []:
         if st.tag and st.tag.name:
             terms.append(_norm_term(st.tag.name))
     if song.artist and song.artist.genres:
@@ -137,7 +140,9 @@ def _get_temporal_play_counts(db, user_id: str, hour: int) -> dict[int, int]:
     return {sid: int(cnt or 0) for sid, cnt in rows}
 
 
-def _build_cooccurrence(db, user_id: str, session_gap_minutes: int = 30, days: int = 90) -> dict[int, dict[int, int]]:
+def _build_cooccurrence(
+    db, user_id: str, session_gap_minutes: int = 30, days: int = 90
+) -> dict[int, dict[int, int]]:
     """
     Implicit collaborative signal from listening sessions.
 
@@ -180,7 +185,7 @@ def _build_cooccurrence(db, user_id: str, session_gap_minutes: int = 30, days: i
     for session in sessions:
         unique = list(set(session))
         for a_idx, a in enumerate(unique):
-            for b in unique[a_idx + 1:]:
+            for b in unique[a_idx + 1 :]:
                 cooccurrence[a][b] += 1
                 cooccurrence[b][a] += 1
 
@@ -221,9 +226,9 @@ _DISCOVERY_POOL_CAP = 2_000
 def _score_discovery_songs(
     db,
     user_id: str,
-    vectorizer,          # already fitted TfidfVectorizer — DO NOT re-fit
-    centroid,            # shape (1, n_features)
-    excluded: set,       # song IDs to skip (never-show / disliked)
+    vectorizer,  # already fitted TfidfVectorizer — DO NOT re-fit
+    centroid,  # shape (1, n_features)
+    excluded: set,  # song IDs to skip (never-show / disliked)
     limit: int,
 ) -> list[dict]:
     """Score enriched songs *not* in the user's listening history against the
@@ -242,15 +247,9 @@ def _score_discovery_songs(
     #
     # Fully correlated subquery — no Python list of IDs sent over the wire.
     listened_song_subq = (
-        select(ListeningHistory.song_id)
-        .where(ListeningHistory.user_id == user_id)
-        .distinct()
+        select(ListeningHistory.song_id).where(ListeningHistory.user_id == user_id).distinct()
     )
-    tag_subq = (
-        select(SongTag.tag_id)
-        .where(SongTag.song_id.in_(listened_song_subq))
-        .distinct()
-    )
+    tag_subq = select(SongTag.tag_id).where(SongTag.song_id.in_(listened_song_subq)).distinct()
 
     def _build_disc_query(with_tag_filter: bool):
         # Include popularity_score in the SELECT so that PostgreSQL's DISTINCT
@@ -259,8 +258,7 @@ def _score_discovery_songs(
             db.query(Song.id, Song.artist_id, Song.popularity_score)
             .outerjoin(
                 ListeningHistory,
-                (ListeningHistory.song_id == Song.id)
-                & (ListeningHistory.user_id == user_id),
+                (ListeningHistory.song_id == Song.id) & (ListeningHistory.user_id == user_id),
             )
             .filter(
                 ListeningHistory.id.is_(None),
@@ -271,8 +269,8 @@ def _score_discovery_songs(
         if with_tag_filter:
             q = (
                 q.join(SongTag, SongTag.song_id == Song.id)
-                 .filter(SongTag.tag_id.in_(tag_subq))
-                 .distinct()
+                .filter(SongTag.tag_id.in_(tag_subq))
+                .distinct()
             )
         return q.order_by(Song.popularity_score.desc().nullslast()).limit(_DISCOVERY_POOL_CAP)
 
@@ -286,9 +284,7 @@ def _score_discovery_songs(
         return []
 
     disc_id_to_artist: dict[int, int] = {
-        row.id: row.artist_id
-        for row in disc_rows
-        if row.id not in excluded
+        row.id: row.artist_id for row in disc_rows if row.id not in excluded
     }
 
     if not disc_id_to_artist:
@@ -313,15 +309,11 @@ def _score_discovery_songs(
     disc_genres: dict[int, list[str]] = {}
     if disc_artist_ids:
         for artist_id, genres_json in (
-            db.query(Artist.id, Artist.genres)
-            .filter(Artist.id.in_(disc_artist_ids))
-            .all()
+            db.query(Artist.id, Artist.genres).filter(Artist.id.in_(disc_artist_ids)).all()
         ):
             try:
                 disc_genres[artist_id] = [
-                    _norm_term(g)
-                    for g in json.loads(genres_json or "[]")
-                    if g
+                    _norm_term(g) for g in json.loads(genres_json or "[]") if g
                 ]
             except Exception:
                 pass
@@ -352,18 +344,16 @@ def _score_discovery_songs(
     # Cosine similarity against the user's centroid
     sims = np.asarray(disc_matrix.dot(centroid.T)).flatten()
 
-    top_n   = min(len(disc_model_ids), limit)
+    top_n = min(len(disc_model_ids), limit)
     top_idx = np.argsort(sims)[::-1][:top_n]
 
-    return [
-        {"song_id": disc_model_ids[i], "similarity": float(sims[i])}
-        for i in top_idx
-    ]
+    return [{"song_id": disc_model_ids[i], "similarity": float(sims[i])} for i in top_idx]
 
 
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
 
 def knn_recommend(
     db,
@@ -403,13 +393,13 @@ def knn_recommend(
     cached = _cache_get(user_id, cache_key) if cache_key else None
 
     if cached:
-        vectorizer      = cached["vectorizer"]
-        tfidf_matrix    = cached["tfidf_matrix"]
-        model_ids       = cached["model_ids"]
-        play_counts     = cached["play_counts"]
+        vectorizer = cached["vectorizer"]
+        tfidf_matrix = cached["tfidf_matrix"]
+        model_ids = cached["model_ids"]
+        play_counts = cached["play_counts"]
         song_id_to_artist = cached["song_id_to_artist"]
-        cooccurrence    = cached["cooccurrence"]
-        max_plays       = cached["max_plays"]
+        cooccurrence = cached["cooccurrence"]
+        max_plays = cached["max_plays"]
         logger.info("knn_recommend.cache_hit user_id=%s", user_id)
     else:
         # ── Phase 1: lightweight scalars only ──────────────────────────────
@@ -439,9 +429,7 @@ def knn_recommend(
         )
         # Apply excluded filter in Python — excluded set is small (user feedback only).
         song_id_to_artist: dict[int, int] = {
-            row.id: row.artist_id
-            for row in song_meta
-            if row.id not in excluded
+            row.id: row.artist_id for row in song_meta if row.id not in excluded
         }
         valid_ids = list(song_id_to_artist)
 
@@ -470,15 +458,11 @@ def knn_recommend(
         artist_genres: dict[int, list[str]] = {}
         if artist_ids:
             for artist_id, genres_json in (
-                db.query(Artist.id, Artist.genres)
-                .filter(Artist.id.in_(artist_ids))
-                .all()
+                db.query(Artist.id, Artist.genres).filter(Artist.id.in_(artist_ids)).all()
             ):
                 try:
                     artist_genres[artist_id] = [
-                        _norm_term(g)
-                        for g in json.loads(genres_json or "[]")
-                        if g
+                        _norm_term(g) for g in json.loads(genres_json or "[]") if g
                     ]
                 except Exception:
                     pass
@@ -499,7 +483,8 @@ def knn_recommend(
         if len(model_ids) < 2:
             logger.info(
                 "knn_recommend.insufficient_tagged_songs user_id=%s count=%s",
-                user_id, len(model_ids),
+                user_id,
+                len(model_ids),
             )
             return []
 
@@ -517,25 +502,33 @@ def knn_recommend(
         cooccurrence = _build_cooccurrence(db, user_id)
 
         if cache_key:
-            _cache_set(user_id, cache_key, {
-                "vectorizer":       vectorizer,
-                "tfidf_matrix":     tfidf_matrix,
-                "model_ids":        model_ids,
-                "play_counts":      play_counts,
-                "song_id_to_artist": song_id_to_artist,
-                "cooccurrence":     cooccurrence,
-                "max_plays":        max_plays,
-            })
-            logger.info("knn_recommend.cache_set user_id=%s model_songs=%s", user_id, len(model_ids))
+            _cache_set(
+                user_id,
+                cache_key,
+                {
+                    "vectorizer": vectorizer,
+                    "tfidf_matrix": tfidf_matrix,
+                    "model_ids": model_ids,
+                    "play_counts": play_counts,
+                    "song_id_to_artist": song_id_to_artist,
+                    "cooccurrence": cooccurrence,
+                    "max_plays": max_plays,
+                },
+            )
+            logger.info(
+                "knn_recommend.cache_set user_id=%s model_songs=%s", user_id, len(model_ids)
+            )
 
     now_hour = utcnow_naive().hour
     temporal_counts = _get_temporal_play_counts(db, user_id, now_hour)
 
-    weights = np.array([
-        max(1, play_counts.get(sid, 1)) * 0.7
-        + temporal_counts.get(sid, 0) * 0.3 * 3
-        for sid in model_ids
-    ], dtype=float)
+    weights = np.array(
+        [
+            max(1, play_counts.get(sid, 1)) * 0.7 + temporal_counts.get(sid, 0) * 0.3 * 3
+            for sid in model_ids
+        ],
+        dtype=float,
+    )
     weights /= weights.sum()
 
     # Sparse dot product — no toarray() call, no dense N×400 allocation
@@ -551,9 +544,9 @@ def knn_recommend(
                 pass
 
     # ── Phase 3.5: compute pool quotas ──────────────────────────────────────
-    _disc_ratio  = max(0.0, min(1.0, discovery_ratio))
-    discovery_n  = round(limit * _disc_ratio)
-    familiar_n   = limit - discovery_n
+    _disc_ratio = max(0.0, min(1.0, discovery_ratio))
+    discovery_n = round(limit * _disc_ratio)
+    familiar_n = limit - discovery_n
 
     # ── Phase 3.6: KNN over history songs (familiar pool) ────────────────────
     n_neighbors = min(len(model_ids), max(familiar_n * 6, 60))
@@ -561,7 +554,7 @@ def knn_recommend(
     knn.fit(tfidf_matrix)
     distances, indices = knn.kneighbors(centroid)
 
-    ranked_ids   = [model_ids[i] for i in indices[0]]
+    ranked_ids = [model_ids[i] for i in indices[0]]
     ranked_dists = list(distances[0])
 
     # ── Phase 3.7: score discovery pool (songs NOT in user's history) ────────
@@ -573,15 +566,17 @@ def knn_recommend(
             vectorizer,
             centroid,
             excluded=excluded,
-            limit=discovery_n * 6,   # over-fetch for temperature sampling
+            limit=discovery_n * 6,  # over-fetch for temperature sampling
         )
 
     # ── Phase 4: load full ORM objects for BOTH pools (single query) ─────────
     n_familiar_fetch = min(len(ranked_ids), max(familiar_n * 6, 60))
     familiar_fetch_ids = ranked_ids[:n_familiar_fetch]
-    disc_fetch_ids     = [item["song_id"] for item in disc_scored]
+    disc_fetch_ids = [item["song_id"] for item in disc_scored]
 
-    all_fetch_ids = list(dict.fromkeys(familiar_fetch_ids + disc_fetch_ids))  # dedup, preserve order
+    all_fetch_ids = list(
+        dict.fromkeys(familiar_fetch_ids + disc_fetch_ids)
+    )  # dedup, preserve order
 
     songs_by_id = {
         s.id: s
@@ -595,7 +590,9 @@ def knn_recommend(
     }
 
     # ── Phase 5: build familiar candidate dicts ───────────────────────────────
-    top_anchor_ids = sorted(play_counts, key=play_counts.get, reverse=True)[:15] if familiar_n > 0 else []
+    top_anchor_ids = (
+        sorted(play_counts, key=play_counts.get, reverse=True)[:15] if familiar_n > 0 else []
+    )
 
     familiar_candidates: list[dict] = []
     for dist, song_id in zip(ranked_dists, ranked_ids):
@@ -604,26 +601,28 @@ def knn_recommend(
         song = songs_by_id.get(song_id)
         if not song:
             continue
-        tfidf_sim  = float(1.0 - dist)
+        tfidf_sim = float(1.0 - dist)
         play_count = play_counts.get(song_id, 0)
         familiarity_score = (
             min(1.0, log(play_count + 1) / log(max_plays + 1)) if max_plays > 0 else 0.0
         )
         co_count = sum(cooccurrence.get(song_id, {}).get(a, 0) for a in top_anchor_ids)
         co_boost = min(0.15, co_count * 0.015)
-        score    = min(1.0, tfidf_sim + co_boost)
+        score = min(1.0, tfidf_sim + co_boost)
 
-        familiar_candidates.append({
-            "song":                song,
-            "score":               score,
-            "tfidf_similarity":    round(tfidf_sim, 4),
-            "co_occurrence_boost": round(co_boost, 4),
-            "play_count":          play_count,
-            "familiarity_score":   round(familiarity_score, 4),
-            "tags":                [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
-            "algorithm_version":   ALGORITHM_VERSION,
-            "is_discovery":        False,
-        })
+        familiar_candidates.append(
+            {
+                "song": song,
+                "score": score,
+                "tfidf_similarity": round(tfidf_sim, 4),
+                "co_occurrence_boost": round(co_boost, 4),
+                "play_count": play_count,
+                "familiarity_score": round(familiarity_score, 4),
+                "tags": [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
+                "algorithm_version": ALGORITHM_VERSION,
+                "is_discovery": False,
+            }
+        )
 
     # ── Phase 5.5: build discovery candidate dicts ────────────────────────────
     disc_candidates: list[dict] = []
@@ -632,17 +631,19 @@ def knn_recommend(
         if not song:
             continue
         tfidf_sim = item["similarity"]
-        disc_candidates.append({
-            "song":                song,
-            "score":               tfidf_sim,
-            "tfidf_similarity":    round(tfidf_sim, 4),
-            "co_occurrence_boost": 0.0,
-            "play_count":          0,
-            "familiarity_score":   0.0,
-            "tags":                [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
-            "algorithm_version":   ALGORITHM_VERSION,
-            "is_discovery":        True,
-        })
+        disc_candidates.append(
+            {
+                "song": song,
+                "score": tfidf_sim,
+                "tfidf_similarity": round(tfidf_sim, 4),
+                "co_occurrence_boost": 0.0,
+                "play_count": 0,
+                "familiarity_score": 0.0,
+                "tags": [st.tag.name for st in song.song_tags if st.tag and st.tag.name],
+                "algorithm_version": ALGORITHM_VERSION,
+                "is_discovery": True,
+            }
+        )
 
     # ── Phase 6: temperature sample each pool, then interleave ───────────────
     # Sample familiar pool
@@ -660,11 +661,11 @@ def knn_recommend(
     disc_candidates.sort(key=lambda x: x["score"], reverse=True)
 
     # Enforce quotas; if one pool runs short, backfill from the other
-    actual_disc_n     = min(len(disc_candidates), discovery_n)
-    spare_from_disc   = discovery_n - actual_disc_n            # unfulfilled discovery slots
+    actual_disc_n = min(len(disc_candidates), discovery_n)
+    spare_from_disc = discovery_n - actual_disc_n  # unfulfilled discovery slots
     actual_familiar_n = min(len(familiar_candidates), familiar_n + spare_from_disc)
 
-    fam_final  = familiar_candidates[:actual_familiar_n]
+    fam_final = familiar_candidates[:actual_familiar_n]
     disc_final = disc_candidates[:actual_disc_n]
 
     # Interleave familiar and discovery so new tracks appear throughout the

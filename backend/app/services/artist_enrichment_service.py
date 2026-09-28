@@ -1,4 +1,5 @@
 """Fetches Spotify genre labels for artists that have a spotify_id but no genres yet."""
+
 import json
 import logging
 import time
@@ -53,15 +54,19 @@ def enrich_artist_genres(db, sp, batch_size: int = 50) -> dict:
                 if status == 403:
                     logger.warning(
                         "enrich_artist_genres.forbidden — stopping (offset=%s). "
-                        "Check Spotify app quota or dev-mode allowlist.", i,
+                        "Check Spotify app quota or dev-mode allowlist.",
+                        i,
                     )
                     stop = True
                     break
                 if attempt < 2 and status in _RETRYABLE_STATUSES:
-                    sleep_s = 2 ** attempt   # 1s, 2s
+                    sleep_s = 2**attempt  # 1s, 2s
                     logger.info(
                         "enrich_artist_genres.retry status=%s attempt=%s sleep=%ss offset=%s",
-                        status, attempt + 1, sleep_s, i,
+                        status,
+                        attempt + 1,
+                        sleep_s,
+                        i,
                     )
                     time.sleep(sleep_s)
                     continue

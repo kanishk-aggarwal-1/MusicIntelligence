@@ -81,10 +81,12 @@ def lastfm_request(method: str, params=None):
         return payload
 
     # 3. Cache miss — real Last.fm request.
-    live_metrics_service.increment_many({
-        live_metrics_service.CACHE_MISSES: 1,
-        live_metrics_service.LASTFM_CALLS: 1,
-    })
+    live_metrics_service.increment_many(
+        {
+            live_metrics_service.CACHE_MISSES: 1,
+            live_metrics_service.LASTFM_CALLS: 1,
+        }
+    )
     time.sleep(0.2)
 
     try:
@@ -101,7 +103,9 @@ def lastfm_request(method: str, params=None):
         return data
     except Exception as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        store_cached_response("lastfm", cache_key, payload=None, status_code=status_code, error=str(exc))
+        store_cached_response(
+            "lastfm", cache_key, payload=None, status_code=status_code, error=str(exc)
+        )
         record_external_call("lastfm", ok=False)
         raise
 

@@ -5,7 +5,6 @@ from ..time_utils import utcnow_naive
 
 
 class ListeningGoal(Base):
-
     __tablename__ = "listening_goals"
 
     id = Column(Integer, primary_key=True, index=True)

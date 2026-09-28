@@ -103,10 +103,14 @@ def test_rate_limit_uses_database_store(monkeypatch, testing_session_local):
     request = _DummyRequest()
     namespace = "test-db-rate-limit"
 
-    rate_limit_service.enforce_rate_limit(request, namespace=namespace, user_id="db-user", limit=1, window_seconds=60)
+    rate_limit_service.enforce_rate_limit(
+        request, namespace=namespace, user_id="db-user", limit=1, window_seconds=60
+    )
 
     try:
-        rate_limit_service.enforce_rate_limit(request, namespace=namespace, user_id="db-user", limit=1, window_seconds=60)
+        rate_limit_service.enforce_rate_limit(
+            request, namespace=namespace, user_id="db-user", limit=1, window_seconds=60
+        )
     except HTTPException as exc:
         assert exc.status_code == 429
     else:

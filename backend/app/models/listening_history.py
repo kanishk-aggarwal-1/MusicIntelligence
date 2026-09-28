@@ -6,10 +6,11 @@ from ..time_utils import utcnow_naive
 
 
 class ListeningHistory(Base):
-
     __tablename__ = "listening_history"
     __table_args__ = (
-        UniqueConstraint("user_id", "song_id", "played_at", name="uq_listening_history_user_song_played_at"),
+        UniqueConstraint(
+            "user_id", "song_id", "played_at", name="uq_listening_history_user_song_played_at"
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)

@@ -8,6 +8,7 @@ Run:
 Only external network (Spotify search / Last.fm HTTP) is faked — every counter is
 incremented by the same production code that runs on live traffic.
 """
+
 import json
 import os
 
@@ -36,12 +37,15 @@ def show(step):
 
 class FakeSpotify:
     """Minimal stand-in: every .search returns one matching track with a unique id."""
+
     def __init__(self):
         self._n = 0
 
     def search(self, q=None, type=None, limit=None):
         self._n += 1
-        return {"tracks": {"items": [{"id": f"spfake{self._n}", "artists": [{"name": "Demo Artist"}]}]}}
+        return {
+            "tracks": {"items": [{"id": f"spfake{self._n}", "artists": [{"name": "Demo Artist"}]}]}
+        }
 
 
 def main_demo():
@@ -53,8 +57,12 @@ def main_demo():
 
     # 1) SYNC — real sync_listening_history with fake recent plays.
     tracks = [
-        {"title": f"Track {i}", "artist": "Demo Artist", "spotify_id": None,
-         "played_at": f"2026-06-0{(i % 9) + 1}T10:00:00Z"}
+        {
+            "title": f"Track {i}",
+            "artist": "Demo Artist",
+            "spotify_id": None,
+            "played_at": f"2026-06-0{(i % 9) + 1}T10:00:00Z",
+        }
         for i in range(8)
     ]
     recommendation_service.sync_listening_history(db, "demo-user", tracks, enrich_inline=False)
@@ -65,16 +73,20 @@ def main_demo():
 
     class FakeResp:
         status_code = 200
-        def raise_for_status(self): pass
-        def json(self): return fake_payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return fake_payload
 
     lastfm_service.time.sleep = lambda *_: None  # skip the rate-limit nap in the demo
     lastfm_service.requests.get = lambda *a, **k: FakeResp()
 
     for artist in ["Radiohead", "Aphex Twin", "Boards of Canada"]:
-        lastfm_service.get_artist_tags(artist)        # MISS -> external Last.fm call
+        lastfm_service.get_artist_tags(artist)  # MISS -> external Last.fm call
     for artist in ["Radiohead", "Aphex Twin"]:
-        lastfm_service.get_artist_tags(artist)        # HIT -> call saved
+        lastfm_service.get_artist_tags(artist)  # HIT -> call saved
     show("2) After Last.fm lookups (hits/misses/calls + saved %)")
 
     # 3) ENRICH — real _apply_enrichment marks tracks complete.
@@ -83,9 +95,12 @@ def main_demo():
     # manually increment after commit to demonstrate the counter works.
     # On production PostgreSQL, the internal increment succeeds automatically.
     enrich_payload = {
-        "status": "complete", "genre": "electronic",
+        "status": "complete",
+        "genre": "electronic",
         "tags": ["indie", "ambient"],
-        "listeners": 1000, "playcount": 5000, "_errors": [],
+        "listeners": 1000,
+        "playcount": 5000,
+        "_errors": [],
     }
     songs = db.query(Song).all()
     newly_enriched = 0
@@ -100,14 +115,24 @@ def main_demo():
     show("3) After enrichment (tracks.enriched should rise)")
 
     # 4) PLAYLIST — generate a record, then resolve its URIs via the real resolver.
-    items = [{
-        "song": s, "score": 0.9 - i * 0.05,
-        "components": {"tfidf_similarity": 0.8, "familiarity_score": 0.6},
-        "reasons": ["matches your indie taste"], "tag_names": ["indie"],
-    } for i, s in enumerate(songs[:6])]
+    items = [
+        {
+            "song": s,
+            "score": 0.9 - i * 0.05,
+            "components": {"tfidf_similarity": 0.8, "familiarity_score": 0.6},
+            "reasons": ["matches your indie taste"],
+            "tag_names": ["indie"],
+        }
+        for i, s in enumerate(songs[:6])
+    ]
     record = create_playlist_preview_record(
-        db, user_id="demo-user", name="Demo Mix", context_type=None,
-        request_params={"max_tracks": 6}, candidate_pool_size=len(songs), items=items,
+        db,
+        user_id="demo-user",
+        name="Demo Mix",
+        context_type=None,
+        request_params={"max_tracks": 6},
+        candidate_pool_size=len(songs),
+        items=items,
     )
     _resolve_playlist_track_ids(db, FakeSpotify(), record, "demo-user")
     show("4) After playlist generation + resolution (generated + resolution rate)")

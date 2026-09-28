@@ -65,7 +65,12 @@ def _title_case_context(context_type: str | None):
     return labels.get((context_type or "").strip().lower())
 
 
-def build_playlist_name(items: list[dict[str, Any]], *, context_type: str | None = None, explicit_name: str | None = None):
+def build_playlist_name(
+    items: list[dict[str, Any]],
+    *,
+    context_type: str | None = None,
+    explicit_name: str | None = None,
+):
     if explicit_name and explicit_name.strip():
         return explicit_name.strip()
 
@@ -139,7 +144,9 @@ def create_playlist_preview_record(
     return record
 
 
-def get_generated_playlist(db: Session, *, generated_playlist_id: int, user_id: str) -> GeneratedPlaylist | None:
+def get_generated_playlist(
+    db: Session, *, generated_playlist_id: int, user_id: str
+) -> GeneratedPlaylist | None:
     return (
         db.query(GeneratedPlaylist)
         .options(joinedload(GeneratedPlaylist.tracks).joinedload(GeneratedPlaylistTrack.song))
@@ -197,7 +204,9 @@ def serialize_generated_playlist(record: GeneratedPlaylist, include_tracks: bool
     return payload
 
 
-def mark_generated_playlist_created(db: Session, *, record: GeneratedPlaylist, spotify_playlist_id: str | None):
+def mark_generated_playlist_created(
+    db: Session, *, record: GeneratedPlaylist, spotify_playlist_id: str | None
+):
     record.spotify_playlist_id = spotify_playlist_id
     db.add(record)
     db.commit()

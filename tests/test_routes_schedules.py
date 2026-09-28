@@ -1,4 +1,5 @@
 """Tests for scheduled playlist refresh (/playlists/schedules)."""
+
 from datetime import timedelta
 
 from backend.app.models.user_session import UserSession
@@ -15,10 +16,12 @@ def _session(user_id: str):
 def _fake_preview(generated_id=999):
     def _inner(db, user_id, payload):
         return {"generated_playlist": {"id": generated_id}}
+
     return _inner
 
 
 # ── service-level ────────────────────────────────────────────────────────────
+
 
 def test_compute_next_run_cadence():
     now = utcnow_naive()
@@ -30,12 +33,27 @@ def test_compute_next_run_cadence():
 
 def test_due_schedules_filters_by_next_run(db_session):
     now = utcnow_naive()
-    due = PlaylistSchedule(user_id="u1", cadence="weekly", active=True,
-                           next_run_at=now - timedelta(minutes=1), created_at=now)
-    future = PlaylistSchedule(user_id="u1", cadence="weekly", active=True,
-                              next_run_at=now + timedelta(days=1), created_at=now)
-    inactive = PlaylistSchedule(user_id="u1", cadence="weekly", active=False,
-                                next_run_at=now - timedelta(minutes=1), created_at=now)
+    due = PlaylistSchedule(
+        user_id="u1",
+        cadence="weekly",
+        active=True,
+        next_run_at=now - timedelta(minutes=1),
+        created_at=now,
+    )
+    future = PlaylistSchedule(
+        user_id="u1",
+        cadence="weekly",
+        active=True,
+        next_run_at=now + timedelta(days=1),
+        created_at=now,
+    )
+    inactive = PlaylistSchedule(
+        user_id="u1",
+        cadence="weekly",
+        active=False,
+        next_run_at=now - timedelta(minutes=1),
+        created_at=now,
+    )
     db_session.add_all([due, future, inactive])
     db_session.commit()
 
@@ -49,8 +67,11 @@ def test_due_schedules_filters_by_next_run(db_session):
 def test_claim_due_schedules_prevents_duplicate_claim(db_session):
     now = utcnow_naive()
     schedule = PlaylistSchedule(
-        user_id="u1", cadence="daily", active=True,
-        next_run_at=now - timedelta(minutes=1), created_at=now,
+        user_id="u1",
+        cadence="daily",
+        active=True,
+        next_run_at=now - timedelta(minutes=1),
+        created_at=now,
     )
     db_session.add(schedule)
     db_session.commit()
@@ -64,14 +85,18 @@ def test_claim_due_schedules_prevents_duplicate_claim(db_session):
 
 # ── routes ───────────────────────────────────────────────────────────────────
 
+
 def test_create_and_list_schedule(monkeypatch, client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
     monkeypatch.setattr(playlist_routes, "_build_preview", _fake_preview())
 
     client = client_factory(playlist_routes.router)
-    created = client.post("/playlists/schedules", json={"cadence": "weekly", "max_tracks": 25},
-                          headers={"X-User-Id": "u1"})
+    created = client.post(
+        "/playlists/schedules",
+        json={"cadence": "weekly", "max_tracks": 25},
+        headers={"X-User-Id": "u1"},
+    )
     assert created.status_code == 200
     assert created.json()["cadence"] == "weekly"
     assert created.json()["max_tracks"] == 25
@@ -85,7 +110,9 @@ def test_create_schedule_rejects_unknown_cadence(client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
     client = client_factory(playlist_routes.router)
-    resp = client.post("/playlists/schedules", json={"cadence": "hourly"}, headers={"X-User-Id": "u1"})
+    resp = client.post(
+        "/playlists/schedules", json={"cadence": "hourly"}, headers={"X-User-Id": "u1"}
+    )
     assert resp.status_code == 400
 
 
@@ -95,7 +122,8 @@ def test_get_schedules_processes_due(monkeypatch, client_factory, db_session):
     db_session.commit()
     calls = []
     monkeypatch.setattr(
-        playlist_routes, "_build_preview",
+        playlist_routes,
+        "_build_preview",
         lambda db, user_id, payload: calls.append(user_id) or {"generated_playlist": {"id": 7}},
     )
 
@@ -118,7 +146,9 @@ def test_run_schedule_now(monkeypatch, client_factory, db_session):
     monkeypatch.setattr(playlist_routes, "_build_preview", _fake_preview(generated_id=42))
 
     client = client_factory(playlist_routes.router)
-    created = client.post("/playlists/schedules", json={"cadence": "weekly"}, headers={"X-User-Id": "u1"})
+    created = client.post(
+        "/playlists/schedules", json={"cadence": "weekly"}, headers={"X-User-Id": "u1"}
+    )
     schedule_id = created.json()["id"]
 
     ran = client.post(f"/playlists/schedules/{schedule_id}/run", headers={"X-User-Id": "u1"})
@@ -133,7 +163,9 @@ def test_delete_schedule(monkeypatch, client_factory, db_session):
     monkeypatch.setattr(playlist_routes, "_build_preview", _fake_preview())
 
     client = client_factory(playlist_routes.router)
-    created = client.post("/playlists/schedules", json={"cadence": "weekly"}, headers={"X-User-Id": "u1"})
+    created = client.post(
+        "/playlists/schedules", json={"cadence": "weekly"}, headers={"X-User-Id": "u1"}
+    )
     schedule_id = created.json()["id"]
 
     deleted = client.delete(f"/playlists/schedules/{schedule_id}", headers={"X-User-Id": "u1"})
@@ -151,10 +183,15 @@ def test_schedules_require_auth(client_factory, db_session):
 
 def test_cron_processes_due_schedules(monkeypatch, client_factory, db_session):
     now = utcnow_naive()
-    db_session.add(PlaylistSchedule(
-        user_id="u1", cadence="daily", active=True,
-        next_run_at=now - timedelta(minutes=1), created_at=now,
-    ))
+    db_session.add(
+        PlaylistSchedule(
+            user_id="u1",
+            cadence="daily",
+            active=True,
+            next_run_at=now - timedelta(minutes=1),
+            created_at=now,
+        )
+    )
     db_session.commit()
     monkeypatch.setattr(ops_routes.settings, "CRON_SECRET", "test-secret")
     monkeypatch.setattr(playlist_routes, "_build_preview", _fake_preview(generated_id=77))

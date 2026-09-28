@@ -5,7 +5,6 @@ from ..time_utils import utcnow_naive
 
 
 class RecommendationFeedback(Base):
-
     __tablename__ = "recommendation_feedback"
 
     id = Column(Integer, primary_key=True, index=True)

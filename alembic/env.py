@@ -7,6 +7,7 @@ from alembic import context
 # Load .env for local development
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -19,6 +20,7 @@ if config.config_file_name is not None:
 
 # Import app models so autogenerate can detect schema changes
 import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from backend.app.database import Base  # noqa: E402

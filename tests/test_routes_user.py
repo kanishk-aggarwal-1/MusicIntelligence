@@ -24,15 +24,17 @@ def _session(user_id: str):
 
 def test_sync_status_uses_job_finished_time(client_factory, db_session):
     db_session.add(_session("u1"))
-    db_session.add(Job(
-        id="sync-job",
-        user_id="u1",
-        job_type="sync_history",
-        status="succeeded",
-        progress_current=3,
-        progress_total=3,
-        finished_at=datetime(2026, 5, 30, 12, 0),
-    ))
+    db_session.add(
+        Job(
+            id="sync-job",
+            user_id="u1",
+            job_type="sync_history",
+            status="succeeded",
+            progress_current=3,
+            progress_total=3,
+            finished_at=datetime(2026, 5, 30, 12, 0),
+        )
+    )
     db_session.commit()
 
     client = client_factory(user_routes.router)
@@ -50,7 +52,9 @@ def test_onboarding_status_tracks_real_user_setup(client_factory, db_session):
     db_session.add(song)
     db_session.flush()
     db_session.add(_session("u1"))
-    db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 6, 1, 12, 0)))
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 6, 1, 12, 0))
+    )
     db_session.add(GeneratedPlaylist(user_id="u1", name="First Preview"))
     db_session.commit()
 
@@ -73,13 +77,20 @@ def test_user_data_export_is_scoped_and_excludes_credentials(client_factory, db_
     song = Song(title="Export Song", artist_id=artist.id, spotify_id="export-1")
     db_session.add(song)
     db_session.flush()
-    db_session.add_all([
-        _session("export-user"),
-        _session("other-user"),
-        ListeningHistory(user_id="export-user", song_id=song.id, played_at=datetime(2026, 7, 1), ms_played=90_000),
-        ListeningHistory(user_id="other-user", song_id=song.id, played_at=datetime(2026, 7, 2)),
-        RecommendationFeedback(user_id="export-user", song_id=song.id, action="like"),
-    ])
+    db_session.add_all(
+        [
+            _session("export-user"),
+            _session("other-user"),
+            ListeningHistory(
+                user_id="export-user",
+                song_id=song.id,
+                played_at=datetime(2026, 7, 1),
+                ms_played=90_000,
+            ),
+            ListeningHistory(user_id="other-user", song_id=song.id, played_at=datetime(2026, 7, 2)),
+            RecommendationFeedback(user_id="export-user", song_id=song.id, action="like"),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(user_routes.router)
@@ -88,11 +99,20 @@ def test_user_data_export_is_scoped_and_excludes_credentials(client_factory, db_
     assert response.status_code == 200
     payload = response.json()
     assert payload["schema_version"] == 1
-    assert payload["listening_history"] == [{
-        "title": "Export Song", "artist": "Export Artist", "spotify_id": "export-1",
-        "played_at": "2026-07-01T00:00:00", "ms_played": 90000, "skipped": None,
-        "platform": None, "country": None, "offline": None, "incognito": None,
-    }]
+    assert payload["listening_history"] == [
+        {
+            "title": "Export Song",
+            "artist": "Export Artist",
+            "spotify_id": "export-1",
+            "played_at": "2026-07-01T00:00:00",
+            "ms_played": 90000,
+            "skipped": None,
+            "platform": None,
+            "country": None,
+            "offline": None,
+            "incognito": None,
+        }
+    ]
     assert payload["feedback"][0]["action"] == "like"
     assert "token" not in str(payload).lower()
 
@@ -179,7 +199,10 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
 
     # Enrichment must NOT be triggered automatically — the user runs dedup first.
     def fail_if_called(*args, **kwargs):
-        raise AssertionError("Import must not auto-enrich; dedup/enrichment happen after all files are uploaded.")
+        raise AssertionError(
+            "Import must not auto-enrich; dedup/enrichment happen after all files are uploaded."
+        )
+
     monkeypatch.setattr(user_routes, "backfill_missing_metadata", fail_if_called)
 
     data = [
@@ -204,7 +227,9 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
     assert any("artist" in m.lower() for m in messages), "expected artist-sync phase message"
     assert any("library" in m.lower() or "tracks" in m.lower() for m in messages)
     # History phase: at least one "Importing X / 5" line with chunk-level granularity.
-    assert any("Importing" in m and "/ 5" in m for m in messages), f"no history progress message found in: {messages}"
+    assert any("Importing" in m and "/ 5" in m for m in messages), (
+        f"no history progress message found in: {messages}"
+    )
     # Final done message from _run_import_history_job
     assert any("Next" in m or "Deduplication" in m or "complete" in m.lower() for m in messages)
 
@@ -212,47 +237,49 @@ def test_import_history_job_reports_incremental_progress(monkeypatch, db_session
     assert result["enrichment_queued"] is False
     assert result["progress_current"] == 5
     assert result["progress_total"] == 5
-    assert result["new_songs"] == 5           # all 5 tracks are brand-new
-    assert result["new_history_rows"] == 5    # all 5 inserted
+    assert result["new_songs"] == 5  # all 5 tracks are brand-new
+    assert result["new_history_rows"] == 5  # all 5 inserted
 
 
 def test_new_import_clears_previous_jobs_but_preserves_rate_limit(db_session):
     now = utcnow_naive()
-    db_session.add_all([
-        Job(
-            id="old-running",
-            user_id="u1",
-            job_type="import_history",
-            status="running",
-            progress_current=10,
-            progress_total=100,
-            created_at=now,
-        ),
-        Job(
-            id="old-failed",
-            user_id="u1",
-            job_type="import_history",
-            status="failed",
-            progress_current=5,
-            progress_total=100,
-            created_at=now,
-        ),
-        Job(
-            id="other-job",
-            user_id="u1",
-            job_type="sync_history",
-            status="running",
-            created_at=now,
-        ),
-        ApiCache(
-            provider="rate_limit",
-            cache_key=f"rate_limit:{user_routes.IMPORT_RATE_LIMIT_NAMESPACE}:u1",
-            response_json="[1,2,3]",
-            status_code=200,
-            fetched_at=now,
-            expires_at=now + timedelta(minutes=10),
-        ),
-    ])
+    db_session.add_all(
+        [
+            Job(
+                id="old-running",
+                user_id="u1",
+                job_type="import_history",
+                status="running",
+                progress_current=10,
+                progress_total=100,
+                created_at=now,
+            ),
+            Job(
+                id="old-failed",
+                user_id="u1",
+                job_type="import_history",
+                status="failed",
+                progress_current=5,
+                progress_total=100,
+                created_at=now,
+            ),
+            Job(
+                id="other-job",
+                user_id="u1",
+                job_type="sync_history",
+                status="running",
+                created_at=now,
+            ),
+            ApiCache(
+                provider="rate_limit",
+                cache_key=f"rate_limit:{user_routes.IMPORT_RATE_LIMIT_NAMESPACE}:u1",
+                response_json="[1,2,3]",
+                status_code=200,
+                fetched_at=now,
+                expires_at=now + timedelta(minutes=10),
+            ),
+        ]
+    )
     db_session.commit()
 
     cleanup = user_routes._clear_previous_import_requests(db_session, "u1")
@@ -275,13 +302,17 @@ def test_delete_data_removes_playlist_children_and_all_user_scoped_rows(client_f
     playlist = GeneratedPlaylist(user_id="u1", name="Delete Me")
     db_session.add(playlist)
     db_session.flush()
-    db_session.add_all([
-        _session("u1"),
-        GeneratedPlaylistTrack(generated_playlist_id=playlist.id, song_id=song.id, position=0),
-        UserSongPref(user_id="u1", song_id=song.id, is_hidden=True),
-        PlaylistSchedule(user_id="u1", cadence="weekly", active=True),
-        DedupMergeLog(user_id="u1", batch_id="batch", kept_song_id=song.id, removed_song_id=song.id),
-    ])
+    db_session.add_all(
+        [
+            _session("u1"),
+            GeneratedPlaylistTrack(generated_playlist_id=playlist.id, song_id=song.id, position=0),
+            UserSongPref(user_id="u1", song_id=song.id, is_hidden=True),
+            PlaylistSchedule(user_id="u1", cadence="weekly", active=True),
+            DedupMergeLog(
+                user_id="u1", batch_id="batch", kept_song_id=song.id, removed_song_id=song.id
+            ),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(user_routes.router)

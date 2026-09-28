@@ -110,7 +110,11 @@ def get_stats(
 
     daily_rows = (
         db.query(func.date(ListeningHistory.played_at), func.count(ListeningHistory.id))
-        .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= start_dt, ListeningHistory.played_at <= end_dt)
+        .filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.played_at >= start_dt,
+            ListeningHistory.played_at <= end_dt,
+        )
         .group_by(func.date(ListeningHistory.played_at))
         .order_by(func.date(ListeningHistory.played_at).desc())
         .limit(60)
@@ -118,8 +122,14 @@ def get_stats(
     )
 
     weekly_rows = (
-        db.query(func.date_trunc("week", ListeningHistory.played_at), func.count(ListeningHistory.id))
-        .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= start_dt, ListeningHistory.played_at <= end_dt)
+        db.query(
+            func.date_trunc("week", ListeningHistory.played_at), func.count(ListeningHistory.id)
+        )
+        .filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.played_at >= start_dt,
+            ListeningHistory.played_at <= end_dt,
+        )
         .group_by(func.date_trunc("week", ListeningHistory.played_at))
         .order_by(func.date_trunc("week", ListeningHistory.played_at).desc())
         .limit(20)
@@ -128,7 +138,11 @@ def get_stats(
 
     hourly_rows = (
         db.query(func.extract("hour", ListeningHistory.played_at), func.count(ListeningHistory.id))
-        .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= start_dt, ListeningHistory.played_at <= end_dt)
+        .filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.played_at >= start_dt,
+            ListeningHistory.played_at <= end_dt,
+        )
         .group_by(func.extract("hour", ListeningHistory.played_at))
         .order_by(func.extract("hour", ListeningHistory.played_at))
         .all()
@@ -145,13 +159,19 @@ def get_stats(
             ListeningHistory.played_at <= end_dt,
         )
         .group_by(func.date(ListeningHistory.played_at), Song.genre)
-        .order_by(func.date(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
+        .order_by(
+            func.date(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc()
+        )
         .limit(120)
         .all()
     )
 
     weekly_genre_rows = (
-        db.query(func.date_trunc("week", ListeningHistory.played_at), Song.genre, func.count(ListeningHistory.id))
+        db.query(
+            func.date_trunc("week", ListeningHistory.played_at),
+            Song.genre,
+            func.count(ListeningHistory.id),
+        )
         .join(Song, Song.id == ListeningHistory.song_id)
         .filter(
             Song.genre.is_not(None),
@@ -161,7 +181,10 @@ def get_stats(
             ListeningHistory.played_at <= end_dt,
         )
         .group_by(func.date_trunc("week", ListeningHistory.played_at), Song.genre)
-        .order_by(func.date_trunc("week", ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
+        .order_by(
+            func.date_trunc("week", ListeningHistory.played_at).desc(),
+            func.count(ListeningHistory.id).desc(),
+        )
         .limit(120)
         .all()
     )
@@ -190,8 +213,13 @@ def get_stats(
         db.rollback()
         total_plays = (
             db.query(func.count(ListeningHistory.id))
-            .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= start_dt, ListeningHistory.played_at <= end_dt)
-            .scalar() or 0
+            .filter(
+                ListeningHistory.user_id == user_id,
+                ListeningHistory.played_at >= start_dt,
+                ListeningHistory.played_at <= end_dt,
+            )
+            .scalar()
+            or 0
         )
         total_ms = 0
         known_skip_rows = 0
@@ -205,7 +233,11 @@ def get_stats(
 
         prev_total = (
             db.query(func.count(ListeningHistory.id))
-            .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= prev_start, ListeningHistory.played_at < prev_end)
+            .filter(
+                ListeningHistory.user_id == user_id,
+                ListeningHistory.played_at >= prev_start,
+                ListeningHistory.played_at < prev_end,
+            )
             .scalar()
         ) or 0
 
@@ -242,7 +274,9 @@ def get_stats(
         "total_plays": int(total_plays),
         "total_artists": int(total_artists),
         "minutes_listened": round(int(total_ms) / 60000),
-        "skip_rate_percent": round((skipped_rows / known_skip_rows) * 100, 1) if known_skip_rows else None,
+        "skip_rate_percent": round((skipped_rows / known_skip_rows) * 100, 1)
+        if known_skip_rows
+        else None,
         "comparison": compare_payload,
         "top_artists": top_artists,
         "top_genres": top_genres,

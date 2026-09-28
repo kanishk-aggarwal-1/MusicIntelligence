@@ -16,6 +16,4 @@ class ApiCache(Base):
     expires_at = Column(DateTime, nullable=False, index=True)
     error = Column(Text)
 
-    __table_args__ = (
-        Index("uq_api_cache_provider_key", "provider", "cache_key", unique=True),
-    )
+    __table_args__ = (Index("uq_api_cache_provider_key", "provider", "cache_key", unique=True),)

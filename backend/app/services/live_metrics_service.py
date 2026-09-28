@@ -7,6 +7,7 @@ and all writes are best-effort: a metrics failure must never break real traffic.
 
 Only non-sensitive aggregates are stored — counts, never tokens or PII.
 """
+
 import logging
 
 from sqlalchemy import create_engine, select
@@ -30,7 +31,9 @@ _connect_args: dict = {}
 if settings.DATABASE_URL and settings.DATABASE_URL.startswith("sqlite"):
     _connect_args = {"timeout": 1}
 
-_metric_engine = create_engine(settings.DATABASE_URL, poolclass=NullPool, connect_args=_connect_args)
+_metric_engine = create_engine(
+    settings.DATABASE_URL, poolclass=NullPool, connect_args=_connect_args
+)
 _MetricSession = sessionmaker(autocommit=False, autoflush=False, bind=_metric_engine)
 
 # Expose engine for monkeypatching in tests.
@@ -77,7 +80,9 @@ def _upsert_increment(db, name: str, amount: int):
         from sqlalchemy.dialects.sqlite import insert as _insert
     else:
         # Generic fallback: read-modify-write (no native upsert).
-        row = db.execute(select(MetricCounter).where(MetricCounter.name == name)).scalar_one_or_none()
+        row = db.execute(
+            select(MetricCounter).where(MetricCounter.name == name)
+        ).scalar_one_or_none()
         if row is None:
             db.add(MetricCounter(name=name, value=int(amount), updated_at=now))
         else:

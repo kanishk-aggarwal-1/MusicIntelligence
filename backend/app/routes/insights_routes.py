@@ -20,7 +20,11 @@ from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.song_tag import SongTag
 from ..models.tag import Tag
-from ..services.api_cache_service import clear_provider_cache, get_cached_response, store_cached_response
+from ..services.api_cache_service import (
+    clear_provider_cache,
+    get_cached_response,
+    store_cached_response,
+)
 from ..services.discovery_service import discover_songs_from_artist
 from ..services.job_service import create_job, get_active_job, run_job
 from ..services.rate_limit_service import enforce_rate_limit
@@ -134,6 +138,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
     # data but also has a proper date boundary, not just a row limit.
     from ..time_utils import utcnow_naive as _now
     from datetime import timedelta as _td
+
     cutoff = _now() - _td(days=safe_months * 31)
 
     # Cap per-month rather than globally so that a single busy month can't
@@ -143,7 +148,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
     # function, and the window-function syntax differs between PostgreSQL and
     # SQLite — Python post-processing is simpler and equally fast at this scale.
     _ROWS_PER_MONTH = 20
-    _db_row_cap = safe_months * 50   # generous head-room for the DB query
+    _db_row_cap = safe_months * 50  # generous head-room for the DB query
 
     artist_rows = (
         db.query(
@@ -159,7 +164,9 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
             Song.is_deleted.is_(False),
         )
         .group_by(_month_trunc(ListeningHistory.played_at), Artist.name)
-        .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
+        .order_by(
+            _month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc()
+        )
         .limit(_db_row_cap)
         .all()
     )
@@ -178,7 +185,9 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
             Song.is_deleted.is_(False),
         )
         .group_by(_month_trunc(ListeningHistory.played_at), Song.genre)
-        .order_by(_month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc())
+        .order_by(
+            _month_trunc(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc()
+        )
         .limit(_db_row_cap)
         .all()
     )
@@ -189,7 +198,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         month_counts: dict = {}
         result = []
         for row in rows:
-            month_key = str(row[0])[:7]   # normalise to "YYYY-MM"
+            month_key = str(row[0])[:7]  # normalise to "YYYY-MM"
             if month_counts.get(month_key, 0) >= _ROWS_PER_MONTH:
                 continue
             month_counts[month_key] = month_counts.get(month_key, 0) + 1
@@ -197,7 +206,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         return result
 
     artist_rows = _cap_per_month(artist_rows, 1)
-    genre_rows  = _cap_per_month(genre_rows, 1)
+    genre_rows = _cap_per_month(genre_rows, 1)
 
     # Normalise the month value to "YYYY-MM" so the frontend receives a
     # consistent format regardless of database backend.
@@ -208,13 +217,11 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
         return str(m)[:7]
 
     monthly_top_artists = [
-        {"month": _fmt_month(m), "artist": a, "plays": int(p)}
-        for m, a, p in artist_rows
+        {"month": _fmt_month(m), "artist": a, "plays": int(p)} for m, a, p in artist_rows
     ]
 
     monthly_top_genres = [
-        {"month": _fmt_month(m), "genre": g, "plays": int(p)}
-        for m, g, p in genre_rows
+        {"month": _fmt_month(m), "genre": g, "plays": int(p)} for m, g, p in genre_rows
     ]
 
     return {
@@ -315,7 +322,9 @@ def _compute_new_for_you(db: Session, user_id: str) -> dict:
 
     if len(artist_rows) < 5:
         # Too few artists is a stable structural state, not a failure — cache long.
-        return _store_new_for_you(user_id, {"items": [], "distinct_artist_count": len(artist_rows)}, results=True)
+        return _store_new_for_you(
+            user_id, {"items": [], "distinct_artist_count": len(artist_rows)}, results=True
+        )
 
     # Build the "already listened" set from DISTINCT songs in the user's
     # library, not one row per play — otherwise a heavy listener with tens of
@@ -373,7 +382,11 @@ def _compute_new_for_you(db: Session, user_id: str) -> dict:
                 }
             )
             if len(items) >= NEW_FOR_YOU_TARGET:
-                return _store_new_for_you(user_id, {"items": items, "distinct_artist_count": len(artist_rows)}, results=True)
+                return _store_new_for_you(
+                    user_id,
+                    {"items": items, "distinct_artist_count": len(artist_rows)},
+                    results=True,
+                )
 
     # Empty results (transient Last.fm failure, or everything already listened)
     # get a short TTL so we retry soon rather than caching emptiness for hours.
@@ -412,12 +425,30 @@ def new_for_you(request: Request, background_tasks: BackgroundTasks, db: Session
     # is already running, return it instead of starting another.
     existing = get_active_job(db, user_id=user_id, job_type=NEW_FOR_YOU_JOB_TYPE)
     if existing:
-        return {"items": [], "distinct_artist_count": artist_count, "status": "pending", "job_id": existing.id}
+        return {
+            "items": [],
+            "distinct_artist_count": artist_count,
+            "status": "pending",
+            "job_id": existing.id,
+        }
 
-    enforce_rate_limit(request, namespace="new_for_you", user_id=user_id, limit=5, window_seconds=60)
-    job = create_job(db, user_id=user_id, job_type=NEW_FOR_YOU_JOB_TYPE, message="Finding new music", progress_total=1)
+    enforce_rate_limit(
+        request, namespace="new_for_you", user_id=user_id, limit=5, window_seconds=60
+    )
+    job = create_job(
+        db,
+        user_id=user_id,
+        job_type=NEW_FOR_YOU_JOB_TYPE,
+        message="Finding new music",
+        progress_total=1,
+    )
     background_tasks.add_task(run_job, job.id, partial(_run_new_for_you_job, user_id=user_id))
-    return {"items": [], "distinct_artist_count": artist_count, "status": "pending", "job_id": job.id}
+    return {
+        "items": [],
+        "distinct_artist_count": artist_count,
+        "status": "pending",
+        "job_id": job.id,
+    }
 
 
 def _pct_rows(rows, total):
@@ -524,7 +555,9 @@ def feedback_summary(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/feedback-history")
-def feedback_history(request: Request, limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
+def feedback_history(
+    request: Request, limit: int = 50, offset: int = 0, db: Session = Depends(get_db)
+):
     user_id = _require_user_id(db, request)
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
@@ -541,12 +574,15 @@ def feedback_history(request: Request, limit: int = 50, offset: int = 0, db: Ses
     )
     return {
         "total": base.count(),
-        "items": [{
-            "id": feedback.id,
-            "action": feedback.action,
-            "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
-            "song": {"id": song.id, "title": song.title, "artist": artist.name},
-        } for feedback, song, artist in rows],
+        "items": [
+            {
+                "id": feedback.id,
+                "action": feedback.action,
+                "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
+                "song": {"id": song.id, "title": song.title, "artist": artist.name},
+            }
+            for feedback, song, artist in rows
+        ],
     }
 
 
@@ -566,7 +602,11 @@ def delete_feedback(feedback_id: int, request: Request, db: Session = Depends(ge
 def clear_feedback(request: Request, db: Session = Depends(get_db)):
     user_id = _require_user_id(db, request)
     require_capability(user_id, "submit_feedback")
-    deleted = db.query(RecommendationFeedback).filter_by(user_id=user_id).delete(synchronize_session=False)
+    deleted = (
+        db.query(RecommendationFeedback)
+        .filter_by(user_id=user_id)
+        .delete(synchronize_session=False)
+    )
     db.commit()
     return {"message": "Feedback reset", "deleted": deleted}
 
@@ -594,11 +634,7 @@ def create_goal(payload: GoalPayload, request: Request, db: Session = Depends(ge
 def goals_status(request: Request, db: Session = Depends(get_db)):
     user_id = _require_user_id(db, request)
 
-    goals = (
-        db.query(ListeningGoal)
-        .filter(ListeningGoal.user_id == user_id)
-        .all()
-    )
+    goals = db.query(ListeningGoal).filter(ListeningGoal.user_id == user_id).all()
 
     now = utcnow_naive()
 
@@ -621,7 +657,10 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
         )
         total_events, distinct_songs, active_days = _agg
         first_play_subq = (
-            db.query(ListeningHistory.song_id, func.min(ListeningHistory.played_at).label("first_played_at"))
+            db.query(
+                ListeningHistory.song_id,
+                func.min(ListeningHistory.played_at).label("first_played_at"),
+            )
             .filter(ListeningHistory.user_id == user_id)
             .group_by(ListeningHistory.song_id)
             .subquery()
@@ -629,7 +668,8 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
         new_songs = (
             db.query(func.count(first_play_subq.c.song_id))
             .filter(first_play_subq.c.first_played_at >= period_start)
-            .scalar() or 0
+            .scalar()
+            or 0
         )
         period_stats[period_start] = {
             "total_events": int(total_events or 0),
@@ -662,7 +702,13 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
                 "progress": progress,
                 "period": goal.period,
                 "active": bool(goal.active),
-                "status": "on_track" if (progress <= goal.target_value if goal.goal_type == "repeat_rate_max" else progress >= goal.target_value) else "check",
+                "status": "on_track"
+                if (
+                    progress <= goal.target_value
+                    if goal.goal_type == "repeat_rate_max"
+                    else progress >= goal.target_value
+                )
+                else "check",
             }
         )
 
@@ -670,10 +716,16 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.patch("/goals/{goal_id}")
-def update_goal(goal_id: int, payload: GoalUpdatePayload, request: Request, db: Session = Depends(get_db)):
+def update_goal(
+    goal_id: int, payload: GoalUpdatePayload, request: Request, db: Session = Depends(get_db)
+):
     user_id = _require_user_id(db, request)
     require_capability(user_id, "manage_goals")
-    goal = db.query(ListeningGoal).filter(ListeningGoal.id == goal_id, ListeningGoal.user_id == user_id).first()
+    goal = (
+        db.query(ListeningGoal)
+        .filter(ListeningGoal.id == goal_id, ListeningGoal.user_id == user_id)
+        .first()
+    )
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
     period = payload.period or goal.period
@@ -694,7 +746,11 @@ def delete_goal(goal_id: int, request: Request, db: Session = Depends(get_db)):
     require_capability(user_id, "manage_goals")
     goal = (
         db.query(ListeningGoal)
-        .filter(ListeningGoal.id == goal_id, ListeningGoal.user_id == user_id, ListeningGoal.active.is_(True))
+        .filter(
+            ListeningGoal.id == goal_id,
+            ListeningGoal.user_id == user_id,
+            ListeningGoal.active.is_(True),
+        )
         .first()
     )
     if not goal:
@@ -724,10 +780,12 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
             func.count(Song.id).label("total"),
             func.count(Song.id).filter(Song.genre.is_not(None)).label("with_genre"),
             func.count(Song.id).filter(Song.spotify_id.is_not(None)).label("with_spotify"),
-            func.count(Song.id).filter(
+            func.count(Song.id)
+            .filter(
                 (Song.listeners.is_(None) | (Song.listeners == 0)),
                 (Song.playcount.is_(None) | (Song.playcount == 0)),
-            ).label("missing_popularity"),
+            )
+            .label("missing_popularity"),
         )
         .join(user_song_ids, user_song_ids.c.song_id == Song.id)
         .filter(Song.is_deleted.is_(False))
@@ -742,7 +800,9 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
     _tag_counts = (
         db.query(
             func.count(func.distinct(SongTag.song_id)).label("with_tags"),
-            func.count(func.distinct(case((SongTag.id.is_(None), Song.id), else_=None))).label("missing_tags"),
+            func.count(func.distinct(case((SongTag.id.is_(None), Song.id), else_=None))).label(
+                "missing_tags"
+            ),
         )
         .join(user_song_ids, user_song_ids.c.song_id == Song.id)
         .outerjoin(SongTag, SongTag.song_id == Song.id)
@@ -784,7 +844,10 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
         .join(user_song_ids, user_song_ids.c.song_id == Song.id)
         .filter(Song.is_deleted.is_(False))
         .group_by(Artist.name)
-        .order_by(func.sum(case((Song.enrichment_status == "failed", 1), else_=0)).desc(), func.count(Song.id).desc())
+        .order_by(
+            func.sum(case((Song.enrichment_status == "failed", 1), else_=0)).desc(),
+            func.count(Song.id).desc(),
+        )
         .limit(10)
         .all()
     )
@@ -796,22 +859,24 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
         "total_songs": total_songs,
         "coverage": [
             {"metric": "Songs with Genre", "count": with_genre, "percent": pct(with_genre)},
-            {"metric": "Songs with Spotify ID", "count": with_spotify, "percent": pct(with_spotify)},
+            {
+                "metric": "Songs with Spotify ID",
+                "count": with_spotify,
+                "percent": pct(with_spotify),
+            },
             {"metric": "Songs with Tags", "count": with_tags, "percent": pct(with_tags)},
-            {"metric": "Songs with Listen History", "count": with_history, "percent": pct(with_history)},
+            {
+                "metric": "Songs with Listen History",
+                "count": with_history,
+                "percent": pct(with_history),
+            },
         ],
-        "enrichment_status": [
-            {"status": s or "unknown", "count": int(c)}
-            for s, c in status_rows
-        ],
+        "enrichment_status": [{"status": s or "unknown", "count": int(c)} for s, c in status_rows],
         "missing": {
             "tags": int(missing_tags),
             "listeners_or_playcount": int(missing_popularity),
         },
-        "top_enrichment_errors": [
-            {"error": err, "count": int(count)}
-            for err, count in error_rows
-        ],
+        "top_enrichment_errors": [{"error": err, "count": int(count)} for err, count in error_rows],
         "artists_with_poor_metadata": [
             {
                 "artist": artist_name,
@@ -840,7 +905,9 @@ def dedup_preview(request: Request, limit_groups: int = 50, db: Session = Depend
 
 
 @router.post("/dedup-apply")
-def dedup_apply(request: Request, limit_groups: int = 20, dry_run: bool = False, db: Session = Depends(get_db)):
+def dedup_apply(
+    request: Request, limit_groups: int = 20, dry_run: bool = False, db: Session = Depends(get_db)
+):
     user_id = _require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     duplicates = _duplicate_groups(db, user_id)[: max(1, min(limit_groups, 200))]
@@ -871,10 +938,15 @@ def dedup_apply(request: Request, limit_groups: int = 20, dry_run: bool = False,
 
         # Batch-load all duplicate history rows in one query instead of one per dup.
         from collections import defaultdict as _defaultdict
-        _all_dup_rows = db.query(ListeningHistory).filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.song_id.in_(all_dup_ids),
-        ).all()
+
+        _all_dup_rows = (
+            db.query(ListeningHistory)
+            .filter(
+                ListeningHistory.user_id == user_id,
+                ListeningHistory.song_id.in_(all_dup_ids),
+            )
+            .all()
+        )
         _dup_rows_by_id: dict = _defaultdict(list)
         for _r in _all_dup_rows:
             _dup_rows_by_id[_r.song_id].append(_r)
@@ -889,11 +961,14 @@ def dedup_apply(request: Request, limit_groups: int = 20, dry_run: bool = False,
             history_row_ids = [r.id for r in dup_rows if r.id not in conflict_ids]
             conflict_rows = [
                 {"user_id": r.user_id, "played_at": r.played_at.isoformat()}
-                for r in dup_rows if r.id in conflict_ids
+                for r in dup_rows
+                if r.id in conflict_ids
             ]
 
             if conflict_ids:
-                db.query(ListeningHistory).filter(ListeningHistory.id.in_(conflict_ids)).delete(synchronize_session=False)
+                db.query(ListeningHistory).filter(ListeningHistory.id.in_(conflict_ids)).delete(
+                    synchronize_session=False
+                )
                 db.flush()
 
             snapshot = {
@@ -932,7 +1007,11 @@ def dedup_apply(request: Request, limit_groups: int = 20, dry_run: bool = False,
 def dedup_undo(batch_id: str, request: Request, db: Session = Depends(get_db)):
     user_id = _require_user_id(db, request)
     require_capability(user_id, "mutate_library")
-    rows = db.query(DedupMergeLog).filter(DedupMergeLog.user_id == user_id, DedupMergeLog.batch_id == batch_id).all()
+    rows = (
+        db.query(DedupMergeLog)
+        .filter(DedupMergeLog.user_id == user_id, DedupMergeLog.batch_id == batch_id)
+        .all()
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="Batch not found")
 
@@ -986,6 +1065,7 @@ def user_tags(request: Request, limit: int = 100, db: Session = Depends(get_db))
     )
 
     from ..models.tag import Tag as _Tag
+
     rows = (
         db.query(
             _Tag.name,

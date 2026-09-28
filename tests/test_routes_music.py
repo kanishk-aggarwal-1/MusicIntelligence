@@ -1,4 +1,5 @@
 """Tests for /songs routes (music_routes.py)."""
+
 from datetime import datetime
 
 from backend.app.models.artist import Artist
@@ -28,9 +29,17 @@ def _artist(db, name: str) -> Artist:
     return a
 
 
-def _song(db, *, artist_name: str, title: str, spotify_id: str | None = None,
-          genre: str | None = None, enrichment_status: str = "complete",
-          listeners: int = 0, is_deleted: bool = False) -> Song:
+def _song(
+    db,
+    *,
+    artist_name: str,
+    title: str,
+    spotify_id: str | None = None,
+    genre: str | None = None,
+    enrichment_status: str = "complete",
+    listeners: int = 0,
+    is_deleted: bool = False,
+) -> Song:
     artist = _artist(db, artist_name)
     s = Song(
         title=title,
@@ -67,14 +76,17 @@ def _weighted_tag(db, song: Song, tag_name: str, weight: float) -> None:
 
 
 def _history(db, user_id: str, song: Song, played_at=None):
-    db.add(ListeningHistory(
-        user_id=user_id,
-        song_id=song.id,
-        played_at=played_at or datetime(2026, 5, 1, 10, 0),
-    ))
+    db.add(
+        ListeningHistory(
+            user_id=user_id,
+            song_id=song.id,
+            played_at=played_at or datetime(2026, 5, 1, 10, 0),
+        )
+    )
 
 
 # ── GET /songs/ ───────────────────────────────────────────────────────────────
+
 
 def test_songs_list_basic(client_factory, db_session):
     db_session.add(_session("u1"))
@@ -157,7 +169,7 @@ def test_songs_list_quick_filter_missing_tags(client_factory, db_session):
 def test_songs_list_quick_filter_hidden(client_factory, db_session):
     db_session.add(_session("u1"))
     visible = _song(db_session, artist_name="Va", title="Visible")
-    hidden  = _song(db_session, artist_name="Ha", title="Hidden")
+    hidden = _song(db_session, artist_name="Ha", title="Hidden")
     _history(db_session, "u1", visible)
     _history(db_session, "u1", hidden)
     # Mark hidden via UserSongPref (per-user, not global Song.is_deleted)
@@ -165,7 +177,9 @@ def test_songs_list_quick_filter_hidden(client_factory, db_session):
     db_session.commit()
 
     client = client_factory(music_routes.router)
-    resp = client.get("/songs/?quick_filter=hidden&include_deleted=true", headers={"X-User-Id": "u1"})
+    resp = client.get(
+        "/songs/?quick_filter=hidden&include_deleted=true", headers={"X-User-Id": "u1"}
+    )
     assert resp.status_code == 200
     titles = [s["title"] for s in resp.json()]
     assert "Hidden" in titles
@@ -182,7 +196,9 @@ def test_songs_list_quick_filter_active(client_factory, db_session):
     db_session.commit()
 
     client = client_factory(music_routes.router)
-    resp = client.get("/songs/?quick_filter=active&include_deleted=true", headers={"X-User-Id": "u1"})
+    resp = client.get(
+        "/songs/?quick_filter=active&include_deleted=true", headers={"X-User-Id": "u1"}
+    )
     assert resp.status_code == 200
     titles = [s["title"] for s in resp.json()]
     assert "Active Song" in titles
@@ -209,7 +225,9 @@ def test_songs_list_quick_filter_high_popularity(client_factory, db_session):
 
 def test_songs_list_enrichment_status_filter(client_factory, db_session):
     db_session.add(_session("u1"))
-    failed = _song(db_session, artist_name="Fa", title="Failed Enrichment", enrichment_status="failed")
+    failed = _song(
+        db_session, artist_name="Fa", title="Failed Enrichment", enrichment_status="failed"
+    )
     ok = _song(db_session, artist_name="Oa", title="OK Song", enrichment_status="complete")
     _history(db_session, "u1", failed)
     _history(db_session, "u1", ok)
@@ -225,6 +243,7 @@ def test_songs_list_enrichment_status_filter(client_factory, db_session):
 
 # ── GET /songs/{id} ───────────────────────────────────────────────────────────
 
+
 def test_song_detail_not_found(client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
@@ -237,7 +256,9 @@ def test_song_detail_includes_tags(client_factory, db_session):
     db_session.add(_session("u1"))
     s = _song(db_session, artist_name="Detail Artist", title="Detail Track", spotify_id="dt1")
     _tag(db_session, s, "shoegaze")
-    db_session.add(ListeningHistory(user_id="u1", song_id=s.id, played_at=datetime(2026, 5, 10, 8, 0)))
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=s.id, played_at=datetime(2026, 5, 10, 8, 0))
+    )
     db_session.commit()
 
     client = client_factory(music_routes.router)
@@ -252,15 +273,19 @@ def test_song_detail_includes_tags(client_factory, db_session):
 def test_playlist_inclusion_count_is_scoped_to_current_user(client_factory, db_session):
     db_session.add_all([_session("u1"), _session("u2")])
     song = _song(db_session, artist_name="Shared Artist", title="Shared Track", spotify_id="shared")
-    db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 10, 8, 0)))
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 10, 8, 0))
+    )
     p1 = GeneratedPlaylist(user_id="u1", name="Mine")
     p2 = GeneratedPlaylist(user_id="u2", name="Theirs")
     db_session.add_all([p1, p2])
     db_session.flush()
-    db_session.add_all([
-        GeneratedPlaylistTrack(generated_playlist_id=p1.id, song_id=song.id, position=0),
-        GeneratedPlaylistTrack(generated_playlist_id=p2.id, song_id=song.id, position=0),
-    ])
+    db_session.add_all(
+        [
+            GeneratedPlaylistTrack(generated_playlist_id=p1.id, song_id=song.id, position=0),
+            GeneratedPlaylistTrack(generated_playlist_id=p2.id, song_id=song.id, position=0),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(music_routes.router)
@@ -270,6 +295,7 @@ def test_playlist_inclusion_count_is_scoped_to_current_user(client_factory, db_s
 
 
 # ── POST /songs/{id}/hide  /restore ──────────────────────────────────────────
+
 
 def test_hide_requires_auth(client_factory, db_session):
     # No UserSession in DB — load_request_user_session falls back to None
@@ -290,10 +316,16 @@ def test_hide_nonexistent_song(client_factory, db_session):
 
 # ── POST /songs/{id}/retry-enrichment ────────────────────────────────────────
 
+
 def test_retry_enrichment_calls_enrich_and_applies(monkeypatch, client_factory, db_session):
     db_session.add(_session("u1"))
-    s = _song(db_session, artist_name="Retry Artist", title="Retry Track",
-              enrichment_status="pending", genre=None)
+    s = _song(
+        db_session,
+        artist_name="Retry Artist",
+        title="Retry Track",
+        enrichment_status="pending",
+        genre=None,
+    )
     db_session.commit()
 
     def _fake_enrich(song):

@@ -53,7 +53,9 @@ def capabilities_for(user_id: str | None, *, spotify_connected: bool = False) ->
     }
 
 
-def require_capability(user_id: str | None, capability: str, *, spotify_connected: bool = False) -> None:
+def require_capability(
+    user_id: str | None, capability: str, *, spotify_connected: bool = False
+) -> None:
     capabilities = capabilities_for(user_id, spotify_connected=spotify_connected)
     if not capabilities.get(capability, False):
         message = (

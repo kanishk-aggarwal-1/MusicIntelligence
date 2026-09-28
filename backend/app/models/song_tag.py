@@ -5,12 +5,9 @@ from ..database import Base
 
 
 class SongTag(Base):
-
     __tablename__ = "song_tags"
 
-    __table_args__ = (
-        UniqueConstraint("song_id", "tag_id"),
-    )
+    __table_args__ = (UniqueConstraint("song_id", "tag_id"),)
 
     id = Column(Integer, primary_key=True)
 

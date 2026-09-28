@@ -80,7 +80,9 @@ def _frontend_message_origin(origin: str | None = None):
     return origins[0] if origins else "*"
 
 
-def _login_popup_response(*, success: bool, message: str, frontend_origin: str, status_code: int = 200):
+def _login_popup_response(
+    *, success: bool, message: str, frontend_origin: str, status_code: int = 200
+):
     event_type = "musicintel:login-success" if success else "musicintel:login-error"
     safe_message = escape(message)
     payload = json.dumps({"type": event_type, "message": message})
@@ -106,7 +108,9 @@ def _login_popup_response(*, success: bool, message: str, frontend_origin: str, 
 
 
 def _encode_oauth_state(nonce: str, frontend_origin: str | None) -> str:
-    payload = json.dumps({"nonce": nonce, "origin": frontend_origin}, separators=(",", ":")).encode("utf-8")
+    payload = json.dumps({"nonce": nonce, "origin": frontend_origin}, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
@@ -133,6 +137,7 @@ def demo_login(db: Session = Depends(get_db)):
     from ..time_utils import utcnow_naive
     from datetime import timedelta
     from ..models.user_session import UserSession as _UserSession
+
     past = utcnow_naive() - timedelta(days=365)
     existing = db.query(_UserSession).filter(_UserSession.user_id == demo_user_id).first()
     if existing:
@@ -142,14 +147,18 @@ def demo_login(db: Session = Depends(get_db)):
         db.add(_UserSession(user_id=demo_user_id, token="__demo__", token_expires_at=past))
     db.commit()
     logger.info("demo.login user_id=%s", demo_user_id)
-    response = JSONResponse({
-        "logged_in": True,
-        "user_id": demo_user_id,
-        "spotify_connected": False,
-        "is_demo": True,
-        "capabilities": capabilities_for(demo_user_id, spotify_connected=False),
-    })
-    response.set_cookie(value=create_session_cookie_value(demo_user_id), **get_session_cookie_options())
+    response = JSONResponse(
+        {
+            "logged_in": True,
+            "user_id": demo_user_id,
+            "spotify_connected": False,
+            "is_demo": True,
+            "capabilities": capabilities_for(demo_user_id, spotify_connected=False),
+        }
+    )
+    response.set_cookie(
+        value=create_session_cookie_value(demo_user_id), **get_session_cookie_options()
+    )
     return response
 
 
@@ -248,14 +257,18 @@ def callback(request: Request, db: Session = Depends(get_db)):
             status_code=500,
         )
 
-    logger.info("spotify.callback.success user_id=%s frontend_origin=%s", user["id"], frontend_origin)
+    logger.info(
+        "spotify.callback.success user_id=%s frontend_origin=%s", user["id"], frontend_origin
+    )
     response = _login_popup_response(
         success=True,
         message="Login successful. You can close this window.",
         frontend_origin=frontend_origin,
     )
     response.delete_cookie(OAUTH_STATE_COOKIE_NAME, path="/user/callback")
-    response.set_cookie(value=create_session_cookie_value(user["id"]), **get_session_cookie_options())
+    response.set_cookie(
+        value=create_session_cookie_value(user["id"]), **get_session_cookie_options()
+    )
     return response
 
 
@@ -315,7 +328,9 @@ def sync_status(request: Request, db: Session = Depends(get_db)):
     )
     last_enriched = (
         db.query(func.max(Job.finished_at))
-        .filter(Job.user_id == user_id, Job.job_type == "backfill_metadata", Job.status == "succeeded")
+        .filter(
+            Job.user_id == user_id, Job.job_type == "backfill_metadata", Job.status == "succeeded"
+        )
         .scalar()
     )
 
@@ -336,13 +351,28 @@ def onboarding_status(request: Request, db: Session = Depends(get_db)):
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
 
-    history_count = db.query(func.count(ListeningHistory.id)).filter(ListeningHistory.user_id == user_id).scalar() or 0
+    history_count = (
+        db.query(func.count(ListeningHistory.id))
+        .filter(ListeningHistory.user_id == user_id)
+        .scalar()
+        or 0
+    )
     pending = int(_pending_enrichment_count(db, user_id))
-    playlist_count = db.query(func.count(GeneratedPlaylist.id)).filter(GeneratedPlaylist.user_id == user_id).scalar() or 0
-    spotify_playlist_count = db.query(func.count(GeneratedPlaylist.id)).filter(
-        GeneratedPlaylist.user_id == user_id,
-        GeneratedPlaylist.spotify_playlist_id.is_not(None),
-    ).scalar() or 0
+    playlist_count = (
+        db.query(func.count(GeneratedPlaylist.id))
+        .filter(GeneratedPlaylist.user_id == user_id)
+        .scalar()
+        or 0
+    )
+    spotify_playlist_count = (
+        db.query(func.count(GeneratedPlaylist.id))
+        .filter(
+            GeneratedPlaylist.user_id == user_id,
+            GeneratedPlaylist.spotify_playlist_id.is_not(None),
+        )
+        .scalar()
+        or 0
+    )
 
     steps = {
         "spotify_connected": bool(session.get("token")),
@@ -429,60 +459,86 @@ def export_user_data(request: Request, db: Session = Depends(get_db)):
         .order_by(RecommendationFeedback.created_at.asc())
         .all()
     )
-    playlists = db.query(GeneratedPlaylist).filter_by(user_id=user_id).order_by(GeneratedPlaylist.created_at.asc()).all()
+    playlists = (
+        db.query(GeneratedPlaylist)
+        .filter_by(user_id=user_id)
+        .order_by(GeneratedPlaylist.created_at.asc())
+        .all()
+    )
 
     return {
         "schema_version": 1,
         "exported_at": utcnow_naive().isoformat(),
         "user_id": user_id,
-        "listening_history": [{
-            "title": song.title,
-            "artist": artist.name,
-            "spotify_id": song.spotify_id,
-            "played_at": _export_datetime(history.played_at),
-            "ms_played": history.ms_played,
-            "skipped": history.skipped,
-            "platform": history.platform,
-            "country": history.country,
-            "offline": history.offline,
-            "incognito": history.incognito,
-        } for history, song, artist in history_rows],
-        "feedback": [{
-            "id": feedback.id,
-            "action": feedback.action,
-            "song": {"title": song.title, "artist": artist.name, "spotify_id": song.spotify_id},
-            "created_at": _export_datetime(feedback.created_at),
-        } for feedback, song, artist in feedback_rows],
-        "goals": [{
-            "goal_type": goal.goal_type,
-            "target_value": goal.target_value,
-            "period": goal.period,
-            "active": goal.active,
-            "created_at": _export_datetime(goal.created_at),
-        } for goal in db.query(ListeningGoal).filter_by(user_id=user_id).all()],
-        "hidden_songs": [{"song_id": pref.song_id} for pref in db.query(UserSongPref).filter_by(user_id=user_id, is_hidden=True).all()],
-        "generated_playlists": [{
-            "id": playlist.id,
-            "name": playlist.name,
-            "context_type": playlist.context_type,
-            "spotify_playlist_id": playlist.spotify_playlist_id,
-            "algorithm_version": playlist.algorithm_version,
-            "created_at": _export_datetime(playlist.created_at),
-            "tracks": [{
-                "position": track.position,
-                "song_id": track.song_id,
-                "is_pinned": bool(track.is_pinned),
-                "final_score": track.final_score,
-            } for track in sorted(playlist.tracks, key=lambda item: item.position)],
-        } for playlist in playlists],
-        "playlist_schedules": [{
-            "name": item.name,
-            "context_type": item.context_type,
-            "cadence": item.cadence,
-            "active": item.active,
-            "next_run_at": _export_datetime(item.next_run_at),
-            "last_run_at": _export_datetime(item.last_run_at),
-        } for item in db.query(PlaylistSchedule).filter_by(user_id=user_id).all()],
+        "listening_history": [
+            {
+                "title": song.title,
+                "artist": artist.name,
+                "spotify_id": song.spotify_id,
+                "played_at": _export_datetime(history.played_at),
+                "ms_played": history.ms_played,
+                "skipped": history.skipped,
+                "platform": history.platform,
+                "country": history.country,
+                "offline": history.offline,
+                "incognito": history.incognito,
+            }
+            for history, song, artist in history_rows
+        ],
+        "feedback": [
+            {
+                "id": feedback.id,
+                "action": feedback.action,
+                "song": {"title": song.title, "artist": artist.name, "spotify_id": song.spotify_id},
+                "created_at": _export_datetime(feedback.created_at),
+            }
+            for feedback, song, artist in feedback_rows
+        ],
+        "goals": [
+            {
+                "goal_type": goal.goal_type,
+                "target_value": goal.target_value,
+                "period": goal.period,
+                "active": goal.active,
+                "created_at": _export_datetime(goal.created_at),
+            }
+            for goal in db.query(ListeningGoal).filter_by(user_id=user_id).all()
+        ],
+        "hidden_songs": [
+            {"song_id": pref.song_id}
+            for pref in db.query(UserSongPref).filter_by(user_id=user_id, is_hidden=True).all()
+        ],
+        "generated_playlists": [
+            {
+                "id": playlist.id,
+                "name": playlist.name,
+                "context_type": playlist.context_type,
+                "spotify_playlist_id": playlist.spotify_playlist_id,
+                "algorithm_version": playlist.algorithm_version,
+                "created_at": _export_datetime(playlist.created_at),
+                "tracks": [
+                    {
+                        "position": track.position,
+                        "song_id": track.song_id,
+                        "is_pinned": bool(track.is_pinned),
+                        "final_score": track.final_score,
+                    }
+                    for track in sorted(playlist.tracks, key=lambda item: item.position)
+                ],
+            }
+            for playlist in playlists
+        ],
+        "playlist_schedules": [
+            {
+                "name": item.name,
+                "context_type": item.context_type,
+                "cadence": item.cadence,
+                "active": item.active,
+                "next_run_at": _export_datetime(item.next_run_at),
+                "last_run_at": _export_datetime(item.last_run_at),
+            }
+            for item in db.query(PlaylistSchedule).filter_by(user_id=user_id).all()
+        ],
     }
 
 
@@ -511,7 +567,9 @@ def spotify_auth_debug(request: Request, db: Session = Depends(get_db)):
         "spotify_display_name": spotify_user.get("display_name"),
         "stored_scope": scope,
         "required_playlist_scopes": sorted(["playlist-modify-private", "playlist-modify-public"]),
-        "missing_playlist_scopes_from_stored_scope": missing_playlist_scopes({"scope": scope}) if scope else None,
+        "missing_playlist_scopes_from_stored_scope": missing_playlist_scopes({"scope": scope})
+        if scope
+        else None,
         "spotify_current_user_error": spotify_error,
     }
 
@@ -535,20 +593,23 @@ def delete_user_data(request: Request, db: Session = Depends(get_db)):
         n = db.query(model).filter_by(**filters).delete(synchronize_session=False)
         deleted[model.__tablename__] = n
 
-    _del(ListeningHistory,       user_id=user_id)
-    _del(ListeningGoal,          user_id=user_id)
+    _del(ListeningHistory, user_id=user_id)
+    _del(ListeningGoal, user_id=user_id)
     _del(RecommendationFeedback, user_id=user_id)
-    _del(Job,                    user_id=user_id)
-    playlist_ids = [row[0] for row in db.query(GeneratedPlaylist.id).filter(GeneratedPlaylist.user_id == user_id).all()]
+    _del(Job, user_id=user_id)
+    playlist_ids = [
+        row[0]
+        for row in db.query(GeneratedPlaylist.id).filter(GeneratedPlaylist.user_id == user_id).all()
+    ]
     if playlist_ids:
         db.query(GeneratedPlaylistTrack).filter(
             GeneratedPlaylistTrack.generated_playlist_id.in_(playlist_ids)
         ).delete(synchronize_session=False)
-    _del(GeneratedPlaylist,      user_id=user_id)
-    _del(UserSongPref,           user_id=user_id)
-    _del(PlaylistSchedule,       user_id=user_id)
-    _del(DedupMergeLog,          user_id=user_id)
-    _del(UserSession,            user_id=user_id)
+    _del(GeneratedPlaylist, user_id=user_id)
+    _del(UserSongPref, user_id=user_id)
+    _del(PlaylistSchedule, user_id=user_id)
+    _del(DedupMergeLog, user_id=user_id)
+    _del(UserSession, user_id=user_id)
 
     db.commit()
     logger.info("delete_data.done user_id=%s rows=%s", user_id, deleted)
@@ -600,11 +661,19 @@ def sync_history(request: Request, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=401, detail="spotify_token_expired")
     # Shared namespace with sync_history_job so both paths count against the same budget.
-    enforce_rate_limit(request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60)
+    enforce_rate_limit(
+        request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60
+    )
 
     sp = spotipy.Spotify(auth=token)
-    checkpoint = db.query(func.max(ListeningHistory.played_at)).filter(ListeningHistory.user_id == user_id).scalar()
-    tracks = fetch_recent_tracks(sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint)
+    checkpoint = (
+        db.query(func.max(ListeningHistory.played_at))
+        .filter(ListeningHistory.user_id == user_id)
+        .scalar()
+    )
+    tracks = fetch_recent_tracks(
+        sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint
+    )
     sync_result = sync_listening_history(db, user_id, tracks)
 
     return {
@@ -649,7 +718,16 @@ def _queue_enrichment_job(db: Session, *, user_id: str, limit: int = 200):
     )
     thread = threading.Thread(
         target=run_job,
-        args=(job.id, partial(_run_backfill_job, user_id=user_id, limit=limit, retry_partial=False, retry_failed=False)),
+        args=(
+            job.id,
+            partial(
+                _run_backfill_job,
+                user_id=user_id,
+                limit=limit,
+                retry_partial=False,
+                retry_failed=False,
+            ),
+        ),
         daemon=True,
     )
     thread.start()
@@ -664,8 +742,14 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
 
     progress.update(total=3, current=0, message="Fetching recent Spotify plays")
     sp = get_spotify_client(token)
-    checkpoint = db.query(func.max(ListeningHistory.played_at)).filter(ListeningHistory.user_id == user_id).scalar()
-    tracks = fetch_recent_tracks(sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint)
+    checkpoint = (
+        db.query(func.max(ListeningHistory.played_at))
+        .filter(ListeningHistory.user_id == user_id)
+        .scalar()
+    )
+    tracks = fetch_recent_tracks(
+        sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint
+    )
 
     progress.update(current=1, message="Syncing listening history")
     sync_result = sync_listening_history(db, user_id, tracks)
@@ -686,7 +770,9 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
 
 
 @router.post("/sync-history/job")
-def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def sync_history_job(
+    request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
     if not user_id:
@@ -699,9 +785,17 @@ def sync_history_job(request: Request, background_tasks: BackgroundTasks, db: Se
         return serialize_job(existing)
 
     # Shared namespace with /sync-history so the two paths share one budget.
-    enforce_rate_limit(request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60)
+    enforce_rate_limit(
+        request, namespace="spotify_sync", user_id=user_id, limit=10, window_seconds=60
+    )
 
-    job = create_job(db, user_id=user_id, job_type="sync_history", message="Queued recent-history sync", progress_total=3)
+    job = create_job(
+        db,
+        user_id=user_id,
+        job_type="sync_history",
+        message="Queued recent-history sync",
+        progress_total=3,
+    )
     background_tasks.add_task(run_job, job.id, partial(_run_sync_history_job, user_id=user_id))
     return serialize_job(job)
 
@@ -739,14 +833,20 @@ def backfill_metadata(
     }
 
 
-def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_partial: bool, retry_failed: bool):
-    progress.update(total=max(1, int(limit)), current=0, message="Scanning songs for metadata backfill")
+def _run_backfill_job(
+    db: Session, progress, *, user_id: str, limit: int, retry_partial: bool, retry_failed: bool
+):
+    progress.update(
+        total=max(1, int(limit)), current=0, message="Scanning songs for metadata backfill"
+    )
 
     def _report_backfill_progress(*, current: int, total: int, scanned: int, updated: int, song):
         if song is not None:
             artist_name = song.artist.name if song.artist else "Unknown artist"
             song_label = f"{song.title} - {artist_name}"
-            message = f"Enriching {current:,} / {max(1, total):,}: {song_label} ({updated:,} updated)"
+            message = (
+                f"Enriching {current:,} / {max(1, total):,}: {song_label} ({updated:,} updated)"
+            )
         elif total <= 0:
             message = "No songs need metadata backfill"
         else:
@@ -767,7 +867,9 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
         progress_callback=_report_backfill_progress,
         progress_interval=5,
     )
-    processed = int(result.get("processed") or result.get("total_candidates") or result.get("scanned") or 0)
+    processed = int(
+        result.get("processed") or result.get("total_candidates") or result.get("scanned") or 0
+    )
     total = max(1, int(result.get("total_candidates") or processed or limit or 1))
     progress.update(
         current=processed,
@@ -786,8 +888,8 @@ def _run_backfill_job(db: Session, progress, *, user_id: str, limit: int, retry_
     }
 
 
-_BULK_CHUNK = 500        # max items per IN-clause / artist batch
-_HISTORY_CHUNK = 1000   # rows per bulk history INSERT (safe Postgres limit)
+_BULK_CHUNK = 500  # max items per IN-clause / artist batch
+_HISTORY_CHUNK = 1000  # rows per bulk history INSERT (safe Postgres limit)
 
 
 def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> dict:
@@ -810,9 +912,7 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
     # ── Phase 1: Artists ─────────────────────────────────────────────────────
     progress.update(message=f"Syncing artists for {total:,} tracks…")
 
-    unique_artist_names: set[str] = {
-        t["artist"] for t in tracks if t.get("artist")
-    }
+    unique_artist_names: set[str] = {t["artist"] for t in tracks if t.get("artist")}
     artist_map: dict[str, int] = {}  # name → artist_id
 
     name_list = list(unique_artist_names)
@@ -842,17 +942,21 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
     # with O(ceil(artists/500)) round-trips and Python-side matching.
     progress.update(message=f"Checking library for {total:,} tracks…")
 
-    spotify_song_map: dict[str, int] = {}   # spotify_id       → song_id
-    title_song_map:  dict[tuple, int] = {}  # (title, artist_id) → song_id
+    spotify_song_map: dict[str, int] = {}  # spotify_id       → song_id
+    title_song_map: dict[tuple, int] = {}  # (title, artist_id) → song_id
 
     # 2a — load ALL songs for artists in the file (title + spotify_id matching)
     all_artist_ids = list(artist_map.values())
     for i in range(0, len(all_artist_ids), _BULK_CHUNK):
         chunk_aids = all_artist_ids[i : i + _BULK_CHUNK]
-        rows = db.query(Song.spotify_id, Song.id, Song.title, Song.artist_id).filter(
-            Song.artist_id.in_(chunk_aids),
-            Song.is_deleted.is_(False),
-        ).all()
+        rows = (
+            db.query(Song.spotify_id, Song.id, Song.title, Song.artist_id)
+            .filter(
+                Song.artist_id.in_(chunk_aids),
+                Song.is_deleted.is_(False),
+            )
+            .all()
+        )
         for sid, song_id, title, aid in rows:
             title_song_map[(title, aid)] = song_id
             if sid:
@@ -867,16 +971,20 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
     all_file_spotify_ids = list({t["spotify_id"] for t in tracks if t.get("spotify_id")})
     for i in range(0, len(all_file_spotify_ids), _BULK_CHUNK):
         chunk_sids = all_file_spotify_ids[i : i + _BULK_CHUNK]
-        rows = db.query(Song.spotify_id, Song.id).filter(
-            Song.spotify_id.in_(chunk_sids),
-        ).all()
+        rows = (
+            db.query(Song.spotify_id, Song.id)
+            .filter(
+                Song.spotify_id.in_(chunk_sids),
+            )
+            .all()
+        )
         for sid, song_id in rows:
             if sid not in spotify_song_map:
                 spotify_song_map[sid] = song_id  # don't create — it already exists
 
     # 2c — create songs that still don't exist
-    seen_song_keys:    set[tuple] = set()
-    seen_spotify_ids:  set[str]   = set()   # within-batch dedup by spotify_id
+    seen_song_keys: set[tuple] = set()
+    seen_spotify_ids: set[str] = set()  # within-batch dedup by spotify_id
     new_song_meta: list[tuple[Song, str, int]] = []  # (obj, title, artist_id)
 
     for t in tracks:
@@ -949,17 +1057,19 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
             continue
         seen_history.add(key)
 
-        rows_to_insert.append({
-            "user_id": user_id,
-            "song_id": song_id,
-            "played_at": played_at,
-            "ms_played": t.get("ms_played"),
-            "skipped": t.get("skipped"),
-            "platform": t.get("platform"),
-            "country": t.get("country"),
-            "offline": t.get("offline"),
-            "incognito": t.get("incognito"),
-        })
+        rows_to_insert.append(
+            {
+                "user_id": user_id,
+                "song_id": song_id,
+                "played_at": played_at,
+                "ms_played": t.get("ms_played"),
+                "skipped": t.get("skipped"),
+                "platform": t.get("platform"),
+                "country": t.get("country"),
+                "offline": t.get("offline"),
+                "incognito": t.get("incognito"),
+            }
+        )
 
     total_to_insert = len(rows_to_insert)
     for i in range(0, total_to_insert, _HISTORY_CHUNK):
@@ -969,9 +1079,7 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
             result = db.execute(
                 pg_insert(ListeningHistory.__table__)
                 .values(chunk)
-                .on_conflict_do_nothing(
-                    index_elements=["user_id", "song_id", "played_at"]
-                )
+                .on_conflict_do_nothing(index_elements=["user_id", "song_id", "played_at"])
             )
             new_history_rows += result.rowcount or 0
         else:
@@ -979,7 +1087,9 @@ def _bulk_import_tracks(db: Session, user_id: str, tracks: list, progress) -> di
             for row in chunk:
                 existing = (
                     db.query(ListeningHistory.id)
-                    .filter_by(user_id=row["user_id"], song_id=row["song_id"], played_at=row["played_at"])
+                    .filter_by(
+                        user_id=row["user_id"], song_id=row["song_id"], played_at=row["played_at"]
+                    )
                     .first()
                 )
                 if not existing:
@@ -1026,20 +1136,24 @@ def _parse_extended_history(data: list) -> list:
         skipped = reason_end in ("fwdbtn", "endplay")
 
         spotify_uri = entry.get("spotify_track_uri") or ""
-        spotify_id = spotify_uri.split(":")[-1] if spotify_uri.startswith("spotify:track:") else None
+        spotify_id = (
+            spotify_uri.split(":")[-1] if spotify_uri.startswith("spotify:track:") else None
+        )
 
-        tracks.append({
-            "title": entry.get("master_metadata_track_name"),
-            "artist": entry.get("master_metadata_album_artist_name"),
-            "spotify_id": spotify_id,
-            "played_at": entry.get("ts"),
-            "ms_played": ms_played,
-            "skipped": skipped,
-            "platform": entry.get("platform"),
-            "country": entry.get("conn_country"),
-            "offline": entry.get("offline"),
-            "incognito": entry.get("incognito_mode"),
-        })
+        tracks.append(
+            {
+                "title": entry.get("master_metadata_track_name"),
+                "artist": entry.get("master_metadata_album_artist_name"),
+                "spotify_id": spotify_id,
+                "played_at": entry.get("ts"),
+                "ms_played": ms_played,
+                "skipped": skipped,
+                "platform": entry.get("platform"),
+                "country": entry.get("conn_country"),
+                "offline": entry.get("offline"),
+                "incognito": entry.get("incognito_mode"),
+            }
+        )
     return tracks
 
 
@@ -1150,7 +1264,13 @@ async def import_history_job(
         raise HTTPException(status_code=401, detail="User not logged in")
     require_capability(user_id, "import_history")
 
-    enforce_rate_limit(request, namespace=IMPORT_RATE_LIMIT_NAMESPACE, user_id=user_id, limit=20, window_seconds=600)
+    enforce_rate_limit(
+        request,
+        namespace=IMPORT_RATE_LIMIT_NAMESPACE,
+        user_id=user_id,
+        limit=20,
+        window_seconds=600,
+    )
 
     content_type = request.headers.get("content-type", "")
 

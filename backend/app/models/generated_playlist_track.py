@@ -9,7 +9,9 @@ class GeneratedPlaylistTrack(Base):
     __tablename__ = "generated_playlist_tracks"
 
     id = Column(Integer, primary_key=True, index=True)
-    generated_playlist_id = Column(Integer, ForeignKey("generated_playlists.id"), nullable=False, index=True)
+    generated_playlist_id = Column(
+        Integer, ForeignKey("generated_playlists.id"), nullable=False, index=True
+    )
     song_id = Column(Integer, ForeignKey("songs.id"), nullable=False, index=True)
     position = Column(Integer, nullable=False)
     final_score = Column(Float, nullable=False, default=0)

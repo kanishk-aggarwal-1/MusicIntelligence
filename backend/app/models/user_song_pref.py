@@ -12,11 +12,9 @@ class UserSongPref(Base):
 
     __tablename__ = "user_song_prefs"
 
-    id      = Column(Integer, primary_key=True)
-    user_id = Column(String,  nullable=False, index=True)
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
     song_id = Column(Integer, ForeignKey("songs.id"), nullable=False, index=True)
     is_hidden = Column(Boolean, default=False, nullable=False)
 
-    __table_args__ = (
-        UniqueConstraint("user_id", "song_id", name="uq_user_song_pref"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "song_id", name="uq_user_song_pref"),)

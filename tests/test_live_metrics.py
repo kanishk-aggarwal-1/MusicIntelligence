@@ -1,4 +1,5 @@
 """Tests for persistent live metrics (live_metrics_service + GET /stats)."""
+
 from backend.app.models.metric_counter import MetricCounter  # noqa: F401  (register table)
 from backend.app.services import live_metrics_service as lm
 from backend.app.routes import stats_routes
@@ -30,7 +31,9 @@ def test_counters_accumulate_atomically(monkeypatch, testing_session_local, test
 def test_increment_many_single_transaction(monkeypatch, testing_session_local, test_engine):
     _use_test_db(monkeypatch, testing_session_local, test_engine)
 
-    lm.increment_many({lm.CACHE_HITS: 3, lm.CACHE_MISSES: 1, lm.SPOTIFY_CALLS: 2, lm.LASTFM_CALLS: 1})
+    lm.increment_many(
+        {lm.CACHE_HITS: 3, lm.CACHE_MISSES: 1, lm.SPOTIFY_CALLS: 2, lm.LASTFM_CALLS: 1}
+    )
     lm.increment_many({lm.PLAYLIST_TRACKS_REQUESTED: 10, lm.PLAYLIST_TRACKS_RESOLVED: 8})
 
     counters = lm.get_counters()
@@ -49,8 +52,8 @@ def test_build_stats_computes_rates(monkeypatch, testing_session_local, test_eng
     lm.increment(lm.PLAYLISTS_GENERATED)
 
     stats = lm.build_stats()
-    assert stats["cache"]["hit_rate_pct"] == 75.0          # 3 / (3+1)
-    assert stats["cache"]["api_calls_saved"] == 3          # each hit = a call avoided
+    assert stats["cache"]["hit_rate_pct"] == 75.0  # 3 / (3+1)
+    assert stats["cache"]["api_calls_saved"] == 3  # each hit = a call avoided
     # api_calls_saved_pct = hits / (hits + actual_external) = 3 / (3+3) = 50%
     # Differs from hit_rate_pct which is hits / all_cache_lookups (75%).
     assert stats["cache"]["api_calls_saved_pct"] == 50.0
@@ -69,8 +72,10 @@ def test_build_stats_handles_zero_safely(monkeypatch, testing_session_local, tes
 
 def test_increment_is_fail_open(monkeypatch):
     """A broken DB layer must never raise into live traffic."""
+
     def _boom():
         raise RuntimeError("db is down")
+
     monkeypatch.setattr(lm, "SessionLocal", _boom)
     # Must not raise.
     lm.increment(lm.CACHE_HITS)
@@ -79,7 +84,9 @@ def test_increment_is_fail_open(monkeypatch):
     assert counters[lm.CACHE_HITS] == 0
 
 
-def test_stats_endpoint_is_public_and_non_sensitive(monkeypatch, testing_session_local, test_engine, client_factory):
+def test_stats_endpoint_is_public_and_non_sensitive(
+    monkeypatch, testing_session_local, test_engine, client_factory
+):
     _use_test_db(monkeypatch, testing_session_local, test_engine)
     lm.increment(lm.CACHE_HITS, 4)
 
@@ -98,7 +105,9 @@ def test_stats_endpoint_is_public_and_non_sensitive(monkeypatch, testing_session
         assert forbidden not in text
 
 
-def test_stats_and_metrics_share_database_read_cache(monkeypatch, testing_session_local, test_engine, client_factory):
+def test_stats_and_metrics_share_database_read_cache(
+    monkeypatch, testing_session_local, test_engine, client_factory
+):
     _use_test_db(monkeypatch, testing_session_local, test_engine)
     lm.increment(lm.CACHE_HITS, 2)
     original_get_counters = lm.get_counters

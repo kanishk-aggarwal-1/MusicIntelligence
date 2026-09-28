@@ -1,4 +1,5 @@
 """Additional service-level tests targeting uncovered paths."""
+
 from datetime import datetime, timedelta
 
 from backend.app.models.api_cache import ApiCache
@@ -49,8 +50,15 @@ def _artist(db, name: str) -> Artist:
     return a
 
 
-def _song_with_tag(db, *, artist_name: str, title: str, tag_name: str,
-                   spotify_id: str | None = None, genre: str | None = None) -> Song:
+def _song_with_tag(
+    db,
+    *,
+    artist_name: str,
+    title: str,
+    tag_name: str,
+    spotify_id: str | None = None,
+    genre: str | None = None,
+) -> Song:
     artist = _artist(db, artist_name)
     tag = db.query(Tag).filter_by(name=tag_name).first()
     if not tag:
@@ -74,6 +82,7 @@ def _song_with_tag(db, *, artist_name: str, title: str, tag_name: str,
 
 
 # ── job_service ───────────────────────────────────────────────────────────────
+
 
 def test_list_jobs_returns_user_jobs(testing_session_local, db_session):
     db_session.add(_session("u1"))
@@ -178,6 +187,7 @@ def test_get_active_job_marks_stale_jobs_failed(db_session):
 
 # ── recommendation_service: build_discovery_feed ─────────────────────────────
 
+
 def test_build_discovery_feed_empty_history(db_session):
     db_session.add(_session("u1"))
     db_session.commit()
@@ -187,12 +197,18 @@ def test_build_discovery_feed_empty_history(db_session):
 
 def test_build_discovery_feed_with_history(db_session):
     db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="Feed A", title="Feed S1", tag_name="indie", spotify_id="f1")
-    s2 = _song_with_tag(db_session, artist_name="Feed B", title="Feed S2", tag_name="rock", spotify_id="f2")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    s1 = _song_with_tag(
+        db_session, artist_name="Feed A", title="Feed S1", tag_name="indie", spotify_id="f1"
+    )
+    s2 = _song_with_tag(
+        db_session, artist_name="Feed B", title="Feed S2", tag_name="rock", spotify_id="f2"
+    )
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.commit()
 
     result = build_discovery_feed(db_session, "u1", limit=10)
@@ -204,14 +220,21 @@ def test_build_discovery_feed_with_history(db_session):
 
 # ── recommendation_service: recommend_songs with context ─────────────────────
 
+
 def test_recommend_songs_with_context_type(db_session):
     db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="Ctx A", title="Focus S1", tag_name="electronic", spotify_id="c1")
-    s2 = _song_with_tag(db_session, artist_name="Ctx B", title="Focus S2", tag_name="ambient", spotify_id="c2")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    s1 = _song_with_tag(
+        db_session, artist_name="Ctx A", title="Focus S1", tag_name="electronic", spotify_id="c1"
+    )
+    s2 = _song_with_tag(
+        db_session, artist_name="Ctx B", title="Focus S2", tag_name="ambient", spotify_id="c2"
+    )
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.commit()
 
     result = recommend_songs(db_session, "u1", context_type="focus", allow_discovery=False, limit=5)
@@ -220,7 +243,9 @@ def test_recommend_songs_with_context_type(db_session):
 
 def test_human_reasons_translate_scoring_to_product_copy(db_session):
     artist = _artist(db_session, "Reason Artist")
-    song = Song(title="Reason Song", artist_id=artist.id, artist=artist, genre="indie", is_deleted=False)
+    song = Song(
+        title="Reason Song", artist_id=artist.id, artist=artist, genre="indie", is_deleted=False
+    )
 
     reasons = _human_reasons(
         song,
@@ -239,12 +264,26 @@ def test_human_reasons_translate_scoring_to_product_copy(db_session):
 
 def test_recommend_songs_returns_human_and_debug_reasons(db_session):
     db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="Reason Feed A", title="Reason Feed S1", tag_name="indie", spotify_id="rf1")
-    s2 = _song_with_tag(db_session, artist_name="Reason Feed B", title="Reason Feed S2", tag_name="rock", spotify_id="rf2")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    s1 = _song_with_tag(
+        db_session,
+        artist_name="Reason Feed A",
+        title="Reason Feed S1",
+        tag_name="indie",
+        spotify_id="rf1",
+    )
+    s2 = _song_with_tag(
+        db_session,
+        artist_name="Reason Feed B",
+        title="Reason Feed S2",
+        tag_name="rock",
+        spotify_id="rf2",
+    )
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.commit()
 
     result = recommend_songs(db_session, "u1", return_details=True, allow_discovery=False, limit=5)
@@ -264,7 +303,9 @@ def test_discover_new_songs_ignores_lastfm_artist_failures(monkeypatch, db_sessi
         tag_name="indie",
         spotify_id="disc-fail-1",
     )
-    db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, 0)))
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, 0))
+    )
     db_session.commit()
 
     def _failing_discovery(*args, **kwargs):
@@ -280,43 +321,65 @@ def test_discover_new_songs_ignores_lastfm_artist_failures(monkeypatch, db_sessi
 
 def test_recommend_songs_excludes_never_show(db_session):
     db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="Excl A", title="Never Show Song", tag_name="pop", spotify_id="n1")
-    s2 = _song_with_tag(db_session, artist_name="Excl B", title="Normal Song", tag_name="pop", spotify_id="n2")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    s1 = _song_with_tag(
+        db_session, artist_name="Excl A", title="Never Show Song", tag_name="pop", spotify_id="n1"
+    )
+    s2 = _song_with_tag(
+        db_session, artist_name="Excl B", title="Normal Song", tag_name="pop", spotify_id="n2"
+    )
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.add(RecommendationFeedback(user_id="u1", song_id=s1.id, action="never_show"))
     db_session.commit()
 
-    details = recommend_songs(db_session, "u1", return_details=True, allow_discovery=False, limit=10)
+    details = recommend_songs(
+        db_session, "u1", return_details=True, allow_discovery=False, limit=10
+    )
     titles = [d["song"].title for d in details]
     assert "Never Show Song" not in titles
 
 
 def test_recommend_songs_discovery_disabled(db_session):
     db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="Excl2 A", title="Excl Song A", tag_name="jazz", spotify_id="e1")
-    s2 = _song_with_tag(db_session, artist_name="Excl2 B", title="Excl Song B", tag_name="jazz", spotify_id="e2")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    s1 = _song_with_tag(
+        db_session, artist_name="Excl2 A", title="Excl Song A", tag_name="jazz", spotify_id="e1"
+    )
+    s2 = _song_with_tag(
+        db_session, artist_name="Excl2 B", title="Excl Song B", tag_name="jazz", spotify_id="e2"
+    )
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.commit()
 
     # allow_discovery=False skips lastfm discovery path
-    details = recommend_songs(db_session, "u1", return_details=True, allow_discovery=False, limit=10)
+    details = recommend_songs(
+        db_session, "u1", return_details=True, allow_discovery=False, limit=10
+    )
     assert isinstance(details, list)
 
 
 def test_recommend_songs_more_like_this_feedback(db_session):
     db_session.add(_session("u1"))
-    s1 = _song_with_tag(db_session, artist_name="MLT A", title="More Like This", tag_name="blues", spotify_id="m1")
-    s2 = _song_with_tag(db_session, artist_name="MLT B", title="Companion", tag_name="blues", spotify_id="m2")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    s1 = _song_with_tag(
+        db_session, artist_name="MLT A", title="More Like This", tag_name="blues", spotify_id="m1"
+    )
+    s2 = _song_with_tag(
+        db_session, artist_name="MLT B", title="Companion", tag_name="blues", spotify_id="m2"
+    )
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.add(RecommendationFeedback(user_id="u1", song_id=s1.id, action="more_like_this"))
     db_session.commit()
 
@@ -325,6 +388,7 @@ def test_recommend_songs_more_like_this_feedback(db_session):
 
 
 # ── api_cache_service: update and clear paths ────────────────────────────────
+
 
 def test_store_cache_updates_existing_entry(testing_session_local, monkeypatch):
     monkeypatch.setattr(api_cache_service, "SessionLocal", testing_session_local)
@@ -349,6 +413,7 @@ def test_clear_provider_cache_removes_entries(testing_session_local, monkeypatch
 
 # ── recommendation_service: backfill_missing_metadata ────────────────────────
 
+
 def test_backfill_missing_metadata_enriches_pending_songs(monkeypatch, db_session):
     db_session.add(_session("u1"))
     artist = _artist(db_session, "Backfill Artist")
@@ -360,17 +425,20 @@ def test_backfill_missing_metadata_enriches_pending_songs(monkeypatch, db_sessio
     )
     db_session.add(pending)
     db_session.flush()
-    db_session.add(ListeningHistory(user_id="u1", song_id=pending.id, played_at=datetime(2026, 5, 1, 10, 0)))
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=pending.id, played_at=datetime(2026, 5, 1, 10, 0))
+    )
     db_session.commit()
 
     monkeypatch.setattr(
-        enrichment_service, "get_track_tags",
-        lambda *a, **kw: [{"name": "indie", "count": 100}]
+        enrichment_service, "get_track_tags", lambda *a, **kw: [{"name": "indie", "count": 100}]
     )
     monkeypatch.setattr(enrichment_service, "get_artist_tags", lambda *a, **kw: [])
-    monkeypatch.setattr(enrichment_service, "get_track_info", lambda *a, **kw: {
-        "listeners": 5000, "playcount": 20000, "genre": "indie"
-    })
+    monkeypatch.setattr(
+        enrichment_service,
+        "get_track_info",
+        lambda *a, **kw: {"listeners": 5000, "playcount": 20000, "genre": "indie"},
+    )
 
     result = backfill_missing_metadata(db_session, user_id="u1", max_songs=10)
     assert result["scanned"] >= 1
@@ -389,16 +457,22 @@ def test_backfill_missing_metadata_reports_incremental_progress(monkeypatch, db_
         )
         db_session.add(song)
         db_session.flush()
-        db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, i)))
+        db_session.add(
+            ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, i))
+        )
         songs.append(song)
     db_session.commit()
 
-    monkeypatch.setattr(recommendation_service, "enrich_song", lambda song: {
-        "genre": "indie",
-        "listeners": 100,
-        "playcount": 200,
-        "tags": ["indie"],
-    })
+    monkeypatch.setattr(
+        recommendation_service,
+        "enrich_song",
+        lambda song: {
+            "genre": "indie",
+            "listeners": 100,
+            "playcount": 200,
+            "tags": ["indie"],
+        },
+    )
 
     updates = []
 
@@ -424,8 +498,12 @@ def test_backfill_missing_metadata_reports_incremental_progress(monkeypatch, db_
 def test_backfill_missing_metadata_skips_complete_songs(monkeypatch, db_session):
     db_session.add(_session("u1"))
     # _song_with_tag always creates with enrichment_status="complete"
-    s = _song_with_tag(db_session, artist_name="Complete Artist", title="Complete Song", tag_name="rock")
-    db_session.add(ListeningHistory(user_id="u1", song_id=s.id, played_at=datetime(2026, 5, 1, 10, 0)))
+    s = _song_with_tag(
+        db_session, artist_name="Complete Artist", title="Complete Song", tag_name="rock"
+    )
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=s.id, played_at=datetime(2026, 5, 1, 10, 0))
+    )
     db_session.commit()
 
     result = backfill_missing_metadata(db_session, user_id="u1", max_songs=10)
@@ -450,7 +528,9 @@ def test_backfill_normalizes_stale_pending_complete_song(db_session):
     db_session.add(song)
     db_session.flush()
     db_session.add(SongTag(song_id=song.id, tag_id=tag.id))
-    db_session.add(ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, 0)))
+    db_session.add(
+        ListeningHistory(user_id="u1", song_id=song.id, played_at=datetime(2026, 5, 1, 10, 0))
+    )
     db_session.commit()
 
     result = backfill_missing_metadata(db_session, user_id="u1", max_songs=10)
@@ -470,12 +550,14 @@ def test_sync_listening_history_can_skip_inline_enrichment(monkeypatch, db_sessi
     result = sync_listening_history(
         db_session,
         "u1",
-        [{
-            "title": "Imported Track",
-            "artist": "Imported Artist",
-            "spotify_id": "imported-track-id",
-            "played_at": "2026-05-01T10:00:00Z",
-        }],
+        [
+            {
+                "title": "Imported Track",
+                "artist": "Imported Artist",
+                "spotify_id": "imported-track-id",
+                "played_at": "2026-05-01T10:00:00Z",
+            }
+        ],
         enrich_inline=False,
     )
 

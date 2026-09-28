@@ -1,4 +1,4 @@
-﻿from backend.app.database import Base, engine, run_startup_migrations
+from backend.app.database import Base, engine, run_startup_migrations
 
 # Import each model module so SQLAlchemy registers all tables/relationships.
 from backend.app.models.artist import Artist

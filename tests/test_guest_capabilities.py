@@ -5,7 +5,13 @@ import pytest
 from backend.app.authz import capabilities_for
 from backend.app.config import settings
 from backend.app.models.user_session import UserSession
-from backend.app.routes import insights_routes, job_routes, music_routes, playlist_routes, user_routes
+from backend.app.routes import (
+    insights_routes,
+    job_routes,
+    music_routes,
+    playlist_routes,
+    user_routes,
+)
 from backend.app.time_utils import utcnow_naive
 
 
@@ -46,7 +52,9 @@ def test_demo_session_exposes_read_only_capabilities(client_factory, db_session)
         ("post", "/playlists/schedules", {"cadence": "weekly"}),
     ],
 )
-def test_demo_mutations_are_consistently_rejected(client_factory, db_session, method, path, json_body):
+def test_demo_mutations_are_consistently_rejected(
+    client_factory, db_session, method, path, json_body
+):
     db_session.add(_demo_session())
     db_session.commit()
     client = client_factory(

@@ -8,7 +8,21 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app.database import Base, get_db
-from backend.app.models import api_cache, artist, dedup_merge_log, generated_playlist, generated_playlist_track, job, listening_goal, listening_history, recommendation_feedback, song, song_tag, tag, user_session  # noqa: F401
+from backend.app.models import (
+    api_cache,
+    artist,
+    dedup_merge_log,
+    generated_playlist,
+    generated_playlist_track,
+    job,
+    listening_goal,
+    listening_history,
+    recommendation_feedback,
+    song,
+    song_tag,
+    tag,
+    user_session,
+)  # noqa: F401
 import backend.app.services.ml_recommendation_service as _ml_svc
 
 

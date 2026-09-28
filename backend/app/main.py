@@ -36,9 +36,7 @@ install_error_handlers(app)
 # In development allow any localhost/127.0.0.1 port so Vite port-increment
 # and hostname differences (localhost vs 127.0.0.1) never cause CORS 400s.
 _dev_origin_regex = (
-    r"http://(localhost|127\.0\.0\.1)(:\d+)?"
-    if settings.APP_ENV != "production"
-    else None
+    r"http://(localhost|127\.0\.0\.1)(:\d+)?" if settings.APP_ENV != "production" else None
 )
 
 app.add_middleware(
@@ -64,6 +62,7 @@ except Exception:
     # run_startup_migrations().  Tables already exist on production; don't
     # crash the import and trigger a Render restart loop.
     import logging as _logging
+
     _logging.getLogger(__name__).exception("create_all failed at startup — continuing")
 app.include_router(user_routes.router)
 app.include_router(playlist_routes.router)

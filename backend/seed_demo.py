@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from app.database import SessionLocal
@@ -222,6 +223,7 @@ ARTISTS_AND_SONGS = [
 # How many times each song gets played and when
 # ---------------------------------------------------------------------------
 
+
 def _generate_history(song_id: int, user_id: str, base_plays: int, months_back: int = 6):
     """Return a list of ListeningHistory kwargs spread over the last N months."""
     now = datetime.now(timezone.utc)
@@ -230,8 +232,8 @@ def _generate_history(song_id: int, user_id: str, base_plays: int, months_back: 
         days_ago = random.randint(0, months_back * 30)
         hour = random.choices(
             range(24),
-            weights=[1,1,1,1,1,1,2,3,4,4,4,5,5,5,5,5,6,7,8,9,9,8,7,4],
-            k=1
+            weights=[1, 1, 1, 1, 1, 1, 2, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6, 7, 8, 9, 9, 8, 7, 4],
+            k=1,
         )[0]
         played_at = (now - timedelta(days=days_ago)).replace(
             hour=hour,
@@ -240,17 +242,20 @@ def _generate_history(song_id: int, user_id: str, base_plays: int, months_back: 
             microsecond=0,
             tzinfo=None,
         )
-        rows.append({
-            "user_id": user_id,
-            "song_id": song_id,
-            "played_at": played_at,
-        })
+        rows.append(
+            {
+                "user_id": user_id,
+                "song_id": song_id,
+                "played_at": played_at,
+            }
+        )
     return rows
 
 
 # ---------------------------------------------------------------------------
 # Main seeding logic
 # ---------------------------------------------------------------------------
+
 
 def seed():
     db = SessionLocal()
@@ -284,7 +289,7 @@ def seed():
         print(f"  OK {len(tag_cache)} tags ready")
 
         # 3. Upsert artists + songs
-        song_id_map: dict[str, int] = {}   # spotify_id → db song.id
+        song_id_map: dict[str, int] = {}  # spotify_id → db song.id
         total_songs = 0
         for artist_data in ARTISTS_AND_SONGS:
             # Artist
@@ -301,11 +306,15 @@ def seed():
                 # 2. Fall back to title + artist_id (real library may have the song
                 #    under a different / missing spotify_id)
                 if not song:
-                    song = db.query(Song).filter(
-                        Song.title == title,
-                        Song.artist_id == artist.id,
-                        Song.is_deleted.is_(False),
-                    ).first()
+                    song = (
+                        db.query(Song)
+                        .filter(
+                            Song.title == title,
+                            Song.artist_id == artist.id,
+                            Song.is_deleted.is_(False),
+                        )
+                        .first()
+                    )
                 # 3. Create only when the song is genuinely absent
                 if not song:
                     song = Song(
@@ -336,10 +345,13 @@ def seed():
                 song_id_map[spotify_id] = song.id
 
         db.commit()
-        print(f"  OK {len(ARTISTS_AND_SONGS)} artists, {len(song_id_map)} songs ready ({total_songs} new)")
+        print(
+            f"  OK {len(ARTISTS_AND_SONGS)} artists, {len(song_id_map)} songs ready ({total_songs} new)"
+        )
 
         # 4. Find the real user — the non-demo account with the most history
         from sqlalchemy import func as _func
+
         real_user_row = (
             db.query(ListeningHistory.user_id, _func.count(ListeningHistory.id).label("n"))
             .filter(ListeningHistory.user_id != DEMO_USER_ID)
@@ -351,13 +363,15 @@ def seed():
             print("  WARNING: no real user history found — skipping history copy")
         else:
             real_user_id = real_user_row[0]
-            real_count   = real_user_row[1]
+            real_count = real_user_row[1]
             print(f"  OK found real user {real_user_id!r} with {real_count:,} history rows")
 
             # 5. Clear existing demo history then bulk-copy from real user
-            deleted = db.query(ListeningHistory).filter(
-                ListeningHistory.user_id == DEMO_USER_ID
-            ).delete(synchronize_session=False)
+            deleted = (
+                db.query(ListeningHistory)
+                .filter(ListeningHistory.user_id == DEMO_USER_ID)
+                .delete(synchronize_session=False)
+            )
             db.commit()
             if deleted:
                 print(f"  OK cleared {deleted:,} old demo history rows")
@@ -378,11 +392,13 @@ def seed():
                 if not rows:
                     break
                 for r in rows:
-                    db.add(ListeningHistory(
-                        user_id=DEMO_USER_ID,
-                        song_id=r.song_id,
-                        played_at=r.played_at,
-                    ))
+                    db.add(
+                        ListeningHistory(
+                            user_id=DEMO_USER_ID,
+                            song_id=r.song_id,
+                            played_at=r.played_at,
+                        )
+                    )
                 db.commit()
                 inserted += len(rows)
                 print(f"  ... copied {inserted:,} / {real_count:,} rows", end="\r")

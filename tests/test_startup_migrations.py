@@ -1,4 +1,5 @@
 """Test run_startup_migrations() exercising SQLite branches."""
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker

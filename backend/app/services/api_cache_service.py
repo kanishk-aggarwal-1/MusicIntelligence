@@ -37,7 +37,14 @@ def get_cached_response(provider: str, cache_key: str):
         db.close()
 
 
-def store_cached_response(provider: str, cache_key: str, payload=None, status_code: int | None = 200, error: str | None = None, ttl: timedelta | None = None):
+def store_cached_response(
+    provider: str,
+    cache_key: str,
+    payload=None,
+    status_code: int | None = 200,
+    error: str | None = None,
+    ttl: timedelta | None = None,
+):
     db = SessionLocal()
     try:
         now = utcnow_naive()
@@ -69,7 +76,9 @@ def store_cached_response(provider: str, cache_key: str, payload=None, status_co
         return row
     except IntegrityError:
         db.rollback()
-        return store_cached_response(provider, cache_key, payload=payload, status_code=status_code, error=error, ttl=ttl)
+        return store_cached_response(
+            provider, cache_key, payload=payload, status_code=status_code, error=error, ttl=ttl
+        )
     finally:
         db.close()
 

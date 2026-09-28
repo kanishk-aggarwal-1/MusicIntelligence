@@ -19,4 +19,6 @@ class GeneratedPlaylist(Base):
     candidate_pool_size = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=utcnow_naive, nullable=False, index=True)
 
-    tracks = relationship("GeneratedPlaylistTrack", back_populates="generated_playlist", cascade="all, delete-orphan")
+    tracks = relationship(
+        "GeneratedPlaylistTrack", back_populates="generated_playlist", cascade="all, delete-orphan"
+    )

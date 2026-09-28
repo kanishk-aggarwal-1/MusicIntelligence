@@ -11,10 +11,19 @@ from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.models.recommendation_feedback import RecommendationFeedback
 from backend.app.routes import dashboard_routes, insights_routes, music_routes, playlist_routes
-from backend.app.services import api_cache_service, enrichment_service, job_service, recommendation_service
+from backend.app.services import (
+    api_cache_service,
+    enrichment_service,
+    job_service,
+    recommendation_service,
+)
 from backend.app.services.api_cache_service import get_cached_response, store_cached_response
 from backend.app.services.job_service import create_job, get_job, run_job
-from backend.app.services.recommendation_service import _apply_enrichment, recommend_songs, sync_listening_history
+from backend.app.services.recommendation_service import (
+    _apply_enrichment,
+    recommend_songs,
+    sync_listening_history,
+)
 from backend.app.routes.playlist_routes import _enforce_known_ratio
 
 
@@ -22,7 +31,16 @@ def _user_session(user_id: str):
     return UserSession(user_id=user_id, token="token", token_info_json="{}")
 
 
-def _song_with_tag(db, *, artist_name: str, title: str, tag_name: str, spotify_id: str | None = None, genre: str | None = None, popularity: float = 1.0):
+def _song_with_tag(
+    db,
+    *,
+    artist_name: str,
+    title: str,
+    tag_name: str,
+    spotify_id: str | None = None,
+    genre: str | None = None,
+    popularity: float = 1.0,
+):
     artist = db.query(Artist).filter_by(name=artist_name).first()
     if not artist:
         artist = Artist(name=artist_name)
@@ -59,7 +77,9 @@ def test_api_cache_persists_success_and_failure(testing_session_local, monkeypat
     assert cached["status_code"] == 200
     assert cached["payload"] == {"name": "Song"}
 
-    store_cached_response("lastfm", "track:bad", payload=None, status_code=503, error="temporary failure")
+    store_cached_response(
+        "lastfm", "track:bad", payload=None, status_code=503, error="temporary failure"
+    )
     failed = get_cached_response("lastfm", "track:bad")
     assert failed["status_code"] == 503
     assert failed["error"] == "temporary failure"
@@ -91,12 +111,26 @@ def test_sync_history_normalizes_timezone_and_prevents_duplicates(db_session):
     first = sync_listening_history(
         db_session,
         "user-1",
-        [{"title": "Midnight Song", "artist": "Clockwork", "spotify_id": "sp-1", "played_at": "2026-05-01T23:30:00-04:00"}],
+        [
+            {
+                "title": "Midnight Song",
+                "artist": "Clockwork",
+                "spotify_id": "sp-1",
+                "played_at": "2026-05-01T23:30:00-04:00",
+            }
+        ],
     )
     second = sync_listening_history(
         db_session,
         "user-1",
-        [{"title": "Midnight Song", "artist": "Clockwork", "spotify_id": "sp-1", "played_at": "2026-05-02T03:30:00Z"}],
+        [
+            {
+                "title": "Midnight Song",
+                "artist": "Clockwork",
+                "spotify_id": "sp-1",
+                "played_at": "2026-05-02T03:30:00Z",
+            }
+        ],
     )
 
     assert first["new_history_rows"] == 1
@@ -113,8 +147,18 @@ def test_sync_history_deduplicates_items_within_same_batch(db_session):
         db_session,
         "user-1",
         [
-            {"title": "Repeated Song", "artist": "Loop Artist", "spotify_id": "loop-1", "played_at": "2026-05-02T03:30:00Z"},
-            {"title": "Repeated Song", "artist": "Loop Artist", "spotify_id": "loop-1", "played_at": "2026-05-02T03:30:00Z"},
+            {
+                "title": "Repeated Song",
+                "artist": "Loop Artist",
+                "spotify_id": "loop-1",
+                "played_at": "2026-05-02T03:30:00Z",
+            },
+            {
+                "title": "Repeated Song",
+                "artist": "Loop Artist",
+                "spotify_id": "loop-1",
+                "played_at": "2026-05-02T03:30:00Z",
+            },
         ],
     )
 
@@ -125,13 +169,23 @@ def test_sync_history_deduplicates_items_within_same_batch(db_session):
 
 def test_dashboard_stats_are_user_scoped(client_factory, db_session):
     db_session.add_all([_user_session("user-1"), _user_session("user-2")])
-    song_a = _song_with_tag(db_session, artist_name="A", title="Song A", tag_name="indie", spotify_id="a1")
-    song_b = _song_with_tag(db_session, artist_name="B", title="Song B", tag_name="rock", spotify_id="b1")
+    song_a = _song_with_tag(
+        db_session, artist_name="A", title="Song A", tag_name="indie", spotify_id="a1"
+    )
+    song_b = _song_with_tag(
+        db_session, artist_name="B", title="Song B", tag_name="rock", spotify_id="b1"
+    )
     db_session.add_all(
         [
-            ListeningHistory(user_id="user-1", song_id=song_a.id, played_at=datetime(2026, 5, 1, 12, 0)),
-            ListeningHistory(user_id="user-1", song_id=song_a.id, played_at=datetime(2026, 5, 2, 12, 0)),
-            ListeningHistory(user_id="user-2", song_id=song_b.id, played_at=datetime(2026, 5, 2, 12, 0)),
+            ListeningHistory(
+                user_id="user-1", song_id=song_a.id, played_at=datetime(2026, 5, 1, 12, 0)
+            ),
+            ListeningHistory(
+                user_id="user-1", song_id=song_a.id, played_at=datetime(2026, 5, 2, 12, 0)
+            ),
+            ListeningHistory(
+                user_id="user-2", song_id=song_b.id, played_at=datetime(2026, 5, 2, 12, 0)
+            ),
         ]
     )
     db_session.commit()
@@ -154,11 +208,27 @@ def test_dashboard_stats_include_engagement_metrics(client_factory, db_session):
         spotify_id="metrics-1",
     )
     now = datetime.now()
-    db_session.add_all([
-        ListeningHistory(user_id="engagement-user", song_id=song.id, played_at=now, ms_played=180_000, skipped=False),
-        ListeningHistory(user_id="engagement-user", song_id=song.id, played_at=now - timedelta(minutes=5), ms_played=60_000, skipped=True),
-        ListeningHistory(user_id="engagement-user", song_id=song.id, played_at=now - timedelta(minutes=10)),
-    ])
+    db_session.add_all(
+        [
+            ListeningHistory(
+                user_id="engagement-user",
+                song_id=song.id,
+                played_at=now,
+                ms_played=180_000,
+                skipped=False,
+            ),
+            ListeningHistory(
+                user_id="engagement-user",
+                song_id=song.id,
+                played_at=now - timedelta(minutes=5),
+                ms_played=60_000,
+                skipped=True,
+            ),
+            ListeningHistory(
+                user_id="engagement-user", song_id=song.id, played_at=now - timedelta(minutes=10)
+            ),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(dashboard_routes.router)
@@ -173,39 +243,68 @@ def test_sync_preserves_extended_listening_fields(db_session):
     result = sync_listening_history(
         db_session,
         "detail-user",
-        [{
-            "title": "Detailed Track",
-            "artist": "Detailed Artist",
-            "spotify_id": "detail-1",
-            "played_at": "2026-05-01T12:00:00Z",
-            "ms_played": 123_456,
-            "skipped": True,
-            "platform": "android",
-            "country": "US",
-            "offline": False,
-            "incognito": True,
-        }],
+        [
+            {
+                "title": "Detailed Track",
+                "artist": "Detailed Artist",
+                "spotify_id": "detail-1",
+                "played_at": "2026-05-01T12:00:00Z",
+                "ms_played": 123_456,
+                "skipped": True,
+                "platform": "android",
+                "country": "US",
+                "offline": False,
+                "incognito": True,
+            }
+        ],
         enrich_inline=False,
     )
 
     assert result["new_history_rows"] == 1
     row = db_session.query(ListeningHistory).filter_by(user_id="detail-user").one()
-    assert (row.ms_played, row.skipped, row.platform, row.country) == (123_456, True, "android", "US")
+    assert (row.ms_played, row.skipped, row.platform, row.country) == (
+        123_456,
+        True,
+        "android",
+        "US",
+    )
     assert row.offline is False
     assert row.incognito is True
 
 
 def test_dedup_preview_apply_and_undo_are_user_scoped(client_factory, db_session):
     db_session.add_all([_user_session("user-1"), _user_session("user-2")])
-    keep = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song", tag_name="pop", spotify_id="dup-1")
-    dup = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song (Live)", tag_name="pop", spotify_id="dup-2")
-    other_user_song = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song - Remix", tag_name="pop", spotify_id="dup-3")
+    keep = _song_with_tag(
+        db_session, artist_name="Dup Artist", title="Same Song", tag_name="pop", spotify_id="dup-1"
+    )
+    dup = _song_with_tag(
+        db_session,
+        artist_name="Dup Artist",
+        title="Same Song (Live)",
+        tag_name="pop",
+        spotify_id="dup-2",
+    )
+    other_user_song = _song_with_tag(
+        db_session,
+        artist_name="Dup Artist",
+        title="Same Song - Remix",
+        tag_name="pop",
+        spotify_id="dup-3",
+    )
     db_session.add_all(
         [
-            ListeningHistory(user_id="user-1", song_id=keep.id, played_at=datetime(2026, 5, 1, 10, 0)),
-            ListeningHistory(user_id="user-1", song_id=dup.id, played_at=datetime(2026, 5, 1, 11, 0)),
-            ListeningHistory(user_id="user-2", song_id=dup.id, played_at=datetime(2026, 5, 1, 11, 30)),
-            ListeningHistory(user_id="user-2", song_id=other_user_song.id, played_at=datetime(2026, 5, 1, 12, 0)),
+            ListeningHistory(
+                user_id="user-1", song_id=keep.id, played_at=datetime(2026, 5, 1, 10, 0)
+            ),
+            ListeningHistory(
+                user_id="user-1", song_id=dup.id, played_at=datetime(2026, 5, 1, 11, 0)
+            ),
+            ListeningHistory(
+                user_id="user-2", song_id=dup.id, played_at=datetime(2026, 5, 1, 11, 30)
+            ),
+            ListeningHistory(
+                user_id="user-2", song_id=other_user_song.id, played_at=datetime(2026, 5, 1, 12, 0)
+            ),
         ]
     )
     db_session.commit()
@@ -220,25 +319,43 @@ def test_dedup_preview_apply_and_undo_are_user_scoped(client_factory, db_session
     applied = client.post("/insights/dedup-apply?limit_groups=10", headers={"X-User-Id": "user-1"})
     assert applied.status_code == 200
     batch_id = applied.json()["batch_id"]
-    assert db_session.query(ListeningHistory).filter_by(user_id="user-1", song_id=dup.id).count() == 0
-    assert db_session.query(ListeningHistory).filter_by(user_id="user-2", song_id=dup.id).count() == 1
+    assert (
+        db_session.query(ListeningHistory).filter_by(user_id="user-1", song_id=dup.id).count() == 0
+    )
+    assert (
+        db_session.query(ListeningHistory).filter_by(user_id="user-2", song_id=dup.id).count() == 1
+    )
     assert dup.is_deleted is False
 
     undone = client.post(f"/insights/dedup-undo/{batch_id}", headers={"X-User-Id": "user-1"})
     assert undone.status_code == 200
-    assert db_session.query(ListeningHistory).filter_by(user_id="user-1", song_id=dup.id).count() == 1
-    assert db_session.query(ListeningHistory).filter_by(user_id="user-2", song_id=dup.id).count() == 1
+    assert (
+        db_session.query(ListeningHistory).filter_by(user_id="user-1", song_id=dup.id).count() == 1
+    )
+    assert (
+        db_session.query(ListeningHistory).filter_by(user_id="user-2", song_id=dup.id).count() == 1
+    )
 
 
 def test_dedup_undo_restores_conflicting_history_row(client_factory, db_session):
     db_session.add(_user_session("user-1"))
-    keep = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song", tag_name="pop", spotify_id="dup-a")
-    dup = _song_with_tag(db_session, artist_name="Dup Artist", title="Same Song (Live)", tag_name="pop", spotify_id="dup-b")
+    keep = _song_with_tag(
+        db_session, artist_name="Dup Artist", title="Same Song", tag_name="pop", spotify_id="dup-a"
+    )
+    dup = _song_with_tag(
+        db_session,
+        artist_name="Dup Artist",
+        title="Same Song (Live)",
+        tag_name="pop",
+        spotify_id="dup-b",
+    )
     played_at = datetime(2026, 5, 1, 10, 0)
-    db_session.add_all([
-        ListeningHistory(user_id="user-1", song_id=keep.id, played_at=played_at),
-        ListeningHistory(user_id="user-1", song_id=dup.id, played_at=played_at),
-    ])
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="user-1", song_id=keep.id, played_at=played_at),
+            ListeningHistory(user_id="user-1", song_id=dup.id, played_at=played_at),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(insights_routes.router)
@@ -254,14 +371,44 @@ def test_dedup_undo_restores_conflicting_history_row(client_factory, db_session)
 
 def test_playlist_preview_saves_history_without_mutating_songs(client_factory, db_session):
     db_session.add(_user_session("user-1"))
-    known = _song_with_tag(db_session, artist_name="Preview Artist", title="Known Track", tag_name="chill", spotify_id="known-1", genre="chill", popularity=2.5)
-    unknown = _song_with_tag(db_session, artist_name="Preview Artist", title="Unknown Track", tag_name="chill", spotify_id=None, genre="chill", popularity=3.5)
-    extra = _song_with_tag(db_session, artist_name="Other Artist", title="Extra Track", tag_name="ambient", spotify_id="known-2", genre="ambient", popularity=1.8)
+    known = _song_with_tag(
+        db_session,
+        artist_name="Preview Artist",
+        title="Known Track",
+        tag_name="chill",
+        spotify_id="known-1",
+        genre="chill",
+        popularity=2.5,
+    )
+    unknown = _song_with_tag(
+        db_session,
+        artist_name="Preview Artist",
+        title="Unknown Track",
+        tag_name="chill",
+        spotify_id=None,
+        genre="chill",
+        popularity=3.5,
+    )
+    extra = _song_with_tag(
+        db_session,
+        artist_name="Other Artist",
+        title="Extra Track",
+        tag_name="ambient",
+        spotify_id="known-2",
+        genre="ambient",
+        popularity=1.8,
+    )
     db_session.add_all(
         [
-            ListeningHistory(user_id="user-1", song_id=known.id, played_at=datetime(2026, 5, 3, 9, 0)),
-            ListeningHistory(user_id="user-1", song_id=unknown.id, played_at=datetime(2026, 5, 4, 9, 0)),
-            ListeningHistory(user_id="user-1", song_id=extra.id, played_at=datetime(2026, 5, 5, 9, 0)),
+            ListeningHistory(
+                user_id="user-1", song_id=known.id, played_at=datetime(2026, 5, 3, 9, 0)
+            ),
+            ListeningHistory(
+                user_id="user-1", song_id=unknown.id, played_at=datetime(2026, 5, 4, 9, 0)
+            ),
+            ListeningHistory(
+                user_id="user-1", song_id=extra.id, played_at=datetime(2026, 5, 5, 9, 0)
+            ),
         ]
     )
     db_session.commit()
@@ -297,14 +444,34 @@ def test_min_known_ratio_reorders_known_tracks():
 
 
 def test_enrichment_failure_sets_failed_status(monkeypatch, db_session):
-    song = _song_with_tag(db_session, artist_name="Fail Artist", title="Fail Song", tag_name="starter", spotify_id=None, genre=None, popularity=0)
+    song = _song_with_tag(
+        db_session,
+        artist_name="Fail Artist",
+        title="Fail Song",
+        tag_name="starter",
+        spotify_id=None,
+        genre=None,
+        popularity=0,
+    )
     song.genre = None
     song.enrichment_status = "pending"
     db_session.commit()
 
-    monkeypatch.setattr(enrichment_service, "get_track_tags", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tags failed")))
-    monkeypatch.setattr(enrichment_service, "get_artist_tags", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("artist tags failed")))
-    monkeypatch.setattr(enrichment_service, "get_track_info", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("track info failed")))
+    monkeypatch.setattr(
+        enrichment_service,
+        "get_track_tags",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tags failed")),
+    )
+    monkeypatch.setattr(
+        enrichment_service,
+        "get_artist_tags",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("artist tags failed")),
+    )
+    monkeypatch.setattr(
+        enrichment_service,
+        "get_track_info",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("track info failed")),
+    )
 
     payload = enrichment_service.enrich_song(song)
     song.song_tags.clear()
@@ -322,7 +489,13 @@ def test_playlist_preview_requires_login(client_factory, db_session):
 
 def test_feedback_accepts_new_actions(client_factory, db_session):
     db_session.add(_user_session("user-1"))
-    song = _song_with_tag(db_session, artist_name="Feedback Artist", title="Feedback Song", tag_name="indie", spotify_id="fb-1")
+    song = _song_with_tag(
+        db_session,
+        artist_name="Feedback Artist",
+        title="Feedback Song",
+        tag_name="indie",
+        spotify_id="fb-1",
+    )
     db_session.commit()
 
     client = client_factory(insights_routes.router)
@@ -345,26 +518,48 @@ def test_too_familiar_feedback_penalizes_overplayed_song(db_session):
     indie = Tag(name="indie")
     db_session.add(indie)
     db_session.flush()
-    db_session.add_all([
-        SongTag(song_id=favored.id, tag_id=indie.id),
-        SongTag(song_id=fresher.id, tag_id=indie.id),
-    ])
+    db_session.add_all(
+        [
+            SongTag(song_id=favored.id, tag_id=indie.id),
+            SongTag(song_id=fresher.id, tag_id=indie.id),
+        ]
+    )
 
     for hour in range(6):
-        db_session.add(ListeningHistory(user_id="user-1", song_id=favored.id, played_at=datetime(2026, 5, 1, hour, 0)))
-    db_session.add(ListeningHistory(user_id="user-1", song_id=fresher.id, played_at=datetime(2026, 5, 2, 10, 0)))
-    db_session.add(RecommendationFeedback(user_id="user-1", song_id=favored.id, action="too_familiar"))
+        db_session.add(
+            ListeningHistory(
+                user_id="user-1", song_id=favored.id, played_at=datetime(2026, 5, 1, hour, 0)
+            )
+        )
+    db_session.add(
+        ListeningHistory(
+            user_id="user-1", song_id=fresher.id, played_at=datetime(2026, 5, 2, 10, 0)
+        )
+    )
+    db_session.add(
+        RecommendationFeedback(user_id="user-1", song_id=favored.id, action="too_familiar")
+    )
     db_session.commit()
 
-    details = recommend_songs(db_session, "user-1", return_details=True, allow_discovery=False, limit=2)
+    details = recommend_songs(
+        db_session, "user-1", return_details=True, allow_discovery=False, limit=2
+    )
     assert details[0]["song"].title == "Fresher"
     assert details[0]["score"] > details[1]["score"]
 
 
 def test_song_detail_and_hide_restore(client_factory, db_session):
     db_session.add(_user_session("user-1"))
-    song = _song_with_tag(db_session, artist_name="Control Artist", title="Control Song", tag_name="electronic", spotify_id="ctl-1")
-    db_session.add(ListeningHistory(user_id="user-1", song_id=song.id, played_at=datetime(2026, 5, 5, 10, 0)))
+    song = _song_with_tag(
+        db_session,
+        artist_name="Control Artist",
+        title="Control Song",
+        tag_name="electronic",
+        spotify_id="ctl-1",
+    )
+    db_session.add(
+        ListeningHistory(user_id="user-1", song_id=song.id, played_at=datetime(2026, 5, 5, 10, 0))
+    )
     db_session.commit()
 
     client = client_factory(music_routes.router)

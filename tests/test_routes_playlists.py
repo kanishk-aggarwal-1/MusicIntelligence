@@ -1,4 +1,5 @@
 """Tests for /playlists routes — generated history, detail, playlist service."""
+
 from datetime import datetime
 
 from backend.app.models.artist import Artist
@@ -36,8 +37,9 @@ def _artist(db, name: str) -> Artist:
     return a
 
 
-def _song(db, *, artist_name: str, title: str, spotify_id: str | None = None,
-          genre: str | None = None) -> Song:
+def _song(
+    db, *, artist_name: str, title: str, spotify_id: str | None = None, genre: str | None = None
+) -> Song:
     artist = _artist(db, artist_name)
     s = Song(
         title=title,
@@ -61,7 +63,9 @@ def _tag_song(db, song: Song, tag_name: str) -> None:
     db.add(SongTag(song_id=song.id, tag_id=t.id))
 
 
-def _playlist_record(db, user_id: str, song: Song, name: str = "Test Playlist") -> GeneratedPlaylist:
+def _playlist_record(
+    db, user_id: str, song: Song, name: str = "Test Playlist"
+) -> GeneratedPlaylist:
     artist = db.query(Artist).filter_by(id=song.artist_id).first()
     item = {
         "song": song,
@@ -83,16 +87,25 @@ def _playlist_record(db, user_id: str, song: Song, name: str = "Test Playlist") 
 
 
 def _playlist_with_songs(db, user_id, songs):
-    items = [{"song": song, "score": 0.8, "components": {}, "reasons": [], "tag_names": []} for song in songs]
+    items = [
+        {"song": song, "score": 0.8, "components": {}, "reasons": [], "tag_names": []}
+        for song in songs
+    ]
     for song in songs:
         song.artist = db.query(Artist).filter_by(id=song.artist_id).first()
     return create_playlist_preview_record(
-        db, user_id=user_id, name="Editable", context_type=None,
-        request_params={"max_tracks": len(songs)}, candidate_pool_size=len(songs), items=items,
+        db,
+        user_id=user_id,
+        name="Editable",
+        context_type=None,
+        request_params={"max_tracks": len(songs)},
+        candidate_pool_size=len(songs),
+        items=items,
     )
 
 
 # ── GET /playlists/generated ─────────────────────────────────────────────────
+
 
 def test_generated_history_empty(client_factory, db_session):
     db_session.add(_session("u1"))
@@ -127,6 +140,7 @@ def test_generated_history_returns_playlists(client_factory, db_session):
 
 # ── GET /playlists/generated/{id} ────────────────────────────────────────────
 
+
 def test_generated_detail_not_found(client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
@@ -138,7 +152,13 @@ def test_generated_detail_not_found(client_factory, db_session):
 
 def test_generated_detail_returns_tracks(client_factory, db_session):
     db_session.add(_session("u1"))
-    s = _song(db_session, artist_name="Detail Artist", title="Detail Track", spotify_id="d1", genre="chill")
+    s = _song(
+        db_session,
+        artist_name="Detail Artist",
+        title="Detail Track",
+        spotify_id="d1",
+        genre="chill",
+    )
     record = _playlist_record(db_session, "u1", s, name="Detail Playlist")
     db_session.commit()
 
@@ -164,6 +184,7 @@ def test_generated_detail_scoped_to_user(client_factory, db_session):
 
 # ── POST /playlists/preview ───────────────────────────────────────────────────
 
+
 def test_playlist_preview_no_history_returns_empty(client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
@@ -185,10 +206,12 @@ def test_playlist_preview_creates_record(client_factory, db_session):
     s2 = _song(db_session, artist_name="B", title="S2", spotify_id="s2", genre="rock")
     _tag_song(db_session, s1, "indie")
     _tag_song(db_session, s2, "rock")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
-        ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
-    ])
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=s1.id, played_at=datetime(2026, 5, 1, 10, 0)),
+            ListeningHistory(user_id="u1", song_id=s2.id, played_at=datetime(2026, 5, 2, 10, 0)),
+        ]
+    )
     db_session.commit()
 
     before = db_session.query(GeneratedPlaylist).count()
@@ -209,6 +232,7 @@ def test_playlist_preview_creates_record(client_factory, db_session):
 
 
 # ── Utility helpers ───────────────────────────────────────────────────────────
+
 
 def test_dedupe_keep_order_removes_nones_and_dupes():
     result = _dedupe_keep_order(["a", None, "b", "a", "c", None])
@@ -235,8 +259,9 @@ def test_apply_quality_controls_diversity_interleaves_artists():
     artists = [d["song"].artist.name for d in result]
     # With diversity=0.8, artist A should not appear twice consecutively
     for i in range(len(artists) - 1):
-        assert not (artists[i] == "A" and artists[i + 1] == "A"), \
-            f"Artist A appears consecutively at positions {i} and {i+1}"
+        assert not (artists[i] == "A" and artists[i + 1] == "A"), (
+            f"Artist A appears consecutively at positions {i} and {i + 1}"
+        )
 
 
 def test_apply_quality_controls_familiarity_sorts_by_spotify_id():
@@ -258,11 +283,26 @@ def test_cap_artist_repetition_prefers_alternatives_when_available():
     artist_b = Artist(name="B")
     artist_c = Artist(name="C")
     details = [
-        {"song": Song(title="A1", artist=artist_a, spotify_id="a1", is_deleted=False), "score": 0.99},
-        {"song": Song(title="A2", artist=artist_a, spotify_id="a2", is_deleted=False), "score": 0.98},
-        {"song": Song(title="A3", artist=artist_a, spotify_id="a3", is_deleted=False), "score": 0.97},
-        {"song": Song(title="B1", artist=artist_b, spotify_id="b1", is_deleted=False), "score": 0.8},
-        {"song": Song(title="C1", artist=artist_c, spotify_id="c1", is_deleted=False), "score": 0.7},
+        {
+            "song": Song(title="A1", artist=artist_a, spotify_id="a1", is_deleted=False),
+            "score": 0.99,
+        },
+        {
+            "song": Song(title="A2", artist=artist_a, spotify_id="a2", is_deleted=False),
+            "score": 0.98,
+        },
+        {
+            "song": Song(title="A3", artist=artist_a, spotify_id="a3", is_deleted=False),
+            "score": 0.97,
+        },
+        {
+            "song": Song(title="B1", artist=artist_b, spotify_id="b1", is_deleted=False),
+            "score": 0.8,
+        },
+        {
+            "song": Song(title="C1", artist=artist_c, spotify_id="c1", is_deleted=False),
+            "score": 0.7,
+        },
     ]
 
     result = _cap_artist_repetition(details, max_tracks=3, diversity=0.8)
@@ -303,6 +343,7 @@ def test_deprioritize_recent_playlist_repeats_keeps_order_when_needed():
 
 # ── serialize_generated_playlist ────────────────────────────────────────────
 
+
 def test_serialize_without_tracks_omits_tracks_key(db_session):
     db_session.add(_session("u1"))
     s = _song(db_session, artist_name="Ser Artist", title="Ser Track", spotify_id="sr1")
@@ -316,7 +357,9 @@ def test_serialize_without_tracks_omits_tracks_key(db_session):
 
 def test_serialize_with_tracks_includes_song_fields(db_session):
     db_session.add(_session("u1"))
-    s = _song(db_session, artist_name="SerT Artist", title="SerT Track", spotify_id="srt1", genre="jazz")
+    s = _song(
+        db_session, artist_name="SerT Artist", title="SerT Track", spotify_id="srt1", genre="jazz"
+    )
     record = _playlist_record(db_session, "u1", s)
     db_session.commit()
 
@@ -340,6 +383,8 @@ def test_build_playlist_name_uses_genre_and_context(db_session):
     name = build_playlist_name([item], context_type="focus")
 
     assert name.startswith("Indie Focus Mix - ")
+
+
 def test_generated_playlist_tracks_can_be_edited_and_deleted(client_factory, db_session):
     db_session.add(_session("u1"))
     songs = [_song(db_session, artist_name="Editor", title=f"Song {i}") for i in range(3)]
@@ -352,17 +397,26 @@ def test_generated_playlist_tracks_can_be_edited_and_deleted(client_factory, db_
         json={"track_ids": [tracks[2].id, tracks[0].id, tracks[1].id]},
         headers={"X-User-Id": "u1"},
     )
-    assert [item["id"] for item in reordered.json()["tracks"]] == [tracks[2].id, tracks[0].id, tracks[1].id]
+    assert [item["id"] for item in reordered.json()["tracks"]] == [
+        tracks[2].id,
+        tracks[0].id,
+        tracks[1].id,
+    ]
     pinned = client.patch(
         f"/playlists/generated/{record.id}/tracks/{tracks[0].id}",
-        json={"is_pinned": True}, headers={"X-User-Id": "u1"},
+        json={"is_pinned": True},
+        headers={"X-User-Id": "u1"},
     )
     assert pinned.json()["is_pinned"] is True
     removed = client.delete(
-        f"/playlists/generated/{record.id}/tracks/{tracks[1].id}", headers={"X-User-Id": "u1"},
+        f"/playlists/generated/{record.id}/tracks/{tracks[1].id}",
+        headers={"X-User-Id": "u1"},
     )
     assert [item["position"] for item in removed.json()["tracks"]] == [1, 2]
-    assert client.delete(f"/playlists/generated/{record.id}", headers={"X-User-Id": "u1"}).status_code == 200
+    assert (
+        client.delete(f"/playlists/generated/{record.id}", headers={"X-User-Id": "u1"}).status_code
+        == 200
+    )
     assert db_session.query(GeneratedPlaylist).filter_by(id=record.id).first() is None
 
 
@@ -371,9 +425,18 @@ def test_replace_track_uses_unused_candidate(monkeypatch, client_factory, db_ses
     original = _song(db_session, artist_name="Editor", title="Original")
     replacement = _song(db_session, artist_name="Editor", title="Replacement")
     record = _playlist_with_songs(db_session, "u1", [original])
-    monkeypatch.setattr(playlist_routes, "recommend_songs", lambda *args, **kwargs: [{
-        "song": replacement, "score": 0.75, "components": {"base": 0.75}, "reasons": ["fresh pick"],
-    }])
+    monkeypatch.setattr(
+        playlist_routes,
+        "recommend_songs",
+        lambda *args, **kwargs: [
+            {
+                "song": replacement,
+                "score": 0.75,
+                "components": {"base": 0.75},
+                "reasons": ["fresh pick"],
+            }
+        ],
+    )
     client = client_factory(playlist_routes.router)
     response = client.post(
         f"/playlists/generated/{record.id}/tracks/{record.tracks[0].id}/replace",

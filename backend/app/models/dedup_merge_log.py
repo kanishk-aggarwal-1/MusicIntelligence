@@ -5,7 +5,6 @@ from ..time_utils import utcnow_naive
 
 
 class DedupMergeLog(Base):
-
     __tablename__ = "dedup_merge_logs"
 
     id = Column(Integer, primary_key=True, index=True)

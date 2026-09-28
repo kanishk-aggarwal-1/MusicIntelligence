@@ -21,11 +21,13 @@ def test_fetch_recent_tracks_stops_at_saved_checkpoint():
 
         def current_user_recently_played(self, **kwargs):
             self.calls.append(kwargs)
-            return {"items": [
-                _item("2026-07-14T12:00:00Z", "new-2"),
-                _item("2026-07-14T11:00:00Z", "new-1"),
-                _item("2026-07-14T10:00:00Z", "old"),
-            ]}
+            return {
+                "items": [
+                    _item("2026-07-14T12:00:00Z", "new-2"),
+                    _item("2026-07-14T11:00:00Z", "new-1"),
+                    _item("2026-07-14T10:00:00Z", "old"),
+                ]
+            }
 
     spotify = FakeSpotify()
     tracks = fetch_recent_tracks(spotify, max_tracks=1000, since_played_at="2026-07-14T10:30:00Z")

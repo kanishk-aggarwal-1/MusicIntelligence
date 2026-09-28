@@ -27,7 +27,14 @@ class JobProgress:
         self.db = db
         self.job = job
 
-    def update(self, *, current: int | None = None, total: int | None = None, message: str | None = None, status: str | None = None):
+    def update(
+        self,
+        *,
+        current: int | None = None,
+        total: int | None = None,
+        message: str | None = None,
+        status: str | None = None,
+    ):
         if current is not None:
             self.job.progress_current = max(0, int(current))
         if total is not None:
@@ -58,7 +65,9 @@ def serialize_job(job: Job) -> dict[str, Any]:
     }
 
 
-def create_job(db: Session, *, user_id: str, job_type: str, message: str = "Queued", progress_total: int = 0) -> Job:
+def create_job(
+    db: Session, *, user_id: str, job_type: str, message: str = "Queued", progress_total: int = 0
+) -> Job:
     job = Job(
         id=str(uuid.uuid4()),
         user_id=user_id,
@@ -131,7 +140,9 @@ def get_active_job(db: Session, *, user_id: str, job_type: str) -> Job | None:
             job.message = "Job timed out before completing"
             db.add(job)
             db.commit()
-            logger.warning("job.marked_stale job_id=%s user_id=%s job_type=%s", job.id, user_id, job_type)
+            logger.warning(
+                "job.marked_stale job_id=%s user_id=%s job_type=%s", job.id, user_id, job_type
+            )
             record_job("failed", job_type)
             record_job_failure(job_type, "stale_timeout")
             continue
@@ -227,7 +238,9 @@ def run_job(job_id: str, handler: Callable[[Session, JobProgress], dict[str, Any
                 metric_job_type = job.job_type
                 logger.exception(
                     "job.failed job_id=%s user_id=%s job_type=%s",
-                    job.id, job.user_id, job.job_type,
+                    job.id,
+                    job.user_id,
+                    job.job_type,
                 )
                 job.status = "failed"
                 job.error = str(exc)

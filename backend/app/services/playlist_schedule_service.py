@@ -135,7 +135,10 @@ def claim_due_schedules(db: Session, *, now=None, limit: int = 50) -> list[Playl
             PlaylistSchedule.active.is_(True),
             PlaylistSchedule.next_run_at.isnot(None),
             PlaylistSchedule.next_run_at <= now,
-            or_(PlaylistSchedule.running_since.is_(None), PlaylistSchedule.running_since < stale_before),
+            or_(
+                PlaylistSchedule.running_since.is_(None),
+                PlaylistSchedule.running_since < stale_before,
+            ),
         )
         .order_by(PlaylistSchedule.next_run_at.asc())
         .with_for_update(skip_locked=True)
@@ -149,7 +152,14 @@ def claim_due_schedules(db: Session, *, now=None, limit: int = 50) -> list[Playl
     return rows
 
 
-def mark_ran(db: Session, *, schedule: PlaylistSchedule, generated_playlist_id: int | None, error: str | None = None, now=None):
+def mark_ran(
+    db: Session,
+    *,
+    schedule: PlaylistSchedule,
+    generated_playlist_id: int | None,
+    error: str | None = None,
+    now=None,
+):
     now = now or utcnow_naive()
     schedule.last_run_at = now
     schedule.next_run_at = compute_next_run(schedule.cadence, now=now)

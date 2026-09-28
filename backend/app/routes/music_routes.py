@@ -61,7 +61,7 @@ def _sort_col(sort: str, last_listen_subq):
         return nullslast(Song.popularity_score.desc())
     if sort == "alpha":
         return Song.title.asc()
-    return last_listen_subq.c.last_listened_at.desc()   # "recent" default
+    return last_listen_subq.c.last_listened_at.desc()  # "recent" default
 
 
 @router.get("/")
@@ -106,14 +106,21 @@ def get_songs(
             GeneratedPlaylistTrack.song_id.label("song_id"),
             func.count(GeneratedPlaylistTrack.id).label("playlist_inclusion_count"),
         )
-        .join(GeneratedPlaylist, GeneratedPlaylist.id == GeneratedPlaylistTrack.generated_playlist_id)
+        .join(
+            GeneratedPlaylist, GeneratedPlaylist.id == GeneratedPlaylistTrack.generated_playlist_id
+        )
         .filter(GeneratedPlaylist.user_id == user_id)
         .group_by(GeneratedPlaylistTrack.song_id)
         .subquery()
     )
 
     query = (
-        db.query(Song, last_listen_subq.c.last_listened_at, last_listen_subq.c.listening_count, playlist_use_subq.c.playlist_inclusion_count)
+        db.query(
+            Song,
+            last_listen_subq.c.last_listened_at,
+            last_listen_subq.c.listening_count,
+            playlist_use_subq.c.playlist_inclusion_count,
+        )
         .options(joinedload(Song.artist), joinedload(Song.song_tags).joinedload(SongTag.tag))
         .join(last_listen_subq, last_listen_subq.c.song_id == Song.id)
         .outerjoin(playlist_use_subq, playlist_use_subq.c.song_id == Song.id)
@@ -134,8 +141,9 @@ def get_songs(
     if not include_deleted and quick_filter != "hidden":
         query = query.filter(
             ~Song.id.in_(
-                select(UserSongPref.song_id)
-                .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+                select(UserSongPref.song_id).where(
+                    UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
+                )
             )
         )
 
@@ -158,15 +166,19 @@ def get_songs(
     elif quick_filter == "never_used_in_playlist":
         query = query.filter(playlist_use_subq.c.playlist_inclusion_count.is_(None))
     elif quick_filter == "hidden":
-        query = query.filter(Song.id.in_(
-            select(UserSongPref.song_id)
-            .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
-        ))
+        query = query.filter(
+            Song.id.in_(
+                select(UserSongPref.song_id).where(
+                    UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
+                )
+            )
+        )
     elif quick_filter == "active":
         query = query.filter(
             ~Song.id.in_(
-                select(UserSongPref.song_id)
-                .where(UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True))
+                select(UserSongPref.song_id).where(
+                    UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
+                )
             )
         )
     elif quick_filter == "recently_played":
@@ -184,10 +196,14 @@ def get_songs(
 
     # Apply ORDER BY + LIMIT + OFFSET in SQL on all paths where Python filtering is not needed.
     if not _needs_python_filter:
-        query = query.order_by(
-            _sort_col(safe_sort, last_listen_subq),
-            Song.title,
-        ).limit(safe_limit).offset(safe_offset)
+        query = (
+            query.order_by(
+                _sort_col(safe_sort, last_listen_subq),
+                Song.title,
+            )
+            .limit(safe_limit)
+            .offset(safe_offset)
+        )
 
     rows = query.all()
 
@@ -263,8 +279,15 @@ def get_songs(
         elif safe_sort == "alpha":
             filtered.sort(key=lambda r: (r["title"] or "").lower())
         else:
-            filtered.sort(key=lambda r: (r["last_listened_at"] is None, r["last_listened_at"] or "", r["title"]), reverse=True)
-        return filtered[safe_offset:safe_offset + safe_limit]
+            filtered.sort(
+                key=lambda r: (
+                    r["last_listened_at"] is None,
+                    r["last_listened_at"] or "",
+                    r["title"],
+                ),
+                reverse=True,
+            )
+        return filtered[safe_offset : safe_offset + safe_limit]
 
     # SQL already applied ORDER BY + LIMIT + OFFSET
     return filtered
@@ -298,7 +321,9 @@ def get_song_detail(song_id: int, request: Request, db: Session = Depends(get_db
     )
     playlist_inclusion_count = (
         db.query(func.count(GeneratedPlaylistTrack.id))
-        .join(GeneratedPlaylist, GeneratedPlaylist.id == GeneratedPlaylistTrack.generated_playlist_id)
+        .join(
+            GeneratedPlaylist, GeneratedPlaylist.id == GeneratedPlaylistTrack.generated_playlist_id
+        )
         .filter(
             GeneratedPlaylistTrack.song_id == song.id,
             GeneratedPlaylist.user_id == user_id,

@@ -5,7 +5,6 @@ from ..database import Base
 
 
 class Song(Base):
-
     __tablename__ = "songs"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -19,7 +18,6 @@ class Song(Base):
     preview_url = Column(String, nullable=True)
 
     genre = Column(String)
-
 
     listeners = Column(Integer, default=0)
 

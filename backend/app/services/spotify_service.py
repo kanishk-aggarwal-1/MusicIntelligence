@@ -24,12 +24,7 @@ SESSION_COOKIE_NAME = "musicintel_session"
 SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 INCREMENTAL_SYNC_MAX_TRACKS = 10_000
 
-SCOPES = (
-    "user-read-recently-played "
-    "user-top-read "
-    "playlist-modify-private "
-    "playlist-modify-public"
-)
+SCOPES = "user-read-recently-played user-top-read playlist-modify-private playlist-modify-public"
 REQUIRED_PLAYLIST_SCOPES = {"playlist-modify-private", "playlist-modify-public"}
 
 
@@ -42,7 +37,9 @@ def _get_cipher():
     except Exception:
         if settings.APP_ENV == "production":
             raise
-        logger.warning("SESSION_ENCRYPTION_KEY is invalid; using plaintext token storage in development")
+        logger.warning(
+            "SESSION_ENCRYPTION_KEY is invalid; using plaintext token storage in development"
+        )
         return None
 
 
@@ -95,7 +92,9 @@ def _b64url_decode(value: str):
 
 def create_session_cookie_value(user_id: str):
     issued_at = str(int(utcnow_naive().timestamp()))
-    payload = _b64url_encode(json.dumps({"user_id": user_id, "iat": issued_at}, separators=(",", ":")).encode("utf-8"))
+    payload = _b64url_encode(
+        json.dumps({"user_id": user_id, "iat": issued_at}, separators=(",", ":")).encode("utf-8")
+    )
     signature = hmac.new(_session_signing_key(), payload.encode("utf-8"), hashlib.sha256).digest()
     return f"{payload}.{_b64url_encode(signature)}"
 
@@ -104,7 +103,9 @@ def read_session_cookie_value(cookie_value: str | None):
     if not cookie_value or "." not in cookie_value:
         return None
     payload, signature = cookie_value.split(".", 1)
-    expected = _b64url_encode(hmac.new(_session_signing_key(), payload.encode("utf-8"), hashlib.sha256).digest())
+    expected = _b64url_encode(
+        hmac.new(_session_signing_key(), payload.encode("utf-8"), hashlib.sha256).digest()
+    )
     if not hmac.compare_digest(signature, expected):
         return None
     try:
@@ -128,7 +129,9 @@ def get_session_cookie_options():
     }
 
 
-def _rewrap_session_secrets_if_needed(db: Session, session_row: UserSession, token: str | None, refresh_token: str | None):
+def _rewrap_session_secrets_if_needed(
+    db: Session, session_row: UserSession, token: str | None, refresh_token: str | None
+):
     if not _cipher_configured():
         return
 
@@ -138,7 +141,11 @@ def _rewrap_session_secrets_if_needed(db: Session, session_row: UserSession, tok
         session_row.token = _encrypt(token)
         changed = True
 
-    if refresh_token and session_row.refresh_token and not _looks_fernet_token(session_row.refresh_token):
+    if (
+        refresh_token
+        and session_row.refresh_token
+        and not _looks_fernet_token(session_row.refresh_token)
+    ):
         session_row.refresh_token = _encrypt(refresh_token)
         changed = True
 
@@ -202,7 +209,11 @@ def get_stored_session_scope(db: Session, user_id: str):
 
 
 def clear_user_session(db: Session, user_id: str):
-    deleted = db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+    deleted = (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
     db.commit()
     return deleted
 
@@ -291,14 +302,20 @@ def _serialize_session(session_row: UserSession | None, token: str | None):
     return {
         "token": token,
         "user_id": session_row.user_id,
-        "token_expires_at": session_row.token_expires_at.isoformat() if session_row.token_expires_at else None,
+        "token_expires_at": session_row.token_expires_at.isoformat()
+        if session_row.token_expires_at
+        else None,
     }
 
 
 def load_user_session(db: Session, user_id: str | None = None):
     query = db.query(UserSession)
     if user_id:
-        session = query.filter(UserSession.user_id == user_id).order_by(UserSession.updated_at.desc()).first()
+        session = (
+            query.filter(UserSession.user_id == user_id)
+            .order_by(UserSession.updated_at.desc())
+            .first()
+        )
     else:
         session = query.order_by(UserSession.updated_at.desc()).first()
 
@@ -348,7 +365,11 @@ def fetch_recent_tracks(sp, max_tracks: int = 1000, *, since_played_at=None):
     tracks = []
     before = None
     if isinstance(since_played_at, datetime):
-        cutoff = since_played_at.replace(tzinfo=timezone.utc) if since_played_at.tzinfo is None else since_played_at.astimezone(timezone.utc)
+        cutoff = (
+            since_played_at.replace(tzinfo=timezone.utc)
+            if since_played_at.tzinfo is None
+            else since_played_at.astimezone(timezone.utc)
+        )
     else:
         cutoff = parse_utc_datetime(since_played_at) if since_played_at else None
     reached_cutoff = False
@@ -522,7 +543,7 @@ def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playl
             "description": "Created by MusicIntelligence",
         },
     )
-    playlist_owner_id = ((playlist.get("owner") or {}).get("id") or owner_id)
+    playlist_owner_id = (playlist.get("owner") or {}).get("id") or owner_id
     if playlist_owner_id != owner_id:
         logger.warning(
             "spotify.playlist_owner_mismatch expected_owner_id=%s playlist_owner_id=%s playlist_id=%s",
@@ -537,7 +558,7 @@ def create_playlist(sp, user_id: str, track_ids, name: str = "AI Generated Playl
             for track_id in track_ids
         ]
         for start in range(0, len(uris), 100):
-            batch = uris[start:start + 100]
+            batch = uris[start : start + 100]
             try:
                 _spotify_post(
                     sp,

@@ -5,7 +5,6 @@ from ..time_utils import utcnow_naive
 
 
 class UserSession(Base):
-
     __tablename__ = "user_sessions"
 
     id = Column(Integer, primary_key=True, index=True)

@@ -45,11 +45,7 @@ engine = create_engine(
     connect_args=_connect_args,
 )
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
@@ -76,9 +72,7 @@ def run_startup_migrations():
         # no-ops) races with live user requests and can cause deadlocks.
         if dialect == "postgresql" and table_names:
             existing_indexes = {
-                idx["name"]
-                for tbl in table_names
-                for idx in inspector.get_indexes(tbl)
+                idx["name"] for tbl in table_names for idx in inspector.get_indexes(tbl)
             }
             sentinel_indexes = {
                 "uq_artists_spotify_id",
@@ -120,12 +114,16 @@ def run_startup_migrations():
             if "artists" in table_names:
                 cols = _column_type_map(inspector, "artists")
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE artists ADD COLUMN IF NOT EXISTS spotify_id VARCHAR"))
+                    conn.execute(
+                        text("ALTER TABLE artists ADD COLUMN IF NOT EXISTS spotify_id VARCHAR")
+                    )
                     conn.execute(text("ALTER TABLE artists ADD COLUMN IF NOT EXISTS genres TEXT"))
-                    conn.execute(text(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_artists_spotify_id "
-                        "ON artists (spotify_id) WHERE spotify_id IS NOT NULL"
-                    ))
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_artists_spotify_id "
+                            "ON artists (spotify_id) WHERE spotify_id IS NOT NULL"
+                        )
+                    )
                 else:
                     if "spotify_id" not in cols:
                         conn.execute(text("ALTER TABLE artists ADD COLUMN spotify_id VARCHAR"))
@@ -141,7 +139,15 @@ def run_startup_migrations():
                     inspector = inspect(engine)
                     cols = _column_type_map(inspector, "songs")
 
-                if dialect == "postgresql" and "artist_id" in cols and ("character" in cols["artist_id"] or "text" in cols["artist_id"] or "varchar" in cols["artist_id"]):
+                if (
+                    dialect == "postgresql"
+                    and "artist_id" in cols
+                    and (
+                        "character" in cols["artist_id"]
+                        or "text" in cols["artist_id"]
+                        or "varchar" in cols["artist_id"]
+                    )
+                ):
                     conn.execute(
                         text(
                             """
@@ -153,7 +159,9 @@ def run_startup_migrations():
                             """
                         )
                     )
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS artist_id_int INTEGER"))
+                    conn.execute(
+                        text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS artist_id_int INTEGER")
+                    )
                     conn.execute(
                         text(
                             """
@@ -166,23 +174,57 @@ def run_startup_migrations():
                     )
                     conn.execute(text("ALTER TABLE songs DROP COLUMN artist_id"))
                     conn.execute(text("ALTER TABLE songs RENAME COLUMN artist_id_int TO artist_id"))
-                    logger.info("Remapped songs.artist_id from text artist names to integer artist ids")
+                    logger.info(
+                        "Remapped songs.artist_id from text artist names to integer artist ids"
+                    )
 
                 inspector = inspect(engine)
                 cols = _column_type_map(inspector, "songs")
 
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS image_url VARCHAR"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS preview_url VARCHAR"))
+                    conn.execute(
+                        text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS image_url VARCHAR")
+                    )
+                    conn.execute(
+                        text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS preview_url VARCHAR")
+                    )
                     conn.execute(text("ALTER TABLE songs DROP COLUMN IF EXISTS musicbrainz_id"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS listeners INTEGER DEFAULT 0"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS playcount INTEGER DEFAULT 0"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS popularity_score DOUBLE PRECISION"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS enrichment_status VARCHAR DEFAULT 'pending'"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS enrichment_error VARCHAR"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS discovery_source VARCHAR"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS discovery_confidence DOUBLE PRECISION"))
-                    conn.execute(text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS listeners INTEGER DEFAULT 0"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS playcount INTEGER DEFAULT 0"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS popularity_score DOUBLE PRECISION"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS enrichment_status VARCHAR DEFAULT 'pending'"
+                        )
+                    )
+                    conn.execute(
+                        text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS enrichment_error VARCHAR")
+                    )
+                    conn.execute(
+                        text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS discovery_source VARCHAR")
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS discovery_confidence DOUBLE PRECISION"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE"
+                        )
+                    )
                 else:
                     if "image_url" not in cols:
                         conn.execute(text("ALTER TABLE songs ADD COLUMN image_url VARCHAR"))
@@ -193,21 +235,33 @@ def run_startup_migrations():
                         inspector = inspect(engine)
                         cols = _column_type_map(inspector, "songs")
                     if "listeners" not in cols:
-                        conn.execute(text("ALTER TABLE songs ADD COLUMN listeners INTEGER DEFAULT 0"))
+                        conn.execute(
+                            text("ALTER TABLE songs ADD COLUMN listeners INTEGER DEFAULT 0")
+                        )
                     if "playcount" not in cols:
-                        conn.execute(text("ALTER TABLE songs ADD COLUMN playcount INTEGER DEFAULT 0"))
+                        conn.execute(
+                            text("ALTER TABLE songs ADD COLUMN playcount INTEGER DEFAULT 0")
+                        )
                     if "popularity_score" not in cols:
                         conn.execute(text("ALTER TABLE songs ADD COLUMN popularity_score FLOAT"))
                     if "enrichment_status" not in cols:
-                        conn.execute(text("ALTER TABLE songs ADD COLUMN enrichment_status VARCHAR DEFAULT 'pending'"))
+                        conn.execute(
+                            text(
+                                "ALTER TABLE songs ADD COLUMN enrichment_status VARCHAR DEFAULT 'pending'"
+                            )
+                        )
                     if "enrichment_error" not in cols:
                         conn.execute(text("ALTER TABLE songs ADD COLUMN enrichment_error VARCHAR"))
                     if "discovery_source" not in cols:
                         conn.execute(text("ALTER TABLE songs ADD COLUMN discovery_source VARCHAR"))
                     if "discovery_confidence" not in cols:
-                        conn.execute(text("ALTER TABLE songs ADD COLUMN discovery_confidence FLOAT"))
+                        conn.execute(
+                            text("ALTER TABLE songs ADD COLUMN discovery_confidence FLOAT")
+                        )
                     if "is_deleted" not in cols:
-                        conn.execute(text("ALTER TABLE songs ADD COLUMN is_deleted BOOLEAN DEFAULT 0"))
+                        conn.execute(
+                            text("ALTER TABLE songs ADD COLUMN is_deleted BOOLEAN DEFAULT 0")
+                        )
 
                 if dialect == "postgresql":
                     conn.execute(
@@ -312,9 +366,19 @@ def run_startup_migrations():
                 cols = _column_type_map(inspector, "song_tags")
 
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE song_tags ADD COLUMN IF NOT EXISTS weight DOUBLE PRECISION"))
-                    conn.execute(text("ALTER TABLE song_tags ADD COLUMN IF NOT EXISTS popularity DOUBLE PRECISION"))
-                    conn.execute(text("ALTER TABLE song_tags ADD COLUMN IF NOT EXISTS spotify_id VARCHAR"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE song_tags ADD COLUMN IF NOT EXISTS weight DOUBLE PRECISION"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE song_tags ADD COLUMN IF NOT EXISTS popularity DOUBLE PRECISION"
+                        )
+                    )
+                    conn.execute(
+                        text("ALTER TABLE song_tags ADD COLUMN IF NOT EXISTS spotify_id VARCHAR")
+                    )
                 else:
                     if "weight" not in cols:
                         conn.execute(text("ALTER TABLE song_tags ADD COLUMN weight FLOAT"))
@@ -326,25 +390,61 @@ def run_startup_migrations():
             if "listening_history" in table_names:
                 lh_cols = _column_type_map(inspector, "listening_history")
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS ms_played INTEGER"))
-                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS skipped BOOLEAN"))
-                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS platform VARCHAR"))
-                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS country VARCHAR"))
-                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS offline BOOLEAN"))
-                    conn.execute(text("ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS incognito BOOLEAN"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS ms_played INTEGER"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS skipped BOOLEAN"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS platform VARCHAR"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS country VARCHAR"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS offline BOOLEAN"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE listening_history ADD COLUMN IF NOT EXISTS incognito BOOLEAN"
+                        )
+                    )
                 else:
                     if "ms_played" not in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN ms_played INTEGER"))
+                        conn.execute(
+                            text("ALTER TABLE listening_history ADD COLUMN ms_played INTEGER")
+                        )
                     if "skipped" not in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN skipped BOOLEAN"))
+                        conn.execute(
+                            text("ALTER TABLE listening_history ADD COLUMN skipped BOOLEAN")
+                        )
                     if "platform" not in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN platform VARCHAR"))
+                        conn.execute(
+                            text("ALTER TABLE listening_history ADD COLUMN platform VARCHAR")
+                        )
                     if "country" not in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN country VARCHAR"))
+                        conn.execute(
+                            text("ALTER TABLE listening_history ADD COLUMN country VARCHAR")
+                        )
                     if "offline" not in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN offline BOOLEAN"))
+                        conn.execute(
+                            text("ALTER TABLE listening_history ADD COLUMN offline BOOLEAN")
+                        )
                     if "incognito" not in lh_cols:
-                        conn.execute(text("ALTER TABLE listening_history ADD COLUMN incognito BOOLEAN"))
+                        conn.execute(
+                            text("ALTER TABLE listening_history ADD COLUMN incognito BOOLEAN")
+                        )
 
                 if dialect == "postgresql":
                     conn.execute(
@@ -392,30 +492,66 @@ def run_startup_migrations():
             if "user_sessions" in table_names:
                 cols = _column_type_map(inspector, "user_sessions")
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP"))
-                    conn.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS refresh_token VARCHAR"))
-                    conn.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS token_info_json TEXT"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS refresh_token VARCHAR"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS token_info_json TEXT"
+                        )
+                    )
                 else:
                     if "token_expires_at" not in cols:
-                        conn.execute(text("ALTER TABLE user_sessions ADD COLUMN token_expires_at TIMESTAMP"))
+                        conn.execute(
+                            text("ALTER TABLE user_sessions ADD COLUMN token_expires_at TIMESTAMP")
+                        )
                     if "refresh_token" not in cols:
-                        conn.execute(text("ALTER TABLE user_sessions ADD COLUMN refresh_token VARCHAR"))
+                        conn.execute(
+                            text("ALTER TABLE user_sessions ADD COLUMN refresh_token VARCHAR")
+                        )
                     if "token_info_json" not in cols:
-                        conn.execute(text("ALTER TABLE user_sessions ADD COLUMN token_info_json TEXT"))
+                        conn.execute(
+                            text("ALTER TABLE user_sessions ADD COLUMN token_info_json TEXT")
+                        )
 
             if "dedup_merge_logs" in table_names:
                 cols = _column_type_map(inspector, "dedup_merge_logs")
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN IF NOT EXISTS user_id VARCHAR"))
-                    conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN IF NOT EXISTS batch_id VARCHAR"))
-                    conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN IF NOT EXISTS snapshot_json TEXT"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE dedup_merge_logs ADD COLUMN IF NOT EXISTS user_id VARCHAR"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE dedup_merge_logs ADD COLUMN IF NOT EXISTS batch_id VARCHAR"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "ALTER TABLE dedup_merge_logs ADD COLUMN IF NOT EXISTS snapshot_json TEXT"
+                        )
+                    )
                 else:
                     if "user_id" not in cols:
-                        conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN user_id VARCHAR"))
+                        conn.execute(
+                            text("ALTER TABLE dedup_merge_logs ADD COLUMN user_id VARCHAR")
+                        )
                     if "batch_id" not in cols:
-                        conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN batch_id VARCHAR"))
+                        conn.execute(
+                            text("ALTER TABLE dedup_merge_logs ADD COLUMN batch_id VARCHAR")
+                        )
                     if "snapshot_json" not in cols:
-                        conn.execute(text("ALTER TABLE dedup_merge_logs ADD COLUMN snapshot_json TEXT"))
+                        conn.execute(
+                            text("ALTER TABLE dedup_merge_logs ADD COLUMN snapshot_json TEXT")
+                        )
 
             if "jobs" in table_names:
                 cols = _column_type_map(inspector, "jobs")
@@ -428,10 +564,16 @@ def run_startup_migrations():
             if "generated_playlists" in table_names:
                 cols = _column_type_map(inspector, "generated_playlists")
                 if dialect == "postgresql":
-                    conn.execute(text("ALTER TABLE generated_playlists ADD COLUMN IF NOT EXISTS summary_json TEXT"))
+                    conn.execute(
+                        text(
+                            "ALTER TABLE generated_playlists ADD COLUMN IF NOT EXISTS summary_json TEXT"
+                        )
+                    )
                 else:
                     if "summary_json" not in cols:
-                        conn.execute(text("ALTER TABLE generated_playlists ADD COLUMN summary_json TEXT"))
+                        conn.execute(
+                            text("ALTER TABLE generated_playlists ADD COLUMN summary_json TEXT")
+                        )
 
     except SQLAlchemyError:
         # Log but do NOT re-raise.  These are idempotent additive migrations
@@ -451,4 +593,3 @@ def get_db():
         yield db
     finally:
         db.close()
-

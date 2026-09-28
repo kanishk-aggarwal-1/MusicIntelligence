@@ -20,7 +20,6 @@ def _clean_origins(origins):
 
 
 class Settings:
-
     APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 
     SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
@@ -44,7 +43,6 @@ class Settings:
     # This user_id must have seeded listening history in the database.
     DEMO_USER_ID = os.getenv("DEMO_USER_ID", "musicintel_demo")
 
-
     _default_local_origins = [
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -53,7 +51,9 @@ class Settings:
         "http://127.0.0.1:8000",
         "http://localhost:8000",
     ]
-    BACKEND_CORS_ORIGINS = _clean_origins(_parse_csv(os.getenv("BACKEND_CORS_ORIGINS")) or _default_local_origins)
+    BACKEND_CORS_ORIGINS = _clean_origins(
+        _parse_csv(os.getenv("BACKEND_CORS_ORIGINS")) or _default_local_origins
+    )
 
     if APP_ENV == "production":
         if "*" in BACKEND_CORS_ORIGINS:
@@ -65,7 +65,9 @@ class Settings:
         try:
             Fernet(SESSION_ENCRYPTION_KEY.encode("utf-8"))
         except Exception as exc:
-            raise ValueError("SESSION_ENCRYPTION_KEY must be a valid Fernet key in production") from exc
+            raise ValueError(
+                "SESSION_ENCRYPTION_KEY must be a valid Fernet key in production"
+            ) from exc
 
 
 settings = Settings()

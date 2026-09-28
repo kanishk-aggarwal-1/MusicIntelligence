@@ -75,8 +75,7 @@ def _ensure_song_tags(db, song, tag_names):
 
     # Bulk-fetch all existing tags in one query instead of one SELECT per name.
     existing_tags: dict[str, Tag] = {
-        t.name: t
-        for t in db.query(Tag).filter(Tag.name.in_(normalized_names)).all()
+        t.name: t for t in db.query(Tag).filter(Tag.name.in_(normalized_names)).all()
     }
     missing_names = [n for n in normalized_names if n not in existing_tags]
 
@@ -118,10 +117,12 @@ def _ensure_song_tags(db, song, tag_names):
     else:
         existing_tag_ids = {
             row[0]
-            for row in db.query(SongTag.tag_id).filter(
+            for row in db.query(SongTag.tag_id)
+            .filter(
                 SongTag.song_id == song.id,
                 SongTag.tag_id.in_([v["tag_id"] for v in tag_values]),
-            ).all()
+            )
+            .all()
         }
         for v in tag_values:
             if v["tag_id"] not in existing_tag_ids:
@@ -145,7 +146,6 @@ def _apply_enrichment(db, song, data):
     if not song.genre and data.get("genre"):
         song.genre = data.get("genre")
         changed += 1
-
 
     listeners = data.get("listeners") or 0
     playcount = data.get("playcount") or 0
@@ -237,21 +237,23 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
 
     # Pre-load all artists and spotify-keyed songs in two bulk queries
     # instead of one SELECT per track.
-    valid_items = [
-        item for item in tracks
-        if item.get("title") and item.get("artist")
-    ]
+    valid_items = [item for item in tracks if item.get("title") and item.get("artist")]
     unique_artist_names = {item["artist"] for item in valid_items}
-    artist_by_name: dict[str, Artist] = {
-        a.name: a
-        for a in db.query(Artist).filter(Artist.name.in_(unique_artist_names)).all()
-    } if unique_artist_names else {}
+    artist_by_name: dict[str, Artist] = (
+        {a.name: a for a in db.query(Artist).filter(Artist.name.in_(unique_artist_names)).all()}
+        if unique_artist_names
+        else {}
+    )
 
     unique_spotify_ids = {item["spotify_id"] for item in valid_items if item.get("spotify_id")}
-    song_by_spotify: dict[str, Song] = {
-        s.spotify_id: s
-        for s in db.query(Song).filter(Song.spotify_id.in_(unique_spotify_ids)).all()
-    } if unique_spotify_ids else {}
+    song_by_spotify: dict[str, Song] = (
+        {
+            s.spotify_id: s
+            for s in db.query(Song).filter(Song.spotify_id.in_(unique_spotify_ids)).all()
+        }
+        if unique_spotify_ids
+        else {}
+    )
 
     new_songs = 0
     new_history_rows = 0
@@ -278,11 +280,15 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
         song = song_by_spotify.get(spotify_id) if spotify_id else None
 
         if not song:
-            song = db.query(Song).filter(
-                Song.title == title,
-                Song.artist_id == artist.id,
-                Song.is_deleted.is_(False),
-            ).first()
+            song = (
+                db.query(Song)
+                .filter(
+                    Song.title == title,
+                    Song.artist_id == artist.id,
+                    Song.is_deleted.is_(False),
+                )
+                .first()
+            )
 
         if not song:
             song = Song(
@@ -328,10 +334,15 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
             result = db.execute(
                 postgres_insert(ListeningHistory.__table__)
                 .values(
-                    user_id=user_id, song_id=song.id, played_at=played_at,
-                    ms_played=item.get("ms_played"), skipped=item.get("skipped"),
-                    platform=item.get("platform"), country=item.get("country"),
-                    offline=item.get("offline"), incognito=item.get("incognito"),
+                    user_id=user_id,
+                    song_id=song.id,
+                    played_at=played_at,
+                    ms_played=item.get("ms_played"),
+                    skipped=item.get("skipped"),
+                    platform=item.get("platform"),
+                    country=item.get("country"),
+                    offline=item.get("offline"),
+                    incognito=item.get("incognito"),
                 )
                 .on_conflict_do_nothing(
                     index_elements=["user_id", "song_id", "played_at"],
@@ -343,21 +354,36 @@ def sync_listening_history(db, user_id, tracks, enrich_inline=True):
             else:
                 existing_history_rows += 1
         else:
-            existing = db.query(ListeningHistory).filter(
-                ListeningHistory.user_id == user_id,
-                ListeningHistory.song_id == song.id,
-                ListeningHistory.played_at == played_at,
-            ).first() if played_at else db.query(ListeningHistory).filter(
-                ListeningHistory.user_id == user_id,
-                ListeningHistory.song_id == song.id,
-            ).first()
+            existing = (
+                db.query(ListeningHistory)
+                .filter(
+                    ListeningHistory.user_id == user_id,
+                    ListeningHistory.song_id == song.id,
+                    ListeningHistory.played_at == played_at,
+                )
+                .first()
+                if played_at
+                else db.query(ListeningHistory)
+                .filter(
+                    ListeningHistory.user_id == user_id,
+                    ListeningHistory.song_id == song.id,
+                )
+                .first()
+            )
             if not existing:
-                db.add(ListeningHistory(
-                    user_id=user_id, song_id=song.id, played_at=played_at,
-                    ms_played=item.get("ms_played"), skipped=item.get("skipped"),
-                    platform=item.get("platform"), country=item.get("country"),
-                    offline=item.get("offline"), incognito=item.get("incognito"),
-                ))
+                db.add(
+                    ListeningHistory(
+                        user_id=user_id,
+                        song_id=song.id,
+                        played_at=played_at,
+                        ms_played=item.get("ms_played"),
+                        skipped=item.get("skipped"),
+                        platform=item.get("platform"),
+                        country=item.get("country"),
+                        offline=item.get("offline"),
+                        incognito=item.get("incognito"),
+                    )
+                )
                 pending_history_keys.add(history_key)
                 new_history_rows += 1
             else:
@@ -423,10 +449,14 @@ def backfill_missing_metadata(
 
     for song in songs:
         processed += 1
-        if not _needs_enrichment(song, include_partial=include_partial, include_failed=include_failed):
+        if not _needs_enrichment(
+            song, include_partial=include_partial, include_failed=include_failed
+        ):
             if _normalize_enrichment_status(song):
                 updated += 1
-            if progress_callback and (processed == total_candidates or processed % report_every == 0):
+            if progress_callback and (
+                processed == total_candidates or processed % report_every == 0
+            ):
                 progress_callback(
                     current=processed,
                     total=total_candidates,
@@ -464,13 +494,12 @@ def backfill_missing_metadata(
         "updated": updated,
         "processed": processed,
         "total_candidates": total_candidates,
-        "remaining_hint": "Use retry modes to include partial or failed songs when needed."
+        "remaining_hint": "Use retry modes to include partial or failed songs when needed.",
     }
 
 
 def _tag_names(song):
     return [st.tag.name for st in song.song_tags if st.tag and st.tag.name]
-
 
 
 def _context_match(song, context_type: str | None):
@@ -479,7 +508,11 @@ def _context_match(song, context_type: str | None):
     hints = CONTEXT_HINTS.get(context_type.lower().strip()) or set()
     haystack = {(song.genre or "").lower()}
     haystack.update(name.lower() for name in _tag_names(song))
-    matched = sorted(hint for hint in hints if hint and any(hint in value or value in hint for value in haystack if value))
+    matched = sorted(
+        hint
+        for hint in hints
+        if hint and any(hint in value or value in hint for value in haystack if value)
+    )
     score = min(1.0, len(matched) / max(1, min(4, len(hints)))) if hints else 0.0
     if matched:
         return score, f"Context tags matched: {', '.join(matched[:3])}"
@@ -488,7 +521,11 @@ def _context_match(song, context_type: str | None):
 
 def _feedback_signal_map(db, user_id):
     rows = (
-        db.query(RecommendationFeedback.song_id, RecommendationFeedback.action, func.count(RecommendationFeedback.id))
+        db.query(
+            RecommendationFeedback.song_id,
+            RecommendationFeedback.action,
+            func.count(RecommendationFeedback.id),
+        )
         .filter(RecommendationFeedback.user_id == user_id)
         .group_by(RecommendationFeedback.song_id, RecommendationFeedback.action)
         .all()
@@ -503,7 +540,18 @@ def _feedback_signal_map(db, user_id):
     return signal_map
 
 
-def _feedback_adjustment(feedback_counts, *, context_type, familiarity_score, rarity_or_discovery_score, quality_confidence_score, context_match_score, recently_overplayed_penalty, similarity, known_spotify_score):
+def _feedback_adjustment(
+    feedback_counts,
+    *,
+    context_type,
+    familiarity_score,
+    rarity_or_discovery_score,
+    quality_confidence_score,
+    context_match_score,
+    recently_overplayed_penalty,
+    similarity,
+    known_spotify_score,
+):
     if not feedback_counts:
         return 0.0, None
 
@@ -553,7 +601,9 @@ def _feedback_adjustment(feedback_counts, *, context_type, familiarity_score, ra
     if too_obscure_count:
         penalty = min(
             0.45,
-            0.16 * too_obscure_count * (0.7 + rarity_or_discovery_score + (1 - known_spotify_score) * 0.5),
+            0.16
+            * too_obscure_count
+            * (0.7 + rarity_or_discovery_score + (1 - known_spotify_score) * 0.5),
         )
         adjustment -= penalty
         notes.append("dialed back because similar picks felt too obscure")
@@ -573,7 +623,16 @@ def _feedback_adjustment(feedback_counts, *, context_type, familiarity_score, ra
     return adjustment, "; ".join(notes)
 
 
-def _human_reasons(song, *, tag_names, play_count, context_type, components, feedback_reason=None, is_discovery=False):
+def _human_reasons(
+    song,
+    *,
+    tag_names,
+    play_count,
+    context_type,
+    components,
+    feedback_reason=None,
+    is_discovery=False,
+):
     reasons = []
     artist_name = song.artist.name if song.artist else None
     tags = [tag for tag in (tag_names or []) if tag]
@@ -683,7 +742,9 @@ def recommend_songs(
 
         debug_reasons = [f"TF-IDF similarity {r['tfidf_similarity']:.2f}"]
         if r["co_occurrence_boost"] > 0:
-            debug_reasons.append(f"Often heard in the same session (+{r['co_occurrence_boost']:.2f})")
+            debug_reasons.append(
+                f"Often heard in the same session (+{r['co_occurrence_boost']:.2f})"
+            )
         debug_reasons.append(f"Played {play_count} time{'s' if play_count != 1 else ''}")
         if feedback_reason:
             debug_reasons.append(feedback_reason.capitalize())
@@ -706,15 +767,17 @@ def recommend_songs(
             is_discovery=r.get("is_discovery", False),
         )
 
-        items.append({
-            "song": song,
-            "score": final_score,
-            "reasons": reasons,
-            "debug_reasons": debug_reasons,
-            "components": components,
-            "algorithm_version": ML_ALGORITHM_VERSION,
-            "tag_names": r["tags"],
-        })
+        items.append(
+            {
+                "song": song,
+                "score": final_score,
+                "reasons": reasons,
+                "debug_reasons": debug_reasons,
+                "components": components,
+                "algorithm_version": ML_ALGORITHM_VERSION,
+                "tag_names": r["tags"],
+            }
+        )
 
     items.sort(key=lambda x: x["score"], reverse=True)
 
@@ -725,7 +788,9 @@ def build_discovery_feed(db, user_id, limit=20):
     # discovery_ratio=0.0 is required here: allow_discovery=False only suppresses
     # the Last.fm fan-out; without explicitly zeroing discovery_ratio, knn_recommend
     # would still allocate 40% of results from previously-stored discovery songs.
-    details = recommend_songs(db, user_id, return_details=True, allow_discovery=False, discovery_ratio=0.0, limit=limit)
+    details = recommend_songs(
+        db, user_id, return_details=True, allow_discovery=False, discovery_ratio=0.0, limit=limit
+    )
 
     feed = []
     for item in details[:limit]:
@@ -748,7 +813,13 @@ def build_discovery_feed(db, user_id, limit=20):
     return feed
 
 
-def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: int | None = None, max_similar_per_seed: int | None = None):
+def discover_new_songs(
+    db,
+    user_id,
+    include_summary: bool = False,
+    seed_limit: int | None = None,
+    max_similar_per_seed: int | None = None,
+):
 
     logger.info("discover_new_songs.start user_id=%s include_summary=%s", user_id, include_summary)
     artist_rows = (
@@ -805,15 +876,21 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
 
     for index, artist in enumerate(artists, start=1):
         if index == 1 or index % 10 == 0 or index == len(artists):
-            logger.info("discover_new_songs.artist index=%s total=%s name=%s", index, len(artists), artist)
+            logger.info(
+                "discover_new_songs.artist index=%s total=%s name=%s", index, len(artists), artist
+            )
 
         try:
             if include_summary:
-                discovery_result = discover_songs_from_artist(artist, include_stats=True, max_similar_artists=max_similar_per_seed)
+                discovery_result = discover_songs_from_artist(
+                    artist, include_stats=True, max_similar_artists=max_similar_per_seed
+                )
                 discovered = discovery_result.get("songs", [])
                 summary["source_artists"] += int(discovery_result.get("source_artists") or 0)
             else:
-                discovered = discover_songs_from_artist(artist, max_similar_artists=max_similar_per_seed)
+                discovered = discover_songs_from_artist(
+                    artist, max_similar_artists=max_similar_per_seed
+                )
         except Exception as exc:
             logger.warning("discover_new_songs.artist_failed name=%s error=%s", artist, exc)
             discovered = []
@@ -827,7 +904,9 @@ def discover_new_songs(db, user_id, include_summary: bool = False, seed_limit: i
     return new_songs
 
 
-def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | None = None, resolve_spotify: bool = True):
+def store_discovered_songs(
+    db, songs, user_id: str | None = None, limit: int | None = None, resolve_spotify: bool = True
+):
     """Store Last.fm-discovered songs in the songs table and enrich with Last.fm metadata.
 
     ``resolve_spotify=False`` skips the Spotify track-ID lookup, making inline
@@ -863,8 +942,7 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
     # replaces up to 60 round-trips with 1.
     all_artist_names = list({s["artist"] for s in songs if s.get("artist")})
     artist_cache: dict[str, Artist] = {
-        a.name: a
-        for a in db.query(Artist).filter(Artist.name.in_(all_artist_names)).all()
+        a.name: a for a in db.query(Artist).filter(Artist.name.in_(all_artist_names)).all()
     }
 
     for idx, s in enumerate(songs, start=1):
@@ -886,11 +964,15 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
         # dedup-by-spotify-id check is skipped (spotify_id is always None), so
         # this is the only guard against repeated preview calls accumulating
         # near-identical rows.
-        exists = db.query(Song).filter(
-            func.lower(Song.title) == title.lower().strip(),
-            Song.artist_id == artist.id,
-            Song.is_deleted.is_(False),
-        ).first()
+        exists = (
+            db.query(Song)
+            .filter(
+                func.lower(Song.title) == title.lower().strip(),
+                Song.artist_id == artist.id,
+                Song.is_deleted.is_(False),
+            )
+            .first()
+        )
 
         # ── Spotify ID resolution (optional, deferred when resolve_spotify=False) ──
         spotify_id = None
@@ -900,7 +982,11 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
             except Exception as exc:
                 status = getattr(exc, "http_status", None)
                 if status == 401:
-                    logger.info("store_discovered_songs.token_expired title=%s artist=%s", title, artist_name)
+                    logger.info(
+                        "store_discovered_songs.token_expired title=%s artist=%s",
+                        title,
+                        artist_name,
+                    )
                     refreshed_session = load_user_session(db, user_id=user_id)
                     refreshed_token = refreshed_session.get("token")
                     if not refreshed_token:
@@ -908,7 +994,9 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
                     sp = spotify_service.get_spotify_client(refreshed_token)
                     spotify_id = resolve_track_id(sp, title, artist_name)
                 elif status == 429:
-                    logger.warning("store_discovered_songs.rate_limited title=%s artist=%s", title, artist_name)
+                    logger.warning(
+                        "store_discovered_songs.rate_limited title=%s artist=%s", title, artist_name
+                    )
                     rate_limited = True
                     spotify_id = None
                     break
@@ -950,13 +1038,19 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
             sp.rollback()
             # Race condition: another concurrent request inserted the same song.
             # Re-fetch and continue as if it already existed.
-            song = db.query(Song).filter(
-                Song.title == title,
-                Song.artist_id == artist.id,
-                Song.is_deleted.is_(False),
-            ).first()
+            song = (
+                db.query(Song)
+                .filter(
+                    Song.title == title,
+                    Song.artist_id == artist.id,
+                    Song.is_deleted.is_(False),
+                )
+                .first()
+            )
             if not song:
-                logger.warning("store_discovered_songs.recheck_miss title=%s artist_id=%s", title, artist.id)
+                logger.warning(
+                    "store_discovered_songs.recheck_miss title=%s artist_id=%s", title, artist.id
+                )
                 continue
 
         data = enrich_song(song)
@@ -964,13 +1058,3 @@ def store_discovered_songs(db, songs, user_id: str | None = None, limit: int | N
 
     db.commit()
     return {"store_attempted": len(songs), "store_rate_limited": rate_limited}
-
-
-
-
-
-
-
-
-
-

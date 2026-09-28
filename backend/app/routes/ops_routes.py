@@ -12,7 +12,12 @@ from ..models.listening_history import ListeningHistory
 from ..services.metrics_service import get_metrics_snapshot
 from ..services.artist_enrichment_service import enrich_artist_genres
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
-from ..services.spotify_service import INCREMENTAL_SYNC_MAX_TRACKS, fetch_recent_tracks, get_spotify_client, load_user_session
+from ..services.spotify_service import (
+    INCREMENTAL_SYNC_MAX_TRACKS,
+    fetch_recent_tracks,
+    get_spotify_client,
+    load_user_session,
+)
 from ..time_utils import utcnow
 
 router = APIRouter(prefix="/ops", tags=["Operations"])
@@ -90,8 +95,14 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
                 continue
 
             sp = get_spotify_client(token)
-            checkpoint = db.query(func.max(ListeningHistory.played_at)).filter(ListeningHistory.user_id == user_id).scalar()
-            tracks = fetch_recent_tracks(sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint)
+            checkpoint = (
+                db.query(func.max(ListeningHistory.played_at))
+                .filter(ListeningHistory.user_id == user_id)
+                .scalar()
+            )
+            tracks = fetch_recent_tracks(
+                sp, max_tracks=INCREMENTAL_SYNC_MAX_TRACKS, since_played_at=checkpoint
+            )
             sync_result = sync_listening_history(db, user_id, tracks)
 
             new_songs = sync_result.get("new_songs", 0)
@@ -113,7 +124,10 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
 
     logger.info(
         "sync_all.done total=%s synced=%s skipped=%s failed=%s",
-        total, synced, skipped, failed,
+        total,
+        synced,
+        skipped,
+        failed,
     )
     return {
         "message": "Sync complete",
@@ -134,5 +148,10 @@ def run_due_schedules(request: Request, limit: int = 50, db: Session = Depends(g
     from .playlist_routes import process_all_due_schedules
 
     result = process_all_due_schedules(db, limit=max(1, min(limit, 200)))
-    logger.info("schedules.cron_done claimed=%s succeeded=%s failed=%s", result["claimed"], result["succeeded"], result["failed"])
+    logger.info(
+        "schedules.cron_done claimed=%s succeeded=%s failed=%s",
+        result["claimed"],
+        result["succeeded"],
+        result["failed"],
+    )
     return {"message": "Due schedules processed", **result}

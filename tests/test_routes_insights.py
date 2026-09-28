@@ -1,4 +1,5 @@
 """Tests for /insights routes (insights_routes.py)."""
+
 from datetime import datetime, timedelta
 
 from backend.app.models.artist import Artist
@@ -27,8 +28,15 @@ def _artist(db, name: str) -> Artist:
     return a
 
 
-def _song(db, *, artist_name: str, title: str, genre: str | None = None,
-          spotify_id: str | None = None, enrichment_status: str = "complete") -> Song:
+def _song(
+    db,
+    *,
+    artist_name: str,
+    title: str,
+    genre: str | None = None,
+    spotify_id: str | None = None,
+    enrichment_status: str = "complete",
+) -> Song:
     artist = _artist(db, artist_name)
     s = Song(
         title=title,
@@ -57,6 +65,7 @@ def _history(db, user_id: str, song: Song, played_at: datetime):
 
 
 # ── /insights/taste-timeline ─────────────────────────────────────────────────
+
 
 def test_taste_timeline_returns_monthly_data(client_factory, db_session):
     db_session.add(_session("u1"))
@@ -94,17 +103,25 @@ def test_taste_timeline_empty_for_new_user(client_factory, db_session):
 
 # ── /insights/discovery-feed ─────────────────────────────────────────────────
 
+
 def test_discovery_feed_returns_items(monkeypatch, client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
 
     # insights_routes imports build_discovery_feed directly; patch its local binding
     monkeypatch.setattr(
-        insights_routes, "build_discovery_feed",
+        insights_routes,
+        "build_discovery_feed",
         lambda db, user_id, limit=20: [
-            {"song_id": 1, "title": "Discovered Track", "artist": "New Artist",
-             "score": 0.95, "image_url": None, "preview_url": None}
-        ]
+            {
+                "song_id": 1,
+                "title": "Discovered Track",
+                "artist": "New Artist",
+                "score": 0.95,
+                "image_url": None,
+                "preview_url": None,
+            }
+        ],
     )
 
     client = client_factory(insights_routes.router)
@@ -120,7 +137,12 @@ def test_compute_new_for_you_discovers_uncached_tracks(monkeypatch, db_session):
     db_session.add(_session("u1"))
     top_songs = []
     for i in range(5):
-        song = _song(db_session, artist_name=f"Seed Artist {i}", title=f"Seed Track {i}", spotify_id=f"seed-{i}")
+        song = _song(
+            db_session,
+            artist_name=f"Seed Artist {i}",
+            title=f"Seed Track {i}",
+            spotify_id=f"seed-{i}",
+        )
         top_songs.append(song)
         _history(db_session, "u1", song, datetime(2026, 5, i + 1, 10, 0))
     db_session.commit()
@@ -129,13 +151,23 @@ def test_compute_new_for_you_discovers_uncached_tracks(monkeypatch, db_session):
     monkeypatch.setattr(
         insights_routes,
         "store_cached_response",
-        lambda provider, key, payload=None, **kwargs: cached_payloads.append((provider, key, payload)),
+        lambda provider, key, payload=None, **kwargs: cached_payloads.append(
+            (provider, key, payload)
+        ),
     )
 
     def _fake_discover(artist_name, **kwargs):
         return [
-            {"title": f"New from {artist_name}", "artist": "New Artist", "spotify_id": f"new-{artist_name}"},
-            {"title": top_songs[0].title, "artist": "Seed Artist 0", "spotify_id": top_songs[0].spotify_id},
+            {
+                "title": f"New from {artist_name}",
+                "artist": "New Artist",
+                "spotify_id": f"new-{artist_name}",
+            },
+            {
+                "title": top_songs[0].title,
+                "artist": "Seed Artist 0",
+                "spotify_id": top_songs[0].spotify_id,
+            },
         ]
 
     monkeypatch.setattr(insights_routes, "discover_songs_from_artist", _fake_discover)
@@ -156,14 +188,20 @@ def test_new_for_you_endpoint_schedules_job_on_cache_miss(monkeypatch, client_fa
     instead of blocking on Last.fm."""
     db_session.add(_session("u1"))
     for i in range(5):
-        song = _song(db_session, artist_name=f"Seed Artist {i}", title=f"Seed Track {i}", spotify_id=f"seed-{i}")
+        song = _song(
+            db_session,
+            artist_name=f"Seed Artist {i}",
+            title=f"Seed Track {i}",
+            spotify_id=f"seed-{i}",
+        )
         _history(db_session, "u1", song, datetime(2026, 5, i + 1, 10, 0))
     db_session.commit()
 
     monkeypatch.setattr(insights_routes, "get_cached_response", lambda provider, key: None)
     # Discovery must NOT run synchronously on the request path.
     monkeypatch.setattr(
-        insights_routes, "discover_songs_from_artist",
+        insights_routes,
+        "discover_songs_from_artist",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("Last.fm called on request path")),
     )
 
@@ -182,8 +220,11 @@ def test_new_for_you_returns_cached_result_ready(monkeypatch, client_factory, db
     db_session.commit()
 
     monkeypatch.setattr(
-        insights_routes, "get_cached_response",
-        lambda provider, key: {"payload": {"items": [{"title": "Cached"}], "distinct_artist_count": 9}},
+        insights_routes,
+        "get_cached_response",
+        lambda provider, key: {
+            "payload": {"items": [{"title": "Cached"}], "distinct_artist_count": 9}
+        },
     )
 
     client = client_factory(insights_routes.router)
@@ -237,6 +278,7 @@ def test_taste_profile_summarizes_tags_and_genres(client_factory, db_session):
 
 # ── /insights/feedback & feedback-summary ────────────────────────────────────
 
+
 def test_feedback_invalid_action_rejected(client_factory, db_session):
     db_session.add(_session("u1"))
     s = _song(db_session, artist_name="Fb Artist", title="Fb Track")
@@ -254,11 +296,13 @@ def test_feedback_invalid_action_rejected(client_factory, db_session):
 def test_feedback_summary_aggregates_counts(client_factory, db_session):
     db_session.add(_session("u1"))
     s = _song(db_session, artist_name="Summ Artist", title="Summ Track")
-    db_session.add_all([
-        RecommendationFeedback(user_id="u1", song_id=s.id, action="like"),
-        RecommendationFeedback(user_id="u1", song_id=s.id, action="like"),
-        RecommendationFeedback(user_id="u1", song_id=s.id, action="dislike"),
-    ])
+    db_session.add_all(
+        [
+            RecommendationFeedback(user_id="u1", song_id=s.id, action="like"),
+            RecommendationFeedback(user_id="u1", song_id=s.id, action="like"),
+            RecommendationFeedback(user_id="u1", song_id=s.id, action="dislike"),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(insights_routes.router)
@@ -296,8 +340,14 @@ def test_feedback_history_can_remove_one_or_reset_all(client_factory, db_session
     assert history.json()["total"] == 2
     assert history.json()["items"][0]["song"]["artist"] == "History Artist"
 
-    assert client.delete(f"/insights/feedback/{other_id}", headers={"X-User-Id": "u1"}).status_code == 404
-    assert client.delete(f"/insights/feedback/{own_one_id}", headers={"X-User-Id": "u1"}).status_code == 200
+    assert (
+        client.delete(f"/insights/feedback/{other_id}", headers={"X-User-Id": "u1"}).status_code
+        == 404
+    )
+    assert (
+        client.delete(f"/insights/feedback/{own_one_id}", headers={"X-User-Id": "u1"}).status_code
+        == 200
+    )
     reset = client.delete("/insights/feedback", headers={"X-User-Id": "u1"})
     assert reset.status_code == 200
     assert reset.json()["deleted"] == 1
@@ -305,6 +355,7 @@ def test_feedback_history_can_remove_one_or_reset_all(client_factory, db_session
 
 
 # ── /insights/goals & goals-status ───────────────────────────────────────────
+
 
 def test_create_goal_and_list_status(client_factory, db_session):
     db_session.add(_session("u1"))
@@ -330,13 +381,15 @@ def test_create_goal_and_list_status(client_factory, db_session):
 
 def test_goals_status_listening_days_type(client_factory, db_session):
     db_session.add(_session("u1"))
-    db_session.add(ListeningGoal(
-        user_id="u1",
-        goal_type="listening_days_per_week",
-        target_value=5,
-        period="weekly",
-        active=True,
-    ))
+    db_session.add(
+        ListeningGoal(
+            user_id="u1",
+            goal_type="listening_days_per_week",
+            target_value=5,
+            period="weekly",
+            active=True,
+        )
+    )
     db_session.commit()
 
     client = client_factory(insights_routes.router)
@@ -348,13 +401,15 @@ def test_goals_status_listening_days_type(client_factory, db_session):
 
 def test_goals_status_repeat_rate_type(client_factory, db_session):
     db_session.add(_session("u1"))
-    db_session.add(ListeningGoal(
-        user_id="u1",
-        goal_type="repeat_rate_max",
-        target_value=30,
-        period="weekly",
-        active=True,
-    ))
+    db_session.add(
+        ListeningGoal(
+            user_id="u1",
+            goal_type="repeat_rate_max",
+            target_value=30,
+            period="weekly",
+            active=True,
+        )
+    )
     db_session.commit()
 
     client = client_factory(insights_routes.router)
@@ -370,12 +425,20 @@ def test_goal_counts_only_first_time_songs_in_period(client_factory, db_session)
     db_session.add(_session("u1"))
     old_song = _song(db_session, artist_name="Goal Artist", title="Old Song")
     new_song = _song(db_session, artist_name="Goal Artist", title="New Song")
-    db_session.add_all([
-        ListeningHistory(user_id="u1", song_id=old_song.id, played_at=now - timedelta(days=30)),
-        ListeningHistory(user_id="u1", song_id=old_song.id, played_at=now),
-        ListeningHistory(user_id="u1", song_id=new_song.id, played_at=now),
-        ListeningGoal(user_id="u1", goal_type="new_songs_per_week", target_value=1, period="weekly", active=True),
-    ])
+    db_session.add_all(
+        [
+            ListeningHistory(user_id="u1", song_id=old_song.id, played_at=now - timedelta(days=30)),
+            ListeningHistory(user_id="u1", song_id=old_song.id, played_at=now),
+            ListeningHistory(user_id="u1", song_id=new_song.id, played_at=now),
+            ListeningGoal(
+                user_id="u1",
+                goal_type="new_songs_per_week",
+                target_value=1,
+                period="weekly",
+                active=True,
+            ),
+        ]
+    )
     db_session.commit()
 
     client = client_factory(insights_routes.router)
@@ -415,12 +478,25 @@ def test_goal_validation_and_pause_resume(client_factory, db_session):
 
 # ── /insights/data-quality ───────────────────────────────────────────────────
 
+
 def test_data_quality_returns_coverage_metrics(client_factory, db_session):
     db_session.add(_session("u1"))
-    s1 = _song(db_session, artist_name="DQ Artist", title="DQ Song 1",
-               genre="electronic", spotify_id="dq1", enrichment_status="complete")
-    s2 = _song(db_session, artist_name="DQ Artist", title="DQ Song 2",
-               genre=None, spotify_id=None, enrichment_status="failed")
+    s1 = _song(
+        db_session,
+        artist_name="DQ Artist",
+        title="DQ Song 1",
+        genre="electronic",
+        spotify_id="dq1",
+        enrichment_status="complete",
+    )
+    s2 = _song(
+        db_session,
+        artist_name="DQ Artist",
+        title="DQ Song 2",
+        genre=None,
+        spotify_id=None,
+        enrichment_status="failed",
+    )
     _tag_song(db_session, s1, "techno")
     _history(db_session, "u1", s1, datetime(2026, 5, 1, 12, 0))
     _history(db_session, "u1", s2, datetime(2026, 5, 2, 12, 0))
@@ -446,6 +522,7 @@ def test_data_quality_requires_auth(client_factory, db_session):
 
 # ── /insights/cache/clear ────────────────────────────────────────────────────
 
+
 def test_clear_cache_calls_provider_clear(monkeypatch, client_factory, db_session):
     db_session.add(_session("u1"))
     db_session.commit()
@@ -466,6 +543,7 @@ def test_clear_cache_calls_provider_clear(monkeypatch, client_factory, db_sessio
 
 
 # ── /insights/dedup-apply dry_run ────────────────────────────────────────────
+
 
 def test_dedup_apply_dry_run_does_not_commit(client_factory, db_session):
     db_session.add_all([_session("u1"), _session("u2")])

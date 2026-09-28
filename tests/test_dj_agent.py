@@ -1,4 +1,5 @@
 """Tests for the AI DJ agent — POST /playlists/dj and dj_agent_service."""
+
 import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,7 @@ from backend.app.routes import playlist_routes
 # ---------------------------------------------------------------------------
 # Test data helpers (mirrors test_routes_playlists.py conventions)
 # ---------------------------------------------------------------------------
+
 
 def _session(user_id: str):
     return UserSession(user_id=user_id, token="tok", token_info_json="{}")
@@ -58,11 +60,13 @@ def _tag_song(db, song: Song, tag_name: str) -> None:
 def _history(db, user_id: str, song: Song, plays: int = 5) -> None:
     base = datetime(2024, 1, 1)
     for i in range(plays):
-        db.add(ListeningHistory(
-            user_id=user_id,
-            song_id=song.id,
-            played_at=base + timedelta(hours=i),
-        ))
+        db.add(
+            ListeningHistory(
+                user_id=user_id,
+                song_id=song.id,
+                played_at=base + timedelta(hours=i),
+            )
+        )
     db.flush()
 
 
@@ -81,6 +85,7 @@ def _setup_library(db, user_id: str):
 # ---------------------------------------------------------------------------
 # Mock factories for Anthropic tool-use loop
 # ---------------------------------------------------------------------------
+
 
 def _make_tool_use_response(tool_name: str, tool_id: str, tool_input: dict) -> MagicMock:
     block = MagicMock()
@@ -108,6 +113,7 @@ def _make_end_turn_response(note: str) -> MagicMock:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 def test_dj_agent_happy_path(db_session, client_factory, monkeypatch):
     """Full agent loop: profile → build_playlist → end_turn with DJ note."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -118,7 +124,8 @@ def test_dj_agent_happy_path(db_session, client_factory, monkeypatch):
     turns = [
         _make_tool_use_response("get_listening_profile", "tu1", {}),
         _make_tool_use_response(
-            "build_playlist", "tu2",
+            "build_playlist",
+            "tu2",
             {"context_type": "chill", "familiarity": 0.6, "diversity": 0.5},
         ),
         _make_end_turn_response(

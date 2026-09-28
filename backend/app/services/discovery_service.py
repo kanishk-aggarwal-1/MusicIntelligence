@@ -11,13 +11,12 @@ def discover_songs_from_artist(artist, include_stats=False, max_similar_artists=
 
     similar_artists = get_similar_artists(artist)
     if max_similar_artists is not None:
-        similar_artists = similar_artists[:max(0, int(max_similar_artists))]
+        similar_artists = similar_artists[: max(0, int(max_similar_artists))]
 
     songs = []
     source_artists = 0
 
     for a in similar_artists:
-
         name = (a.get("name") or "").strip()
         if not name:
             continue
@@ -26,12 +25,14 @@ def discover_songs_from_artist(artist, include_stats=False, max_similar_artists=
             tracks = get_artist_top_tracks(name, limit=5)
             if tracks:
                 for track in tracks:
-                    songs.append({
-                        "title": track["title"],
-                        "artist": track["artist"],
-                        "discovery_source": "lastfm_top_tracks",
-                        "discovery_confidence": 0.7,
-                    })
+                    songs.append(
+                        {
+                            "title": track["title"],
+                            "artist": track["artist"],
+                            "discovery_source": "lastfm_top_tracks",
+                            "discovery_confidence": 0.7,
+                        }
+                    )
                 source_artists += 1
         except Exception:
             pass

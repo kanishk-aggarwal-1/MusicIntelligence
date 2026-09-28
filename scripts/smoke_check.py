@@ -4,6 +4,7 @@ This intentionally avoids authenticated endpoints. Use it after Render deploys
 to confirm the public backend is reachable before testing Spotify login in the
 browser.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,7 +23,11 @@ def _get_json(base_url: str, path: str):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Smoke-check the MusicIntelligence backend")
-    parser.add_argument("--api", required=True, help="Backend base URL, e.g. https://musicintelligence-api.onrender.com")
+    parser.add_argument(
+        "--api",
+        required=True,
+        help="Backend base URL, e.g. https://musicintelligence-api.onrender.com",
+    )
     args = parser.parse_args()
 
     checks = [

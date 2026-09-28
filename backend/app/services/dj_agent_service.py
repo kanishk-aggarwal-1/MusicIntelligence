@@ -2,6 +2,7 @@
 AI DJ agent: reads the user's taste profile via DB tools, then calls
 the existing playlist pipeline to build a grounded, personalised playlist.
 """
+
 import json
 import logging
 from datetime import timedelta
@@ -30,7 +31,7 @@ SYSTEM_PROMPT = (
     "You are an AI DJ for a personal music app. Build a playlist that fits the user's request.\n\n"
     "Steps:\n"
     "1. Call get_listening_profile to understand their taste.\n"
-    "2. If the request mentions recency (\"lately\", \"this week\", \"recently\"), also call get_recent_listening.\n"
+    '2. If the request mentions recency ("lately", "this week", "recently"), also call get_recent_listening.\n'
     "3. Choose context_type, familiarity (0=all new discoveries, 1=only familiar songs), "
     "diversity (0=fewer artists, 1=maximum variety).\n"
     "4. Call build_playlist with your chosen parameters. Inspect the tracks.\n"
@@ -98,6 +99,7 @@ TOOL_SCHEMAS = [
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
+
 
 def _tool_get_listening_profile(db: Session, user_id: str) -> dict:
     listened_subq = (
@@ -196,7 +198,9 @@ def _tool_get_recent_listening(db: Session, user_id: str, days: int) -> dict:
     }
 
 
-def _dispatch(db: Session, user_id: str, max_tracks: int, build_fn: Callable, tool_name: str, tool_input: dict) -> dict:
+def _dispatch(
+    db: Session, user_id: str, max_tracks: int, build_fn: Callable, tool_name: str, tool_input: dict
+) -> dict:
     logger.info("dj_agent.tool_call name=%s user_id=%s", tool_name, user_id)
 
     if tool_name == "get_listening_profile":
@@ -208,10 +212,11 @@ def _dispatch(db: Session, user_id: str, max_tracks: int, build_fn: Callable, to
 
     if tool_name == "build_playlist":
         context_type = tool_input.get("context_type") or None
-        familiarity  = float(max(0.0, min(1.0, tool_input.get("familiarity", 0.5))))
-        diversity    = float(max(0.0, min(1.0, tool_input.get("diversity",   0.5))))
+        familiarity = float(max(0.0, min(1.0, tool_input.get("familiarity", 0.5))))
+        diversity = float(max(0.0, min(1.0, tool_input.get("diversity", 0.5))))
         preview = build_fn(
-            db, user_id,
+            db,
+            user_id,
             context_type=context_type,
             familiarity=familiarity,
             diversity=diversity,
@@ -235,8 +240,8 @@ def _dispatch(db: Session, user_id: str, max_tracks: int, build_fn: Callable, to
             },
             "_params": {
                 "context_type": context_type,
-                "familiarity":  familiarity,
-                "diversity":    diversity,
+                "familiarity": familiarity,
+                "diversity": diversity,
             },
         }
 
@@ -247,6 +252,7 @@ def _dispatch(db: Session, user_id: str, max_tracks: int, build_fn: Callable, to
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
 
 def run_dj_agent(
     db: Session,
@@ -292,11 +298,13 @@ def run_dj_agent(
             result = _dispatch(db, user_id, max_tracks, build_fn, block.name, block.input)
             if block.name == "build_playlist" and "_preview" in result:
                 _built = result
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": json.dumps(result.get("_summary", result)),
-            })
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result.get("_summary", result)),
+                }
+            )
         messages.append({"role": "user", "content": tool_results})
 
     # Extract DJ note from the final text block
@@ -312,7 +320,8 @@ def run_dj_agent(
     if _built is None:
         logger.info("dj_agent.fallback_build user_id=%s", user_id)
         preview = build_fn(
-            db, user_id,
+            db,
+            user_id,
             context_type=None,
             familiarity=0.5,
             diversity=0.5,
@@ -321,6 +330,6 @@ def run_dj_agent(
         _built = {"_preview": preview, "_params": {}}
 
     result = dict(_built["_preview"])
-    result["dj_note"]   = dj_note
+    result["dj_note"] = dj_note
     result["dj_params"] = _built.get("_params", {})
     return result

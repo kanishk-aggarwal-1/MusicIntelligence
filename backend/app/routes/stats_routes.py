@@ -6,6 +6,7 @@ GET /metrics — Prometheus exposition format (powers Grafana / scraping).
 Both endpoints expose only non-sensitive cumulative aggregates — counts and
 rates, never tokens or PII. Safe to expose publicly on the deployed app.
 """
+
 import threading
 import time
 
@@ -13,7 +14,17 @@ from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
 from ..services import live_metrics_service
-from ..services.live_metrics_service import CACHE_HITS, CACHE_MISSES, LASTFM_CALLS, PLAYLIST_TRACKS_REQUESTED, PLAYLIST_TRACKS_RESOLVED, PLAYLISTS_GENERATED, SPOTIFY_CALLS, TRACKS_ENRICHED, TRACKS_SYNCED
+from ..services.live_metrics_service import (
+    CACHE_HITS,
+    CACHE_MISSES,
+    LASTFM_CALLS,
+    PLAYLIST_TRACKS_REQUESTED,
+    PLAYLIST_TRACKS_RESOLVED,
+    PLAYLISTS_GENERATED,
+    SPOTIFY_CALLS,
+    TRACKS_ENRICHED,
+    TRACKS_SYNCED,
+)
 
 router = APIRouter(tags=["Stats"])
 
@@ -39,16 +50,17 @@ def _cached_counters() -> dict:
         _metrics_cache[key] = (now, counters)
         return counters
 
+
 _PROM_HELP = {
-    CACHE_HITS:                "musicintel_cache_hits_total",
-    CACHE_MISSES:              "musicintel_cache_misses_total",
-    SPOTIFY_CALLS:             "musicintel_spotify_calls_total",
-    LASTFM_CALLS:              "musicintel_lastfm_calls_total",
-    TRACKS_SYNCED:             "musicintel_tracks_synced_total",
-    TRACKS_ENRICHED:           "musicintel_tracks_enriched_total",
-    PLAYLISTS_GENERATED:       "musicintel_playlists_generated_total",
+    CACHE_HITS: "musicintel_cache_hits_total",
+    CACHE_MISSES: "musicintel_cache_misses_total",
+    SPOTIFY_CALLS: "musicintel_spotify_calls_total",
+    LASTFM_CALLS: "musicintel_lastfm_calls_total",
+    TRACKS_SYNCED: "musicintel_tracks_synced_total",
+    TRACKS_ENRICHED: "musicintel_tracks_enriched_total",
+    PLAYLISTS_GENERATED: "musicintel_playlists_generated_total",
     PLAYLIST_TRACKS_REQUESTED: "musicintel_playlist_tracks_requested_total",
-    PLAYLIST_TRACKS_RESOLVED:  "musicintel_playlist_tracks_resolved_total",
+    PLAYLIST_TRACKS_RESOLVED: "musicintel_playlist_tracks_resolved_total",
 }
 
 

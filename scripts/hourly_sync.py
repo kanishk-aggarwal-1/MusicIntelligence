@@ -8,6 +8,7 @@ Required env vars (set in render.yaml for the cron service):
   API_URL     — base URL of the backend, e.g. https://musicintelligence-api.onrender.com
   CRON_SECRET — shared secret matching CRON_SECRET on the web service
 """
+
 import os
 import sys
 

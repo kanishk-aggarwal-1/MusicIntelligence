@@ -30,15 +30,22 @@ def test_missing_playlist_scopes_detects_under_scoped_token():
     token_info = {"scope": "user-read-recently-played user-top-read playlist-modify-private"}
 
     assert missing_playlist_scopes(token_info) == ["playlist-modify-public"]
-    assert missing_playlist_scopes({"scope": "user-read-recently-played playlist-modify-private playlist-modify-public"}) == []
+    assert (
+        missing_playlist_scopes(
+            {"scope": "user-read-recently-played playlist-modify-private playlist-modify-public"}
+        )
+        == []
+    )
 
 
 def test_stored_playlist_scope_helpers(db_session):
-    db_session.add(UserSession(
-        user_id="u1",
-        token="tok",
-        token_info_json='{"scope":"user-read-recently-played playlist-modify-private"}',
-    ))
+    db_session.add(
+        UserSession(
+            user_id="u1",
+            token="tok",
+            token_info_json='{"scope":"user-read-recently-played playlist-modify-private"}',
+        )
+    )
     db_session.commit()
 
     assert get_missing_stored_playlist_scopes(db_session, "u1") == ["playlist-modify-public"]
@@ -47,11 +54,13 @@ def test_stored_playlist_scope_helpers(db_session):
 
 
 def test_stored_scope_check_treats_missing_scope_as_unknown(db_session):
-    db_session.add(UserSession(
-        user_id="u1",
-        token="tok",
-        token_info_json='{"access_token":"tok"}',
-    ))
+    db_session.add(
+        UserSession(
+            user_id="u1",
+            token="tok",
+            token_info_json='{"access_token":"tok"}',
+        )
+    )
     db_session.commit()
 
     assert get_missing_stored_playlist_scopes(db_session, "u1") == []
@@ -60,12 +69,14 @@ def test_stored_scope_check_treats_missing_scope_as_unknown(db_session):
 def test_save_user_session_preserves_scope_on_refresh_without_scope(db_session):
     from backend.app.services.spotify_service import save_user_session
 
-    db_session.add(UserSession(
-        user_id="u1",
-        token="old",
-        refresh_token="refresh",
-        token_info_json='{"access_token":"old","scope":"user-read-recently-played playlist-modify-private playlist-modify-public"}',
-    ))
+    db_session.add(
+        UserSession(
+            user_id="u1",
+            token="old",
+            refresh_token="refresh",
+            token_info_json='{"access_token":"old","scope":"user-read-recently-played playlist-modify-private playlist-modify-public"}',
+        )
+    )
     db_session.commit()
 
     save_user_session(db_session, "u1", token_info={"access_token": "new", "expires_in": 3600})
@@ -98,7 +109,11 @@ def test_create_playlist_uses_current_user_playlist_endpoint(monkeypatch):
 
         def json(self):
             if self.url.endswith("/playlists"):
-                return {"id": "playlist-id", "name": self.payload["name"], "owner": {"id": "current-user"}}
+                return {
+                    "id": "playlist-id",
+                    "name": self.payload["name"],
+                    "owner": {"id": "current-user"},
+                }
             return {"snapshot_id": "snapshot-id"}
 
     class FakeSpotify:

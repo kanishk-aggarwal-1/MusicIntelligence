@@ -30,7 +30,9 @@ def _ctx(request: Request):
     return f"method={request.method} path={request.url.path} request_id={_request_id(request)}"
 
 
-def _json_error(request: Request, status_code: int, code: str, message: str, *, detail: str | None = None):
+def _json_error(
+    request: Request, status_code: int, code: str, message: str, *, detail: str | None = None
+):
     payload = {
         "error": code,
         "message": message,
@@ -89,14 +91,24 @@ def install_error_handlers(app):
     @app.exception_handler(requests.RequestException)
     async def requests_exception_handler(request: Request, exc: requests.RequestException):
         logger.warning("external_request_error %s error=%s", _ctx(request), exc)
-        return _json_error(request, 502, "external_request_error", "External service request failed.", detail=str(exc))
+        return _json_error(
+            request,
+            502,
+            "external_request_error",
+            "External service request failed.",
+            detail=str(exc),
+        )
 
     @app.exception_handler(SQLAlchemyError)
     async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
         logger.exception("database_error %s", _ctx(request))
-        return _json_error(request, 500, "database_error", "Database operation failed.", detail=str(exc))
+        return _json_error(
+            request, 500, "database_error", "Database operation failed.", detail=str(exc)
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         logger.exception("unhandled_error %s", _ctx(request))
-        return _json_error(request, 500, "internal_error", "Internal server error.", detail=str(exc))
+        return _json_error(
+            request, 500, "internal_error", "Internal server error.", detail=str(exc)
+        )

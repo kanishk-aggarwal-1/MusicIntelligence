@@ -74,14 +74,16 @@ _DISCOVERY_COOLDOWN = timedelta(hours=6)
 def _run_discovery_job(db, progress, *, user_id: str):
     progress.update(total=3, current=0, message="Selecting seed artists")
     discovered, summary = discover_new_songs(
-        db, user_id,
+        db,
+        user_id,
         include_summary=True,
         seed_limit=10,
         max_similar_per_seed=5,
     )
     progress.update(current=1, message=f"Found {len(discovered)} candidates — enriching")
     store_summary = store_discovered_songs(
-        db, discovered,
+        db,
+        discovered,
         user_id=user_id,
         resolve_spotify=True,
     )
@@ -111,7 +113,9 @@ def _maybe_trigger_discovery(db, user_id: str) -> None:
     )
     if last and last.finished_at and (utcnow_naive() - last.finished_at) < _DISCOVERY_COOLDOWN:
         return
-    job = create_job(db, user_id=user_id, job_type=_DISCOVERY_JOB_TYPE, message="Queued", progress_total=3)
+    job = create_job(
+        db, user_id=user_id, job_type=_DISCOVERY_JOB_TYPE, message="Queued", progress_total=3
+    )
     threading.Thread(
         target=run_job,
         args=(job.id, partial(_run_discovery_job, user_id=user_id)),
@@ -323,9 +327,13 @@ def _playlist_quality_notes(*, diversity: float, recent_song_ids: set[int]):
         f"Artist variety guardrail prefers at most {artist_cap} track{'s' if artist_cap != 1 else ''} per artist when alternatives exist.",
     ]
     if recent_song_ids:
-        notes.append("Recent playlist repeat guardrail prefers songs not used in your last 5 generated playlists.")
+        notes.append(
+            "Recent playlist repeat guardrail prefers songs not used in your last 5 generated playlists."
+        )
     else:
-        notes.append("Recent playlist repeat guardrail will activate after you have generated playlist history.")
+        notes.append(
+            "Recent playlist repeat guardrail will activate after you have generated playlist history."
+        )
     return notes
 
 
@@ -352,16 +360,22 @@ def _playlist_preview_summary(serialized_playlist: dict, quality_notes: list[str
     return " - ".join(parts) + "."
 
 
-def _build_playlist_warnings(details, max_tracks, created_track_count=0, spotify_rate_limited=False):
+def _build_playlist_warnings(
+    details, max_tracks, created_track_count=0, spotify_rate_limited=False
+):
     warnings = []
     if not details:
         warnings.append("No recommendation candidates were produced from the current library.")
     if created_track_count and created_track_count < max_tracks:
-        warnings.append(f"Only {created_track_count} Spotify-resolvable tracks were available for a target of {max_tracks}.")
+        warnings.append(
+            f"Only {created_track_count} Spotify-resolvable tracks were available for a target of {max_tracks}."
+        )
     if created_track_count == 0:
         warnings.append("No Spotify-resolvable tracks were available for creation.")
     if spotify_rate_limited:
-        warnings.append("Spotify search rate limit was hit during this request, so track resolution was cut short.")
+        warnings.append(
+            "Spotify search rate limit was hit during this request, so track resolution was cut short."
+        )
     return warnings
 
 
@@ -388,6 +402,7 @@ def _looks_like_scope_error(exc):
         or "playlist-modify-public" in text
     )
 
+
 def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, user_id: str):
     resolved_now = 0
     track_ids = []
@@ -407,7 +422,9 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
             except Exception as exc:
                 status = getattr(exc, "http_status", None)
                 if status == 401:
-                    logger.info("playlist.resolve.token_expired title=%s artist=%s", song.title, artist_name)
+                    logger.info(
+                        "playlist.resolve.token_expired title=%s artist=%s", song.title, artist_name
+                    )
                     session = load_user_session(db, user_id=user_id)
                     refreshed_token = session.get("token")
                     if not refreshed_token:
@@ -415,7 +432,9 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
                     sp = get_spotify_client(refreshed_token)
                     track_id = resolve_track_id(sp, song.title, artist_name)
                 elif status == 429:
-                    logger.warning("playlist.resolve.rate_limited title=%s artist=%s", song.title, artist_name)
+                    logger.warning(
+                        "playlist.resolve.rate_limited title=%s artist=%s", song.title, artist_name
+                    )
                     rate_limited = True
                     break
                 else:
@@ -433,10 +452,12 @@ def _resolve_playlist_track_ids(db, sp, generated_playlist: GeneratedPlaylist, u
     deduped = _dedupe_keep_order(track_ids)
     # Playlist resolution rate = resolved Spotify URIs / tracks requested.
     requested = sum(1 for t in sorted_tracks if t.song)
-    live_metrics_service.increment_many({
-        live_metrics_service.PLAYLIST_TRACKS_REQUESTED: requested,
-        live_metrics_service.PLAYLIST_TRACKS_RESOLVED: len(deduped),
-    })
+    live_metrics_service.increment_many(
+        {
+            live_metrics_service.PLAYLIST_TRACKS_REQUESTED: requested,
+            live_metrics_service.PLAYLIST_TRACKS_RESOLVED: len(deduped),
+        }
+    )
 
     return deduped, resolved_now, rate_limited
 
@@ -462,7 +483,9 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
                     clear_user_session(db, user_id)
                 raise HTTPException(
                     status_code=403,
-                    detail=_spotify_error_detail(exc, prefix="Spotify refused playlist creation or track insertion."),
+                    detail=_spotify_error_detail(
+                        exc, prefix="Spotify refused playlist creation or track insertion."
+                    ),
                 ) from exc
             raise
         logger.info("playlist.create.token_expired user_id=%s", user_id)
@@ -474,12 +497,18 @@ def _create_playlist_with_refresh(db, sp, user_id: str, name: str, track_ids):
         try:
             return create_playlist(refreshed_sp, user_id, track_ids, name=name)
         except Exception as refresh_exc:
-            if isinstance(refresh_exc, SpotifyException) and getattr(refresh_exc, "http_status", None) == 403:
+            if (
+                isinstance(refresh_exc, SpotifyException)
+                and getattr(refresh_exc, "http_status", None) == 403
+            ):
                 if _looks_like_scope_error(refresh_exc):
                     clear_user_session(db, user_id)
                 raise HTTPException(
                     status_code=403,
-                    detail=_spotify_error_detail(refresh_exc, prefix="Spotify refused playlist creation or track insertion after token refresh."),
+                    detail=_spotify_error_detail(
+                        refresh_exc,
+                        prefix="Spotify refused playlist creation or track insertion after token refresh.",
+                    ),
                 ) from refresh_exc
             raise
 
@@ -532,7 +561,9 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
     record = create_playlist_preview_record(
         db,
         user_id=user_id,
-        name=build_playlist_name(selected, context_type=payload.context_type, explicit_name=payload.name),
+        name=build_playlist_name(
+            selected, context_type=payload.context_type, explicit_name=payload.name
+        ),
         context_type=payload.context_type,
         request_params=request_params,
         candidate_pool_size=len(details),
@@ -542,8 +573,12 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
 
     serialized = serialize_generated_playlist(record, include_tracks=True)
     resolved_count = sum(1 for item in selected if item["song"].spotify_id)
-    warnings = _build_playlist_warnings(selected, requested_tracks, created_track_count=resolved_count)
-    quality_notes = _playlist_quality_notes(diversity=payload.diversity, recent_song_ids=recent_song_ids)
+    warnings = _build_playlist_warnings(
+        selected, requested_tracks, created_track_count=resolved_count
+    )
+    quality_notes = _playlist_quality_notes(
+        diversity=payload.diversity, recent_song_ids=recent_song_ids
+    )
 
     return {
         "message": "Playlist preview generated",
@@ -582,7 +617,9 @@ def dj_playlist(payload: DJPayload, request: Request, db: Session = Depends(get_
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        raise HTTPException(status_code=503, detail="AI DJ is not configured — set ANTHROPIC_API_KEY")
+        raise HTTPException(
+            status_code=503, detail="AI DJ is not configured — set ANTHROPIC_API_KEY"
+        )
 
     def _build_fn(db, user_id, *, context_type, familiarity, diversity, max_tracks):
         pl = PlaylistGeneratePayload(
@@ -595,7 +632,9 @@ def dj_playlist(payload: DJPayload, request: Request, db: Session = Depends(get_
 
     try:
         result = _run_dj_agent(
-            db, user_id, prompt,
+            db,
+            user_id,
+            prompt,
             max(1, min(payload.max_tracks, 50)),
             api_key,
             build_fn=_build_fn,
@@ -616,7 +655,9 @@ def generated_history(request: Request, limit: int = 30, db: Session = Depends(g
         raise HTTPException(status_code=401, detail="User not logged in")
 
     records = list_generated_playlists(db, user_id=user_id, limit=limit)
-    return {"items": [serialize_generated_playlist(record, include_tracks=False) for record in records]}
+    return {
+        "items": [serialize_generated_playlist(record, include_tracks=False) for record in records]
+    }
 
 
 @router.get("/generated/{generated_playlist_id}")
@@ -626,7 +667,9 @@ def generated_detail(generated_playlist_id: int, request: Request, db: Session =
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
 
-    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    record = get_generated_playlist(
+        db, generated_playlist_id=generated_playlist_id, user_id=user_id
+    )
     if not record:
         raise HTTPException(status_code=404, detail="Generated playlist not found")
 
@@ -634,7 +677,12 @@ def generated_detail(generated_playlist_id: int, request: Request, db: Session =
 
 
 @router.patch("/generated/{generated_playlist_id}/name")
-def update_generated_name(generated_playlist_id: int, payload: PlaylistNamePayload, request: Request, db: Session = Depends(get_db)):
+def update_generated_name(
+    generated_playlist_id: int,
+    payload: PlaylistNamePayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
     if not user_id:
@@ -647,7 +695,9 @@ def update_generated_name(generated_playlist_id: int, payload: PlaylistNamePaylo
     if len(name) > 120:
         raise HTTPException(status_code=400, detail="Playlist name must be 120 characters or fewer")
 
-    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    record = get_generated_playlist(
+        db, generated_playlist_id=generated_playlist_id, user_id=user_id
+    )
     if not record:
         raise HTTPException(status_code=404, detail="Generated playlist not found")
 
@@ -659,19 +709,25 @@ def update_generated_name(generated_playlist_id: int, payload: PlaylistNamePaylo
 
 
 def _owned_playlist(db: Session, generated_playlist_id: int, user_id: str):
-    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    record = get_generated_playlist(
+        db, generated_playlist_id=generated_playlist_id, user_id=user_id
+    )
     if not record:
         raise HTTPException(status_code=404, detail="Generated playlist not found")
     return record
 
 
 def _normalize_track_positions(record):
-    for position, track in enumerate(sorted(record.tracks, key=lambda item: item.position), start=1):
+    for position, track in enumerate(
+        sorted(record.tracks, key=lambda item: item.position), start=1
+    ):
         track.position = position
 
 
 @router.delete("/generated/{generated_playlist_id}")
-def delete_generated_playlist(generated_playlist_id: int, request: Request, db: Session = Depends(get_db)):
+def delete_generated_playlist(
+    generated_playlist_id: int, request: Request, db: Session = Depends(get_db)
+):
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
     if not user_id:
@@ -684,7 +740,12 @@ def delete_generated_playlist(generated_playlist_id: int, request: Request, db: 
 
 
 @router.patch("/generated/{generated_playlist_id}/tracks/reorder")
-def reorder_generated_tracks(generated_playlist_id: int, payload: PlaylistReorderPayload, request: Request, db: Session = Depends(get_db)):
+def reorder_generated_tracks(
+    generated_playlist_id: int,
+    payload: PlaylistReorderPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     user_id = load_request_user_session(db, request).get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
@@ -692,7 +753,9 @@ def reorder_generated_tracks(generated_playlist_id: int, payload: PlaylistReorde
     record = _owned_playlist(db, generated_playlist_id, user_id)
     existing = {track.id: track for track in record.tracks}
     if set(payload.track_ids) != set(existing) or len(payload.track_ids) != len(existing):
-        raise HTTPException(status_code=400, detail="track_ids must contain every playlist track exactly once")
+        raise HTTPException(
+            status_code=400, detail="track_ids must contain every playlist track exactly once"
+        )
     for position, track_id in enumerate(payload.track_ids, start=1):
         existing[track_id].position = position
     db.commit()
@@ -701,7 +764,13 @@ def reorder_generated_tracks(generated_playlist_id: int, payload: PlaylistReorde
 
 
 @router.patch("/generated/{generated_playlist_id}/tracks/{track_id}")
-def update_generated_track(generated_playlist_id: int, track_id: int, payload: PlaylistTrackPayload, request: Request, db: Session = Depends(get_db)):
+def update_generated_track(
+    generated_playlist_id: int,
+    track_id: int,
+    payload: PlaylistTrackPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     user_id = load_request_user_session(db, request).get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
@@ -716,7 +785,9 @@ def update_generated_track(generated_playlist_id: int, track_id: int, payload: P
 
 
 @router.delete("/generated/{generated_playlist_id}/tracks/{track_id}")
-def remove_generated_track(generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)):
+def remove_generated_track(
+    generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)
+):
     user_id = load_request_user_session(db, request).get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
@@ -735,7 +806,9 @@ def remove_generated_track(generated_playlist_id: int, track_id: int, request: R
 
 
 @router.post("/generated/{generated_playlist_id}/tracks/{track_id}/replace")
-def replace_generated_track(generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)):
+def replace_generated_track(
+    generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)
+):
     user_id = load_request_user_session(db, request).get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User not logged in")
@@ -747,14 +820,25 @@ def replace_generated_track(generated_playlist_id: int, track_id: int, request: 
     if track.is_pinned:
         raise HTTPException(status_code=400, detail="Unpin this track before replacing it")
     existing_song_ids = {item.song_id for item in record.tracks}
-    candidates = recommend_songs(db, user_id, return_details=True, allow_discovery=False, context_type=record.context_type, limit=100)
-    replacement = next((item for item in candidates if item["song"].id not in existing_song_ids), None)
+    candidates = recommend_songs(
+        db,
+        user_id,
+        return_details=True,
+        allow_discovery=False,
+        context_type=record.context_type,
+        limit=100,
+    )
+    replacement = next(
+        (item for item in candidates if item["song"].id not in existing_song_ids), None
+    )
     if not replacement:
         raise HTTPException(status_code=409, detail="No unused replacement candidate is available")
     track.song_id = replacement["song"].id
     track.final_score = float(replacement.get("score") or 0)
     track.score_breakdown_json = json.dumps(replacement.get("components") or {})
-    track.explanation_json = json.dumps({"reasons": replacement.get("reasons") or [], "replaced": True})
+    track.explanation_json = json.dumps(
+        {"reasons": replacement.get("reasons") or [], "replaced": True}
+    )
     db.commit()
     db.refresh(record)
     return serialize_generated_playlist(record, include_tracks=True)
@@ -772,7 +856,9 @@ def preview(payload: PlaylistGeneratePayload, request: Request, db: Session = De
 
 
 @router.post("/generated/{generated_playlist_id}/create")
-def create_from_preview(generated_playlist_id: int, request: Request, db: Session = Depends(get_db)):
+def create_from_preview(
+    generated_playlist_id: int, request: Request, db: Session = Depends(get_db)
+):
     started = time.perf_counter()
     session = load_request_user_session(db, request)
     user_id = session.get("user_id")
@@ -785,14 +871,20 @@ def create_from_preview(generated_playlist_id: int, request: Request, db: Sessio
 
     # Pushing to Spotify resolves many track IDs and creates a playlist — cap it
     # to protect the Spotify API quota from rapid repeated saves.
-    enforce_rate_limit(request, namespace="playlist_create", user_id=user_id, limit=10, window_seconds=60)
+    enforce_rate_limit(
+        request, namespace="playlist_create", user_id=user_id, limit=10, window_seconds=60
+    )
 
-    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    record = get_generated_playlist(
+        db, generated_playlist_id=generated_playlist_id, user_id=user_id
+    )
     if not record:
         raise HTTPException(status_code=404, detail="Generated playlist not found")
 
     sp = get_spotify_client(token)
-    track_ids, resolved_now, resolution_rate_limited = _resolve_playlist_track_ids(db, sp, record, user_id)
+    track_ids, resolved_now, resolution_rate_limited = _resolve_playlist_track_ids(
+        db, sp, record, user_id
+    )
     max_tracks = len(record.tracks)
 
     if len(track_ids) < max_tracks:
@@ -800,10 +892,19 @@ def create_from_preview(generated_playlist_id: int, request: Request, db: Sessio
         track_ids = _dedupe_keep_order(track_ids + fallback_ids)
 
     track_ids = track_ids[:max_tracks]
-    playlist = _create_playlist_with_refresh(db, sp, user_id, record.name.replace("Preview", "Playlist"), track_ids)
-    record = mark_generated_playlist_created(db, record=record, spotify_playlist_id=playlist.get("id"))
+    playlist = _create_playlist_with_refresh(
+        db, sp, user_id, record.name.replace("Preview", "Playlist"), track_ids
+    )
+    record = mark_generated_playlist_created(
+        db, record=record, spotify_playlist_id=playlist.get("id")
+    )
 
-    warnings = _build_playlist_warnings(record.tracks, max_tracks, created_track_count=len(track_ids), spotify_rate_limited=resolution_rate_limited)
+    warnings = _build_playlist_warnings(
+        record.tracks,
+        max_tracks,
+        created_track_count=len(track_ids),
+        spotify_rate_limited=resolution_rate_limited,
+    )
 
     return {
         "message": "Playlist generated",
@@ -824,7 +925,9 @@ def regenerate_preview(generated_playlist_id: int, request: Request, db: Session
         raise HTTPException(status_code=401, detail="User not logged in")
     require_capability(user_id, "preview_playlists")
 
-    record = get_generated_playlist(db, generated_playlist_id=generated_playlist_id, user_id=user_id)
+    record = get_generated_playlist(
+        db, generated_playlist_id=generated_playlist_id, user_id=user_id
+    )
     if not record:
         raise HTTPException(status_code=404, detail="Generated playlist not found")
 
@@ -875,7 +978,9 @@ def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = D
 
     sp = get_spotify_client(token)
     record = get_generated_playlist(db, generated_playlist_id=preview_id, user_id=user_id)
-    track_ids, resolved_now, resolution_rate_limited = _resolve_playlist_track_ids(db, sp, record, user_id)
+    track_ids, resolved_now, resolution_rate_limited = _resolve_playlist_track_ids(
+        db, sp, record, user_id
+    )
 
     max_tracks = payload.max_tracks
     if len(track_ids) < max_tracks:
@@ -883,9 +988,18 @@ def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = D
         track_ids = _dedupe_keep_order(track_ids + fallback_ids)
     track_ids = track_ids[:max_tracks]
 
-    playlist = _create_playlist_with_refresh(db, sp, user_id, record.name.replace("Preview", "Playlist"), track_ids)
-    record = mark_generated_playlist_created(db, record=record, spotify_playlist_id=playlist.get("id"))
-    warnings = _build_playlist_warnings(record.tracks, max_tracks, created_track_count=len(track_ids), spotify_rate_limited=resolution_rate_limited)
+    playlist = _create_playlist_with_refresh(
+        db, sp, user_id, record.name.replace("Preview", "Playlist"), track_ids
+    )
+    record = mark_generated_playlist_created(
+        db, record=record, spotify_playlist_id=playlist.get("id")
+    )
+    warnings = _build_playlist_warnings(
+        record.tracks,
+        max_tracks,
+        created_track_count=len(track_ids),
+        spotify_rate_limited=resolution_rate_limited,
+    )
 
     explain = []
     for track in sorted(record.tracks, key=lambda item: item.position)[:10]:
@@ -911,9 +1025,9 @@ def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = D
 
     elapsed = round(time.perf_counter() - started, 2)
     logger.info("playlist.generate.done seconds=%.2f warnings=%s", elapsed, len(warnings))
-    known_track_ratio = (
-        sum(1 for track in record.tracks if track.song and track.song.spotify_id) / max(1, len(record.tracks))
-    )
+    known_track_ratio = sum(
+        1 for track in record.tracks if track.song and track.song.spotify_id
+    ) / max(1, len(record.tracks))
     return {
         "message": "Playlist generated",
         "playlist": playlist,
@@ -934,7 +1048,9 @@ def generate(payload: PlaylistGeneratePayload, request: Request, db: Session = D
 def generate_context_playlist(context_name: str, request: Request, db: Session = Depends(get_db)):
     key = context_name.lower().strip()
     if key not in CONTEXT_DEFAULTS:
-        raise HTTPException(status_code=404, detail="Unknown context. Use one of: focus, workout, late-night, chill")
+        raise HTTPException(
+            status_code=404, detail="Unknown context. Use one of: focus, workout, late-night, chill"
+        )
 
     defaults = CONTEXT_DEFAULTS[key]
     payload = PlaylistGeneratePayload(
@@ -951,6 +1067,7 @@ def generate_context_playlist(context_name: str, request: Request, db: Session =
 
 
 # ── Scheduled playlist refresh ───────────────────────────────────────────────
+
 
 def _run_schedule(db: Session, schedule):
     """Regenerate the playlist for one schedule using the existing pipeline and
@@ -970,7 +1087,9 @@ def _run_schedule(db: Session, schedule):
         generated_id = preview["generated_playlist"]["id"]
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"[:1000]
-        logger.exception("playlist.schedule.run_failed schedule_id=%s user_id=%s", schedule.id, schedule.user_id)
+        logger.exception(
+            "playlist.schedule.run_failed schedule_id=%s user_id=%s", schedule.id, schedule.user_id
+        )
     # Always advance the clock so a persistently failing schedule doesn't run on
     # every single request — it retries next cadence instead.
     mark_ran(db, schedule=schedule, generated_playlist_id=generated_id, error=error)
@@ -1021,9 +1140,14 @@ def post_schedule(payload: ScheduleCreatePayload, request: Request, db: Session 
     require_capability(user_id, "manage_schedules")
 
     if payload.cadence not in VALID_CADENCES:
-        raise HTTPException(status_code=400, detail=f"Unknown cadence. Use one of: {', '.join(sorted(VALID_CADENCES))}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown cadence. Use one of: {', '.join(sorted(VALID_CADENCES))}",
+        )
     if count_schedules(db, user_id=user_id) >= MAX_SCHEDULES_PER_USER:
-        raise HTTPException(status_code=400, detail=f"You can have at most {MAX_SCHEDULES_PER_USER} schedules.")
+        raise HTTPException(
+            status_code=400, detail=f"You can have at most {MAX_SCHEDULES_PER_USER} schedules."
+        )
 
     schedule = create_schedule(
         db,
@@ -1051,7 +1175,9 @@ def run_schedule_now(schedule_id: int, request: Request, db: Session = Depends(g
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    enforce_rate_limit(request, namespace="playlist_schedule_run", user_id=user_id, limit=10, window_seconds=60)
+    enforce_rate_limit(
+        request, namespace="playlist_schedule_run", user_id=user_id, limit=10, window_seconds=60
+    )
     generated_id = _run_schedule(db, schedule)
     return {"schedule": serialize_schedule(schedule), "generated_playlist_id": generated_id}
 
