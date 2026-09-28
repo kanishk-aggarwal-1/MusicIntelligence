@@ -64,6 +64,69 @@ def _sort_col(sort: str, last_listen_subq):
     return last_listen_subq.c.last_listened_at.desc()  # "recent" default
 
 
+def _hidden_pref_subq(user_id: str):
+    """select() of song_ids the user has hidden — reused by the include/exclude filters."""
+    return select(UserSongPref.song_id).where(
+        UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
+    )
+
+
+def _apply_quick_filter(
+    query, quick_filter, *, user_id, playlist_use_subq, last_listen_subq, safe_days
+):
+    """Push a quick_filter into SQL. 'duplicate_candidates' has no SQL form (Python grouping)."""
+    if quick_filter == "failed_enrichment":
+        return query.filter(Song.enrichment_status == "failed")
+    if quick_filter == "partial_enrichment":
+        return query.filter(Song.enrichment_status == "partial")
+    if quick_filter == "missing_tags":
+        return query.filter(~Song.id.in_(select(SongTag.song_id).distinct()))
+    if quick_filter == "missing_popularity":
+        return query.filter(
+            (Song.listeners.is_(None) | (Song.listeners == 0)),
+            (Song.playcount.is_(None) | (Song.playcount == 0)),
+        )
+    if quick_filter == "high_popularity":
+        return query.filter(Song.popularity_score >= 3)
+    if quick_filter == "never_used_in_playlist":
+        return query.filter(playlist_use_subq.c.playlist_inclusion_count.is_(None))
+    if quick_filter == "hidden":
+        return query.filter(Song.id.in_(_hidden_pref_subq(user_id)))
+    if quick_filter == "active":
+        return query.filter(~Song.id.in_(_hidden_pref_subq(user_id)))
+    if quick_filter == "recently_played":
+        cutoff = utcnow_naive() - timedelta(days=safe_days)
+        return query.filter(last_listen_subq.c.last_listened_at >= cutoff)
+    return query
+
+
+def _serialize_song_row(
+    s, last_listened_at, listening_count, playlist_inclusion_count, hidden_song_ids
+):
+    return {
+        "id": s.id,
+        "title": s.title,
+        "artist": s.artist.name if s.artist else None,
+        "spotify_id": s.spotify_id,
+        "image_url": s.image_url,
+        "preview_url": s.preview_url,
+        "genre": s.genre,
+        "listeners": s.listeners,
+        "playcount": s.playcount,
+        "popularity_score": s.popularity_score,
+        "last_listened_at": last_listened_at.isoformat() if last_listened_at else None,
+        "listening_count": int(listening_count or 0),
+        "playlist_inclusion_count": int(playlist_inclusion_count or 0),
+        "tag_count": len(s.song_tags or []),
+        "top_tag": _top_tag_name(s),
+        "enrichment_status": s.enrichment_status,
+        "enrichment_error": s.enrichment_error,
+        "discovery_source": s.discovery_source,
+        "discovery_confidence": s.discovery_confidence,
+        "is_deleted": s.id in hidden_song_ids,
+    }
+
+
 @router.get("/")
 def get_songs(
     request: Request,
@@ -136,52 +199,19 @@ def get_songs(
 
     # Exclude hidden songs in SQL for all paths that don't specifically request them.
     if not include_deleted and quick_filter != "hidden":
-        query = query.filter(
-            ~Song.id.in_(
-                select(UserSongPref.song_id).where(
-                    UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
-                )
-            )
-        )
+        query = query.filter(~Song.id.in_(_hidden_pref_subq(user_id)))
 
     # Push quick_filter conditions into SQL to avoid full-table scans.
     # duplicate_candidates needs Python grouping; q needs Python artist-name search.
     _needs_python_filter = bool(q) or quick_filter == "duplicate_candidates"
-    if quick_filter == "failed_enrichment":
-        query = query.filter(Song.enrichment_status == "failed")
-    elif quick_filter == "partial_enrichment":
-        query = query.filter(Song.enrichment_status == "partial")
-    elif quick_filter == "missing_tags":
-        query = query.filter(~Song.id.in_(select(SongTag.song_id).distinct()))
-    elif quick_filter == "missing_popularity":
-        query = query.filter(
-            (Song.listeners.is_(None) | (Song.listeners == 0)),
-            (Song.playcount.is_(None) | (Song.playcount == 0)),
-        )
-    elif quick_filter == "high_popularity":
-        query = query.filter(Song.popularity_score >= 3)
-    elif quick_filter == "never_used_in_playlist":
-        query = query.filter(playlist_use_subq.c.playlist_inclusion_count.is_(None))
-    elif quick_filter == "hidden":
-        query = query.filter(
-            Song.id.in_(
-                select(UserSongPref.song_id).where(
-                    UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
-                )
-            )
-        )
-    elif quick_filter == "active":
-        query = query.filter(
-            ~Song.id.in_(
-                select(UserSongPref.song_id).where(
-                    UserSongPref.user_id == user_id, UserSongPref.is_hidden.is_(True)
-                )
-            )
-        )
-    elif quick_filter == "recently_played":
-        cutoff = utcnow_naive() - timedelta(days=safe_days)
-        query = query.filter(last_listen_subq.c.last_listened_at >= cutoff)
-    # "duplicate_candidates": Python grouping required — no SQL shortcut.
+    query = _apply_quick_filter(
+        query,
+        quick_filter,
+        user_id=user_id,
+        playlist_use_subq=playlist_use_subq,
+        last_listen_subq=last_listen_subq,
+        safe_days=safe_days,
+    )
 
     if genre:
         query = query.filter(Song.genre == genre)
@@ -214,10 +244,6 @@ def get_songs(
 
     filtered = []
     for s, last_listened_at, listening_count, playlist_inclusion_count in rows:
-        tag_count = len(s.song_tags or [])
-        top_tag = _top_tag_name(s)
-        playlist_count = int(playlist_inclusion_count or 0)
-
         # Text search: Python match (title + artist name) — artist name requires a JOIN not yet in base query.
         if q:
             q_lower = q.lower()
@@ -242,28 +268,9 @@ def get_songs(
                 continue
 
         filtered.append(
-            {
-                "id": s.id,
-                "title": s.title,
-                "artist": s.artist.name if s.artist else None,
-                "spotify_id": s.spotify_id,
-                "image_url": s.image_url,
-                "preview_url": s.preview_url,
-                "genre": s.genre,
-                "listeners": s.listeners,
-                "playcount": s.playcount,
-                "popularity_score": s.popularity_score,
-                "last_listened_at": last_listened_at.isoformat() if last_listened_at else None,
-                "listening_count": int(listening_count or 0),
-                "playlist_inclusion_count": playlist_count,
-                "tag_count": tag_count,
-                "top_tag": top_tag,
-                "enrichment_status": s.enrichment_status,
-                "enrichment_error": s.enrichment_error,
-                "discovery_source": s.discovery_source,
-                "discovery_confidence": s.discovery_confidence,
-                "is_deleted": s.id in hidden_song_ids,
-            }
+            _serialize_song_row(
+                s, last_listened_at, listening_count, playlist_inclusion_count, hidden_song_ids
+            )
         )
 
     if _needs_python_filter:
