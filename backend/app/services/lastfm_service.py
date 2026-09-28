@@ -10,7 +10,6 @@ from . import live_metrics_service
 from .api_cache_service import get_cached_response, store_cached_response
 from .metrics_service import record_external_call
 
-
 CACHE_TTL_SECONDS = 3600
 
 # ---------------------------------------------------------------------------

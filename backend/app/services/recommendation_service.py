@@ -1,15 +1,13 @@
-from collections import Counter
 import logging
-from math import log
 import random
-
+from collections import Counter
+from math import log
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 
 from ..database import engine as _db_engine
-
 from ..models.artist import Artist
 from ..models.listening_history import ListeningHistory
 from ..models.recommendation_feedback import RecommendationFeedback
@@ -17,15 +15,12 @@ from ..models.song import Song
 from ..models.song_tag import SongTag
 from ..models.tag import Tag
 from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
-
-from . import live_metrics_service
+from . import live_metrics_service, spotify_service
 from .discovery_service import discover_songs_from_artist
 from .enrichment_service import enrich_song
 from .ml_recommendation_service import ALGORITHM_VERSION as ML_ALGORITHM_VERSION
 from .ml_recommendation_service import knn_recommend
 from .spotify_service import load_user_session, resolve_track_id
-from . import spotify_service
-
 
 ALGORITHM_VERSION = "tfidf-knn-v1"
 logger = logging.getLogger(__name__)

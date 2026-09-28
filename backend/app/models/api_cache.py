@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String, Text, Index
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 
 from ..database import Base
 from ..time_utils import utcnow_naive

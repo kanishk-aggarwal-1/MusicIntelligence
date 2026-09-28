@@ -21,13 +21,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.database import SessionLocal
 from app.config import settings
+from app.database import SessionLocal
 from app.models.artist import Artist
+from app.models.listening_history import ListeningHistory
 from app.models.song import Song
 from app.models.song_tag import SongTag
 from app.models.tag import Tag
-from app.models.listening_history import ListeningHistory
 from app.models.user_session import UserSession
 
 DEMO_USER_ID = settings.DEMO_USER_ID or "musicintel_demo"

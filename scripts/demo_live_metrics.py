@@ -21,9 +21,15 @@ import backend.app.main as main  # noqa: E402  (triggers create_all)
 from backend.app.database import SessionLocal  # noqa: E402
 from backend.app.models.song import Song  # noqa: E402
 from backend.app.models.user_session import UserSession  # noqa: E402
-from backend.app.services import lastfm_service, live_metrics_service, recommendation_service  # noqa: E402
-from backend.app.services.generated_playlist_service import create_playlist_preview_record  # noqa: E402
 from backend.app.routes.playlist_routes import _resolve_playlist_track_ids  # noqa: E402
+from backend.app.services import (  # noqa: E402
+    lastfm_service,
+    live_metrics_service,
+    recommendation_service,
+)
+from backend.app.services.generated_playlist_service import (
+    create_playlist_preview_record,  # noqa: E402
+)
 
 client = TestClient(main.app)
 

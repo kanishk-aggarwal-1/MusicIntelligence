@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..models.user_session import UserSession
 from ..models.listening_history import ListeningHistory
-from ..services.metrics_service import get_metrics_snapshot
+from ..models.user_session import UserSession
 from ..services.artist_enrichment_service import enrich_artist_genres
+from ..services.metrics_service import get_metrics_snapshot
 from ..services.recommendation_service import backfill_missing_metadata, sync_listening_history
 from ..services.spotify_service import (
     INCREMENTAL_SYNC_MAX_TRACKS,

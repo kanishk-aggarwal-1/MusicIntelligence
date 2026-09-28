@@ -10,16 +10,16 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.routes import playlist_routes
-from backend.app.services.generated_playlist_service import (
-    build_playlist_name,
-    create_playlist_preview_record,
-    serialize_generated_playlist,
-)
 from backend.app.routes.playlist_routes import (
     _apply_quality_controls,
     _cap_artist_repetition,
     _dedupe_keep_order,
     _deprioritize_recent_playlist_repeats,
+)
+from backend.app.services.generated_playlist_service import (
+    build_playlist_name,
+    create_playlist_preview_record,
+    serialize_generated_playlist,
 )
 
 

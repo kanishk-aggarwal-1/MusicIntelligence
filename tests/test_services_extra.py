@@ -9,8 +9,12 @@ from backend.app.models.song import Song
 from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
-from backend.app.services import api_cache_service, job_service, recommendation_service
-from backend.app.time_utils import utcnow_naive
+from backend.app.services import (
+    api_cache_service,
+    enrichment_service,
+    job_service,
+    recommendation_service,
+)
 from backend.app.services.api_cache_service import (
     clear_provider_cache,
     get_cached_response,
@@ -25,14 +29,14 @@ from backend.app.services.job_service import (
     run_job,
 )
 from backend.app.services.recommendation_service import (
+    _human_reasons,
     backfill_missing_metadata,
     build_discovery_feed,
     discover_new_songs,
-    _human_reasons,
     recommend_songs,
     sync_listening_history,
 )
-from backend.app.services import enrichment_service
+from backend.app.time_utils import utcnow_naive
 
 
 def _session(user_id: str):

@@ -1,34 +1,39 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from .config import settings
-from .database import engine, Base, run_startup_migrations
+from .database import Base, engine, run_startup_migrations
 from .error_handlers import install_error_handlers
 
 # IMPORTANT: import models
-from .models import song
-from .models import listening_history
-from .models import artist
-from .models import api_cache
-from .models import generated_playlist
-from .models import generated_playlist_track
-from .models import job
-from .models import tag
-from .models import song_tag
-from .models import user_session
-from .models import recommendation_feedback
-from .models import listening_goal
-from .models import dedup_merge_log
-from .models import user_song_pref
-from .models import playlist_schedule
-from .models import metric_counter
-from .routes import user_routes
-from .routes import playlist_routes
-from .routes import music_routes
-from .routes import dashboard_routes
-from .routes import insights_routes
-from .routes import job_routes
-from .routes import ops_routes
-from .routes import stats_routes
+from .models import (
+    api_cache,
+    artist,
+    dedup_merge_log,
+    generated_playlist,
+    generated_playlist_track,
+    job,
+    listening_goal,
+    listening_history,
+    metric_counter,
+    playlist_schedule,
+    recommendation_feedback,
+    song,
+    song_tag,
+    tag,
+    user_session,
+    user_song_pref,
+)
+from .routes import (
+    dashboard_routes,
+    insights_routes,
+    job_routes,
+    music_routes,
+    ops_routes,
+    playlist_routes,
+    stats_routes,
+    user_routes,
+)
 
 app = FastAPI(title="Music Recommendation API")
 install_error_handlers(app)

@@ -1,8 +1,8 @@
 from backend.app.database import Base, engine, run_startup_migrations
+from backend.app.models.api_cache import ApiCache
 
 # Import each model module so SQLAlchemy registers all tables/relationships.
 from backend.app.models.artist import Artist
-from backend.app.models.api_cache import ApiCache
 from backend.app.models.dedup_merge_log import DedupMergeLog
 from backend.app.models.generated_playlist import GeneratedPlaylist
 from backend.app.models.generated_playlist_track import GeneratedPlaylistTrack

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from ..database import get_db
 from ..authz import require_capability
+from ..database import get_db
 from ..services.job_service import cancel_job, get_job, list_jobs, serialize_job
 from ..services.spotify_service import load_request_user_session
 

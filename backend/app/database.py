@@ -7,7 +7,6 @@ from sqlalchemy.pool import NullPool
 
 from .config import settings
 
-
 logger = logging.getLogger(__name__)
 
 # Neon's serverless PostgreSQL aggressively closes idle SSL connections.

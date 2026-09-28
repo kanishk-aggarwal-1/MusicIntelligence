@@ -5,12 +5,11 @@ import uuid
 import requests
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import SQLAlchemyError
 from spotipy.exceptions import SpotifyException
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
 from .services.metrics_service import record_request
-
 
 logger = logging.getLogger(__name__)
 

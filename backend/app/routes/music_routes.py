@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session, joinedload
 
-from ..database import get_db
 from ..authz import require_capability
-from ..models.generated_playlist_track import GeneratedPlaylistTrack
+from ..database import get_db
 from ..models.generated_playlist import GeneratedPlaylist
+from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
 from ..models.song_tag import SongTag

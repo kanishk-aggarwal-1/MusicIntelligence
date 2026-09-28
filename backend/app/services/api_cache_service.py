@@ -7,7 +7,6 @@ from ..database import SessionLocal
 from ..models.api_cache import ApiCache
 from ..time_utils import utcnow_naive
 
-
 SUCCESS_TTL = timedelta(days=7)
 FAILURE_TTL = timedelta(hours=6)
 

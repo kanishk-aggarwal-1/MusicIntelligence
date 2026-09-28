@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session, joinedload
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..time_utils import utcnow_naive
-
 from . import live_metrics_service
 from .ml_recommendation_service import ALGORITHM_VERSION
 

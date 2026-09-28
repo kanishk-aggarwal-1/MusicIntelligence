@@ -10,7 +10,6 @@ from ..database import SessionLocal
 from ..models.api_cache import ApiCache
 from ..time_utils import utcnow_naive
 
-
 logger = logging.getLogger(__name__)
 
 

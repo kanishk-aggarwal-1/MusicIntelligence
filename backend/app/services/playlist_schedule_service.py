@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from ..models.playlist_schedule import PlaylistSchedule
 from ..time_utils import utcnow_naive
 
-
 VALID_CADENCES = {"daily", "weekly"}
 _CADENCE_DELTA = {
     "daily": timedelta(days=1),

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -5,21 +6,22 @@ import time
 from datetime import timedelta
 from functools import partial
 from math import ceil
-import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from spotipy.exceptions import SpotifyException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from spotipy.exceptions import SpotifyException
 
-from ..database import get_db
 from ..authz import require_capability
+from ..database import get_db
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.job import Job
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
+from ..services import live_metrics_service
+from ..services.dj_agent_service import run_dj_agent as _run_dj_agent
 from ..services.generated_playlist_service import (
     ALGORITHM_VERSION,
     build_playlist_name,
@@ -33,8 +35,8 @@ from ..services.job_service import create_job, get_active_job, run_job
 from ..services.playlist_schedule_service import (
     MAX_SCHEDULES_PER_USER,
     VALID_CADENCES,
-    count_schedules,
     claim_due_schedules,
+    count_schedules,
     create_schedule,
     delete_schedule,
     due_schedules,
@@ -43,7 +45,6 @@ from ..services.playlist_schedule_service import (
     mark_ran,
     serialize_schedule,
 )
-from ..services import live_metrics_service
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import (
     discover_new_songs,
@@ -597,9 +598,6 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
             "notes": quality_notes,
         },
     }
-
-
-from ..services.dj_agent_service import run_dj_agent as _run_dj_agent
 
 
 @router.post("/dj")

@@ -26,6 +26,8 @@ ignore = ["E501"]
 "create_tables.py" = ["F401"]
 # Standalone scripts adjust sys.path before importing, so imports aren't at top.
 "backend/seed_demo.py" = ["E402"]
+# Alembic env boilerplate imports after configuring the migration context.
+"alembic/env.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

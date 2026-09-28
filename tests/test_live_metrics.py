@@ -1,8 +1,8 @@
 """Tests for persistent live metrics (live_metrics_service + GET /stats)."""
 
 from backend.app.models.metric_counter import MetricCounter  # noqa: F401  (register table)
-from backend.app.services import live_metrics_service as lm
 from backend.app.routes import stats_routes
+from backend.app.services import live_metrics_service as lm
 
 
 def _use_test_db(monkeypatch, testing_session_local, test_engine):

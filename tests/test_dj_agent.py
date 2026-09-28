@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-
 from backend.app.models.artist import Artist
 from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.song import Song
@@ -11,7 +10,6 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.routes import playlist_routes
-
 
 # ---------------------------------------------------------------------------
 # Test data helpers (mirrors test_routes_playlists.py conventions)

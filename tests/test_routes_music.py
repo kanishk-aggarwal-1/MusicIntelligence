@@ -3,14 +3,14 @@
 from datetime import datetime
 
 from backend.app.models.artist import Artist
+from backend.app.models.generated_playlist import GeneratedPlaylist
+from backend.app.models.generated_playlist_track import GeneratedPlaylistTrack
 from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.song import Song
 from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.models.user_song_pref import UserSongPref
-from backend.app.models.generated_playlist import GeneratedPlaylist
-from backend.app.models.generated_playlist_track import GeneratedPlaylistTrack
 from backend.app.routes import music_routes
 
 

@@ -4,7 +4,6 @@ from fastapi import HTTPException
 
 from .config import settings
 
-
 CAPABILITY_KEYS = (
     "sync_spotify",
     "import_history",

@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..database import get_db, engine as _db_engine
 from ..authz import require_capability
+from ..database import engine as _db_engine
+from ..database import get_db
 from ..models.artist import Artist
 from ..models.dedup_merge_log import DedupMergeLog
 from ..models.listening_goal import ListeningGoal
@@ -136,8 +137,9 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
 
     # Cut off at `safe_months` months ago so the timeline doesn't load all-time
     # data but also has a proper date boundary, not just a row limit.
-    from ..time_utils import utcnow_naive as _now
     from datetime import timedelta as _td
+
+    from ..time_utils import utcnow_naive as _now
 
     cutoff = _now() - _td(days=safe_months * 31)
 
@@ -1088,8 +1090,9 @@ def songs_by_tag(tag_name: str, request: Request, limit: int = 50, db: Session =
     user_id = _require_user_id(db, request)
     safe_limit = max(1, min(limit, 200))
 
-    from ..models.tag import Tag as _Tag
     from sqlalchemy.orm import joinedload as _joinedload
+
+    from ..models.tag import Tag as _Tag
 
     tag = db.query(_Tag).filter(_Tag.name == tag_name).first()
     if not tag:

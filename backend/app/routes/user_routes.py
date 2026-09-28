@@ -1,46 +1,51 @@
+import base64
 import json
 import logging
-import base64
 import secrets
 import threading
 from functools import partial
 from html import escape
 
+import spotipy
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
-import spotipy
 
-from ..database import get_db, engine as _db_engine
 from ..authz import capabilities_for, require_capability
 from ..config import settings
+from ..database import engine as _db_engine
+from ..database import get_db
 from ..models.artist import Artist
+from ..models.dedup_merge_log import DedupMergeLog
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.job import Job
 from ..models.listening_goal import ListeningGoal
 from ..models.listening_history import ListeningHistory
+from ..models.playlist_schedule import PlaylistSchedule
 from ..models.recommendation_feedback import RecommendationFeedback
 from ..models.song import Song
 from ..models.user_session import UserSession
 from ..models.user_song_pref import UserSongPref
-from ..models.playlist_schedule import PlaylistSchedule
-from ..models.dedup_merge_log import DedupMergeLog
-from ..time_utils import utcnow_naive
+from ..services import live_metrics_service
 from ..services.job_service import create_job, get_active_job, run_job, serialize_job
 from ..services.rate_limit_service import enforce_rate_limit
-from ..services import live_metrics_service
+from ..services.recommendation_service import (
+    _parse_played_at,
+    backfill_missing_metadata,
+    sync_listening_history,
+)
 from ..services.spotify_service import (
-    SESSION_COOKIE_NAME,
     INCREMENTAL_SYNC_MAX_TRACKS,
+    SESSION_COOKIE_NAME,
     clear_user_session,
     create_session_cookie_value,
     fetch_recent_tracks,
-    get_spotify_oauth,
-    get_spotify_client,
     get_session_cookie_options,
+    get_spotify_client,
+    get_spotify_oauth,
     get_stored_session_scope,
     load_request_user_session,
     load_user_session,
@@ -48,11 +53,7 @@ from ..services.spotify_service import (
     read_session_cookie_value,
     save_user_session,
 )
-from ..services.recommendation_service import (
-    backfill_missing_metadata,
-    sync_listening_history,
-    _parse_played_at,
-)
+from ..time_utils import utcnow_naive
 
 router = APIRouter(prefix="/user", tags=["User"])
 logger = logging.getLogger(__name__)
@@ -134,9 +135,10 @@ def demo_login(db: Session = Depends(get_db)):
     # Upsert a UserSession row so load_user_session can resolve the user_id.
     # token is set to a placeholder and expires_at to the past so the session is
     # recognised as "logged in" but spotify_connected=False (no valid token).
-    from ..time_utils import utcnow_naive
     from datetime import timedelta
+
     from ..models.user_session import UserSession as _UserSession
+    from ..time_utils import utcnow_naive
 
     past = utcnow_naive() - timedelta(days=365)
     existing = db.query(_UserSession).filter(_UserSession.user_id == demo_user_id).first()

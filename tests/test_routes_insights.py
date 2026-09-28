@@ -3,8 +3,8 @@
 from datetime import datetime, timedelta
 
 from backend.app.models.artist import Artist
-from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.listening_goal import ListeningGoal
+from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.recommendation_feedback import RecommendationFeedback
 from backend.app.models.song import Song
 from backend.app.models.song_tag import SongTag

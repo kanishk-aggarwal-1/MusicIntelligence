@@ -7,8 +7,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.app.database import Base, get_db
 import backend.app.services.ml_recommendation_service as _ml_svc
+from backend.app.database import Base, get_db
 
 
 def _date_trunc(part, value):
