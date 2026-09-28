@@ -1,5 +1,4 @@
 from collections import Counter
-from datetime import timedelta
 import logging
 from math import log
 import random

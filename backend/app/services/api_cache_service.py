@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..database import SessionLocal
 from ..models.api_cache import ApiCache
-from ..time_utils import parse_utc_datetime, utcnow_naive
+from ..time_utils import utcnow_naive
 
 
 SUCCESS_TTL = timedelta(days=7)

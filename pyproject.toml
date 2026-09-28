@@ -17,5 +17,15 @@ extend-exclude = [
 select = ["E", "W", "F", "I"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# These modules import model classes purely for their side effect: registering
+# tables with SQLAlchemy's Base.metadata before create_all() runs. They look
+# unused to the linter but are load-bearing — never remove them.
+"backend/app/main.py" = ["F401"]
+"backend/app/models/__init__.py" = ["F401"]
+"create_tables.py" = ["F401"]
+# Standalone scripts adjust sys.path before importing, so imports aren't at top.
+"backend/seed_demo.py" = ["E402"]
+
 [tool.ruff.format]
 quote-style = "double"

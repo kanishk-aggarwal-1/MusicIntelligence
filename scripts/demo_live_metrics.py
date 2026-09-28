@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import backend.app.main as main  # noqa: E402  (triggers create_all)
 from backend.app.database import SessionLocal  # noqa: E402
-from backend.app.models.artist import Artist  # noqa: E402
 from backend.app.models.song import Song  # noqa: E402
 from backend.app.models.user_session import UserSession  # noqa: E402
 from backend.app.services import lastfm_service, live_metrics_service, recommendation_service  # noqa: E402

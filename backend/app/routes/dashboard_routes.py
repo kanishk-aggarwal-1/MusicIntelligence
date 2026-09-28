@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import String, case, cast, func
+from sqlalchemy import String, cast, func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -51,12 +51,6 @@ def get_stats(
     start_dt = _parse_date(start_date) or (end_dt - timedelta(days=safe_days))
 
     artist_join = cast(Song.artist_id, String) == cast(Artist.id, String)
-
-    base_history = db.query(ListeningHistory).filter(
-        ListeningHistory.user_id == user_id,
-        ListeningHistory.played_at >= start_dt,
-        ListeningHistory.played_at <= end_dt,
-    )
 
     top_artists_rows = (
         db.query(Artist.name, func.count(ListeningHistory.id))

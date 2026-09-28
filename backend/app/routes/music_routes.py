@@ -219,7 +219,6 @@ def get_songs(
     for s, last_listened_at, listening_count, playlist_inclusion_count in rows:
         tag_count = len(s.song_tags or [])
         top_tag = _top_tag_name(s)
-        popularity_value = s.popularity_score or 0
         playlist_count = int(playlist_inclusion_count or 0)
 
         # Text search: Python match (title + artist name) — artist name requires a JOIN not yet in base query.
