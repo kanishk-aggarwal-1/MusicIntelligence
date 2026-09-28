@@ -193,7 +193,8 @@ def test_cron_processes_due_schedules(monkeypatch, client_factory, db_session):
         )
     )
     db_session.commit()
-    monkeypatch.setattr(ops_routes.settings, "CRON_SECRET", "test-secret")
+    # require_cron_secret now reads the settings singleton via app.deps.
+    monkeypatch.setattr("backend.app.config.settings.CRON_SECRET", "test-secret")
     monkeypatch.setattr(playlist_routes, "_build_preview", _fake_preview(generated_id=77))
     client = client_factory(ops_routes.router)
 

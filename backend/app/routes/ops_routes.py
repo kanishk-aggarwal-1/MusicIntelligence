@@ -1,12 +1,12 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..database import get_db
+from ..deps import require_cron_secret
 from ..models.listening_history import ListeningHistory
 from ..models.user_session import UserSession
 from ..services.artist_enrichment_service import enrich_artist_genres
@@ -61,9 +61,7 @@ def ready(db: Session = Depends(get_db)):
 @router.get("/metrics")
 def metrics(request: Request):
     """Internal metrics endpoint — requires the same X-Cron-Secret used by the sync cron job."""
-    expected = settings.CRON_SECRET or ""
-    if not expected or request.headers.get("X-Cron-Secret", "") != expected:
-        raise HTTPException(status_code=401, detail="Missing or invalid cron secret")
+    require_cron_secret(request)
     return get_metrics_snapshot()
 
 
@@ -74,9 +72,7 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
     Protected by X-Cron-Secret header matching the CRON_SECRET env var.
     Called by the Render cron job service defined in render.yaml.
     """
-    expected = settings.CRON_SECRET or ""
-    if not expected or request.headers.get("X-Cron-Secret", "") != expected:
-        raise HTTPException(status_code=401, detail="Missing or invalid cron secret")
+    require_cron_secret(request)
 
     sessions = db.query(UserSession).all()
     total = len(sessions)
@@ -140,9 +136,7 @@ def sync_all(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/run-due-schedules")
 def run_due_schedules(request: Request, limit: int = 50, db: Session = Depends(get_db)):
-    expected = settings.CRON_SECRET or ""
-    if not expected or request.headers.get("X-Cron-Secret", "") != expected:
-        raise HTTPException(status_code=401, detail="Missing or invalid cron secret")
+    require_cron_secret(request)
 
     # Local import avoids coupling the route modules during application startup.
     from .playlist_routes import process_all_due_schedules
