@@ -101,6 +101,29 @@ TOOL_SCHEMAS = [
 # ---------------------------------------------------------------------------
 
 
+def _top_artists(db: Session, user_id: str, *, limit: int, since=None) -> list[dict]:
+    """Top artists by play count, optionally restricted to plays on/after ``since``."""
+    q = (
+        db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
+        .join(Song, Song.artist_id == Artist.id)
+        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
+        .filter(
+            ListeningHistory.user_id == user_id,
+            Song.is_deleted.is_(False),
+            Artist.name.is_not(None),
+        )
+    )
+    if since is not None:
+        q = q.filter(ListeningHistory.played_at >= since)
+    rows = (
+        q.group_by(Artist.name)
+        .order_by(func.count(ListeningHistory.id).desc())
+        .limit(limit)
+        .all()
+    )
+    return [{"name": n, "plays": int(p)} for n, p in rows]
+
+
 def _tool_get_listening_profile(db: Session, user_id: str) -> dict:
     listened_subq = (
         db.query(ListeningHistory.song_id)
@@ -117,20 +140,6 @@ def _tool_get_listening_profile(db: Session, user_id: str) -> dict:
         .limit(15)
         .all()
     )
-    artist_rows = (
-        db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
-        .join(Song, Song.artist_id == Artist.id)
-        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
-        .filter(
-            ListeningHistory.user_id == user_id,
-            Song.is_deleted.is_(False),
-            Artist.name.is_not(None),
-        )
-        .group_by(Artist.name)
-        .order_by(func.count(ListeningHistory.id).desc())
-        .limit(10)
-        .all()
-    )
     total_plays = (
         db.query(func.count(ListeningHistory.id))
         .filter(ListeningHistory.user_id == user_id)
@@ -144,7 +153,7 @@ def _tool_get_listening_profile(db: Session, user_id: str) -> dict:
 
     return {
         "top_tags": [{"name": n, "weight": round(float(w), 1)} for n, w in tag_rows],
-        "top_artists": [{"name": n, "plays": int(p)} for n, p in artist_rows],
+        "top_artists": _top_artists(db, user_id, limit=10),
         "library_size": int(library_size),
         "total_plays": int(total_plays),
     }
@@ -169,21 +178,6 @@ def _tool_get_recent_listening(db: Session, user_id: str, days: int) -> dict:
         .limit(8)
         .all()
     )
-    artist_rows = (
-        db.query(Artist.name, func.count(ListeningHistory.id).label("plays"))
-        .join(Song, Song.artist_id == Artist.id)
-        .join(ListeningHistory, ListeningHistory.song_id == Song.id)
-        .filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= cutoff,
-            Song.is_deleted.is_(False),
-            Artist.name.is_not(None),
-        )
-        .group_by(Artist.name)
-        .order_by(func.count(ListeningHistory.id).desc())
-        .limit(5)
-        .all()
-    )
     plays = (
         db.query(func.count(ListeningHistory.id))
         .filter(ListeningHistory.user_id == user_id, ListeningHistory.played_at >= cutoff)
@@ -193,7 +187,7 @@ def _tool_get_recent_listening(db: Session, user_id: str, days: int) -> dict:
     return {
         "days": days,
         "plays": int(plays),
-        "top_artists": [{"name": n, "plays": int(p)} for n, p in artist_rows],
+        "top_artists": _top_artists(db, user_id, limit=5, since=cutoff),
         "top_tags": [{"name": n, "count": int(c)} for n, c in tag_rows],
     }
 
