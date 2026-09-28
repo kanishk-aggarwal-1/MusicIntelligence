@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from ..authz import require_capability
 from ..database import engine as _db_engine
 from ..database import get_db
+from ..deps import require_user_id
 from ..models.artist import Artist
 from ..models.dedup_merge_log import DedupMergeLog
 from ..models.listening_goal import ListeningGoal
@@ -30,7 +31,6 @@ from ..services.discovery_service import discover_songs_from_artist
 from ..services.job_service import create_job, get_active_job, run_job
 from ..services.rate_limit_service import enforce_rate_limit
 from ..services.recommendation_service import build_discovery_feed
-from ..services.spotify_service import load_request_user_session
 from ..time_utils import utcnow_naive
 
 router = APIRouter(prefix="/insights", tags=["Insights"])
@@ -122,17 +122,9 @@ def _duplicate_groups(db: Session, user_id: str):
     return duplicates
 
 
-def _require_user_id(db: Session, request: Request):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
-    return user_id
-
-
 @router.get("/taste-timeline")
 def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     safe_months = max(1, min(months, 24))
 
     # Cut off at `safe_months` months ago so the timeline doesn't load all-time
@@ -234,7 +226,7 @@ def taste_timeline(request: Request, months: int = 6, db: Session = Depends(get_
 
 @router.get("/discovery-feed")
 def discovery_feed(request: Request, limit: int = 20, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     safe_limit = max(1, min(limit, 100))
     feed = build_discovery_feed(db, user_id, limit=safe_limit)
     return {"items": feed}
@@ -410,7 +402,7 @@ def _run_new_for_you_job(db: Session, progress, *, user_id: str):
 
 @router.get("/new-for-you")
 def new_for_you(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     cached = get_cached_response("insights", _new_for_you_cache_key(user_id))
     if cached and cached.get("payload") is not None:
         return {**cached["payload"], "status": "ready"}
@@ -465,7 +457,7 @@ def _pct_rows(rows, total):
 
 @router.get("/taste-profile")
 def taste_profile(request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     user_song_ids = (
         db.query(ListeningHistory.song_id)
         .filter(ListeningHistory.user_id == user_id)
@@ -516,7 +508,7 @@ def taste_profile(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/feedback")
 def add_feedback(payload: FeedbackPayload, request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "submit_feedback")
 
     action = payload.action.lower().strip()
@@ -544,7 +536,7 @@ def add_feedback(payload: FeedbackPayload, request: Request, db: Session = Depen
 
 @router.get("/feedback-summary")
 def feedback_summary(request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
 
     rows = (
         db.query(RecommendationFeedback.action, func.count(RecommendationFeedback.id))
@@ -560,7 +552,7 @@ def feedback_summary(request: Request, db: Session = Depends(get_db)):
 def feedback_history(
     request: Request, limit: int = 50, offset: int = 0, db: Session = Depends(get_db)
 ):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     safe_limit = max(1, min(limit, 100))
     safe_offset = max(0, offset)
     base = db.query(RecommendationFeedback).filter(RecommendationFeedback.user_id == user_id)
@@ -590,7 +582,7 @@ def feedback_history(
 
 @router.delete("/feedback/{feedback_id}")
 def delete_feedback(feedback_id: int, request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "submit_feedback")
     row = db.query(RecommendationFeedback).filter_by(id=feedback_id, user_id=user_id).first()
     if not row:
@@ -602,7 +594,7 @@ def delete_feedback(feedback_id: int, request: Request, db: Session = Depends(ge
 
 @router.delete("/feedback")
 def clear_feedback(request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "submit_feedback")
     deleted = (
         db.query(RecommendationFeedback)
@@ -615,7 +607,7 @@ def clear_feedback(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/goals")
 def create_goal(payload: GoalPayload, request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "manage_goals")
     _validate_goal_values(payload.goal_type, payload.period)
 
@@ -634,7 +626,7 @@ def create_goal(payload: GoalPayload, request: Request, db: Session = Depends(ge
 
 @router.get("/goals-status")
 def goals_status(request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
 
     goals = db.query(ListeningGoal).filter(ListeningGoal.user_id == user_id).all()
 
@@ -721,7 +713,7 @@ def goals_status(request: Request, db: Session = Depends(get_db)):
 def update_goal(
     goal_id: int, payload: GoalUpdatePayload, request: Request, db: Session = Depends(get_db)
 ):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "manage_goals")
     goal = (
         db.query(ListeningGoal)
@@ -744,7 +736,7 @@ def update_goal(
 
 @router.delete("/goals/{goal_id}")
 def delete_goal(goal_id: int, request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "manage_goals")
     goal = (
         db.query(ListeningGoal)
@@ -766,7 +758,7 @@ def delete_goal(goal_id: int, request: Request, db: Session = Depends(get_db)):
 
 @router.get("/data-quality")
 def data_quality(request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
 
     user_song_ids = (
         db.query(ListeningHistory.song_id)
@@ -893,7 +885,7 @@ def data_quality(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/cache/clear")
 def clear_cache(request: Request, provider: str = "lastfm", db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     cleared = clear_provider_cache(provider)
     return {"message": "Cache cleared", "provider": provider, "cleared": cleared}
@@ -901,7 +893,7 @@ def clear_cache(request: Request, provider: str = "lastfm", db: Session = Depend
 
 @router.get("/dedup-preview")
 def dedup_preview(request: Request, limit_groups: int = 50, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     duplicates = _duplicate_groups(db, user_id)
     return {"duplicate_groups": duplicates[: max(1, min(limit_groups, 200))]}
 
@@ -910,7 +902,7 @@ def dedup_preview(request: Request, limit_groups: int = 50, db: Session = Depend
 def dedup_apply(
     request: Request, limit_groups: int = 20, dry_run: bool = False, db: Session = Depends(get_db)
 ):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     duplicates = _duplicate_groups(db, user_id)[: max(1, min(limit_groups, 200))]
 
@@ -1007,7 +999,7 @@ def dedup_apply(
 
 @router.post("/dedup-undo/{batch_id}")
 def dedup_undo(batch_id: str, request: Request, db: Session = Depends(get_db)):
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     rows = (
         db.query(DedupMergeLog)
@@ -1056,7 +1048,7 @@ def dedup_undo(batch_id: str, request: Request, db: Session = Depends(get_db)):
 @router.get("/tags")
 def user_tags(request: Request, limit: int = 100, db: Session = Depends(get_db)):
     """Return tags present in the user's listening history, ranked by play count."""
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     safe_limit = max(1, min(limit, 500))
 
     user_song_ids = (
@@ -1087,7 +1079,7 @@ def user_tags(request: Request, limit: int = 100, db: Session = Depends(get_db))
 @router.get("/tags/{tag_name}/songs")
 def songs_by_tag(tag_name: str, request: Request, limit: int = 50, db: Session = Depends(get_db)):
     """Return the user's songs that carry a given Last.fm tag."""
-    user_id = _require_user_id(db, request)
+    user_id = require_user_id(db, request)
     safe_limit = max(1, min(limit, 200))
 
     from sqlalchemy.orm import joinedload as _joinedload
