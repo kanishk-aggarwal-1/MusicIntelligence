@@ -2,9 +2,7 @@
 
 from datetime import datetime, timedelta
 
-from backend.app.models.api_cache import ApiCache
 from backend.app.models.artist import Artist
-from backend.app.models.job import Job
 from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.recommendation_feedback import RecommendationFeedback
 from backend.app.models.song import Song
@@ -157,7 +155,7 @@ def test_get_job_without_user_id_filter(testing_session_local, db_session):
 def test_get_active_job_returns_latest_queued_or_running(db_session):
     old = create_job(db_session, user_id="u1", job_type="sync_history")
     old.status = "succeeded"
-    queued = create_job(db_session, user_id="u1", job_type="sync_history")
+    create_job(db_session, user_id="u1", job_type="sync_history")  # a queued job the query must skip
     running = create_job(db_session, user_id="u1", job_type="sync_history")
     running.status = "running"
     other_user = create_job(db_session, user_id="u2", job_type="sync_history")

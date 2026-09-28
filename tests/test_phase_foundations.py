@@ -1,9 +1,7 @@
 from datetime import datetime, timedelta
-from functools import partial
 
 from backend.app.models.artist import Artist
 from backend.app.models.generated_playlist import GeneratedPlaylist
-from backend.app.models.job import Job
 from backend.app.models.listening_history import ListeningHistory
 from backend.app.models.song import Song
 from backend.app.models.song_tag import SongTag
@@ -15,7 +13,6 @@ from backend.app.services import (
     api_cache_service,
     enrichment_service,
     job_service,
-    recommendation_service,
 )
 from backend.app.services.api_cache_service import get_cached_response, store_cached_response
 from backend.app.services.job_service import create_job, get_job, run_job

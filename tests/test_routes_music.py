@@ -12,8 +12,6 @@ from backend.app.models.user_song_pref import UserSongPref
 from backend.app.models.generated_playlist import GeneratedPlaylist
 from backend.app.models.generated_playlist_track import GeneratedPlaylistTrack
 from backend.app.routes import music_routes
-from backend.app.services import enrichment_service
-from backend.app.services.recommendation_service import _apply_enrichment
 
 
 def _session(user_id: str):

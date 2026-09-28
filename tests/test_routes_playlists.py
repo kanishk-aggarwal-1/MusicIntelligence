@@ -10,7 +10,6 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.routes import playlist_routes
-from backend.app.services import generated_playlist_service
 from backend.app.services.generated_playlist_service import (
     build_playlist_name,
     create_playlist_preview_record,

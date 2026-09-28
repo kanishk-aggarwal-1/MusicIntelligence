@@ -1,10 +1,8 @@
 """Tests for the AI DJ agent — POST /playlists/dj and dj_agent_service."""
 
-import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from backend.app.models.artist import Artist
 from backend.app.models.listening_history import ListeningHistory

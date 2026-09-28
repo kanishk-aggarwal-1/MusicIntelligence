@@ -11,7 +11,6 @@ from backend.app.models.song_tag import SongTag
 from backend.app.models.tag import Tag
 from backend.app.models.user_session import UserSession
 from backend.app.routes import insights_routes
-from backend.app.services import api_cache_service, recommendation_service
 from backend.app.time_utils import utcnow_naive
 
 
