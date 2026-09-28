@@ -1,4 +1,13 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import deferred, relationship
 
 from ..database import Base
@@ -11,6 +20,11 @@ class ListeningHistory(Base):
         UniqueConstraint(
             "user_id", "song_id", "played_at", name="uq_listening_history_user_song_played_at"
         ),
+        # Windowed "this user's plays in a date range" is the app's most common
+        # query (dashboard/insights/stats). The unique constraint above can't
+        # serve it — played_at is its 3rd column, behind song_id — so add a
+        # dedicated (user_id, played_at) index for range scans.
+        Index("ix_listening_history_user_played", "user_id", "played_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
