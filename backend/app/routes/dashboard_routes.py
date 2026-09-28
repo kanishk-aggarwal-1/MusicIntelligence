@@ -13,6 +13,10 @@ from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
+# Some deployments stored artist_id as text and others as int; cast both sides so
+# the Song<->Artist join works regardless of column type.
+_ARTIST_JOIN = cast(Song.artist_id, String) == cast(Artist.id, String)
+
 
 def _serialize_series(rows, label_key, value_key):
     return [{label_key: str(label), value_key: int(value)} for label, value in rows]
@@ -23,6 +27,180 @@ def _parse_date(value):
         return None
     parsed = parse_utc_datetime(value)
     return to_naive_utc(parsed) if parsed else None
+
+
+def _window(user_id: str, start_dt, end_dt):
+    """Shared listening-history window filter (inclusive of both bounds)."""
+    return (
+        ListeningHistory.user_id == user_id,
+        ListeningHistory.played_at >= start_dt,
+        ListeningHistory.played_at <= end_dt,
+    )
+
+
+def _top_artists(db, user_id, start_dt, end_dt):
+    return (
+        db.query(Artist.name, func.count(ListeningHistory.id))
+        .join(Song, _ARTIST_JOIN)
+        .join(ListeningHistory, Song.id == ListeningHistory.song_id)
+        .filter(*_window(user_id, start_dt, end_dt), Song.is_deleted.is_(False))
+        .group_by(Artist.name)
+        .order_by(func.count(ListeningHistory.id).desc())
+        .limit(10)
+        .all()
+    )
+
+
+def _total_artists(db, user_id, start_dt, end_dt):
+    # Distinct artists across the whole window — the top_artists LIMIT 10 can't
+    # provide this, so the stat card needs its own COUNT DISTINCT.
+    return (
+        db.query(func.count(func.distinct(Artist.id)))
+        .select_from(ListeningHistory)
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .join(Artist, _ARTIST_JOIN)
+        .filter(*_window(user_id, start_dt, end_dt), Song.is_deleted.is_(False))
+        .scalar()
+    ) or 0
+
+
+def _top_genres(db, user_id, start_dt, end_dt):
+    return (
+        db.query(Song.genre, func.count(ListeningHistory.id))
+        .join(ListeningHistory, Song.id == ListeningHistory.song_id)
+        .filter(
+            Song.genre.is_not(None),
+            Song.is_deleted.is_(False),
+            *_window(user_id, start_dt, end_dt),
+        )
+        .group_by(Song.genre)
+        .order_by(func.count(ListeningHistory.id).desc())
+        .limit(10)
+        .all()
+    )
+
+
+def _listening_series(db, user_id, start_dt, end_dt):
+    """Return (daily, weekly, hourly) play-count rows for the window."""
+    w = _window(user_id, start_dt, end_dt)
+    daily = (
+        db.query(func.date(ListeningHistory.played_at), func.count(ListeningHistory.id))
+        .filter(*w)
+        .group_by(func.date(ListeningHistory.played_at))
+        .order_by(func.date(ListeningHistory.played_at).desc())
+        .limit(60)
+        .all()
+    )
+    weekly = (
+        db.query(
+            func.date_trunc("week", ListeningHistory.played_at), func.count(ListeningHistory.id)
+        )
+        .filter(*w)
+        .group_by(func.date_trunc("week", ListeningHistory.played_at))
+        .order_by(func.date_trunc("week", ListeningHistory.played_at).desc())
+        .limit(20)
+        .all()
+    )
+    hourly = (
+        db.query(func.extract("hour", ListeningHistory.played_at), func.count(ListeningHistory.id))
+        .filter(*w)
+        .group_by(func.extract("hour", ListeningHistory.played_at))
+        .order_by(func.extract("hour", ListeningHistory.played_at))
+        .all()
+    )
+    return daily, weekly, hourly
+
+
+def _genre_series(db, user_id, start_dt, end_dt):
+    """Return (daily_genre, weekly_genre) rows for the window."""
+    w = _window(user_id, start_dt, end_dt)
+    daily_genre = (
+        db.query(func.date(ListeningHistory.played_at), Song.genre, func.count(ListeningHistory.id))
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .filter(Song.genre.is_not(None), Song.is_deleted.is_(False), *w)
+        .group_by(func.date(ListeningHistory.played_at), Song.genre)
+        .order_by(
+            func.date(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc()
+        )
+        .limit(120)
+        .all()
+    )
+    weekly_genre = (
+        db.query(
+            func.date_trunc("week", ListeningHistory.played_at),
+            Song.genre,
+            func.count(ListeningHistory.id),
+        )
+        .join(Song, Song.id == ListeningHistory.song_id)
+        .filter(Song.genre.is_not(None), Song.is_deleted.is_(False), *w)
+        .group_by(func.date_trunc("week", ListeningHistory.played_at), Song.genre)
+        .order_by(
+            func.date_trunc("week", ListeningHistory.played_at).desc(),
+            func.count(ListeningHistory.id).desc(),
+        )
+        .limit(120)
+        .all()
+    )
+    return daily_genre, weekly_genre
+
+
+def _engagement_totals(db, user_id, start_dt, end_dt):
+    """Return (total_plays, total_ms, known_skip_rows, skipped_rows).
+
+    ms_played / skipped are recent columns; on older DB instances that lack them
+    the aggregate raises, so fall back to a plain play count.
+    """
+    try:
+        row = (
+            db.query(
+                func.count(ListeningHistory.id),
+                func.coalesce(func.sum(ListeningHistory.ms_played), 0),
+                func.count(ListeningHistory.id).filter(ListeningHistory.skipped.is_not(None)),
+                func.count(ListeningHistory.id).filter(ListeningHistory.skipped.is_(True)),
+            )
+            .filter(*_window(user_id, start_dt, end_dt))
+            .one()
+        )
+        total_plays, total_ms, known_skip_rows, skipped_rows = row
+        return (
+            int(total_plays or 0),
+            int(total_ms or 0),
+            int(known_skip_rows or 0),
+            int(skipped_rows or 0),
+        )
+    except Exception:
+        db.rollback()
+        total_plays = (
+            db.query(func.count(ListeningHistory.id))
+            .filter(*_window(user_id, start_dt, end_dt))
+            .scalar()
+            or 0
+        )
+        return int(total_plays), 0, 0, 0
+
+
+def _comparison(db, user_id, start_dt, end_dt, total_plays):
+    """Compare the window's play count against the immediately preceding window."""
+    span = end_dt - start_dt
+    prev_end = start_dt
+    prev_start = start_dt - span
+    prev_total = (
+        db.query(func.count(ListeningHistory.id))
+        .filter(
+            ListeningHistory.user_id == user_id,
+            ListeningHistory.played_at >= prev_start,
+            ListeningHistory.played_at < prev_end,
+        )
+        .scalar()
+    ) or 0
+    delta = total_plays - prev_total
+    return {
+        "current_total_plays": int(total_plays),
+        "previous_total_plays": int(prev_total),
+        "delta": int(delta),
+        "delta_percent": round((delta / prev_total) * 100, 2) if prev_total else None,
+        "previous_window": {"start": prev_start.isoformat(), "end": prev_end.isoformat()},
+    }
 
 
 @router.get("/stats")
@@ -47,218 +225,17 @@ def get_stats(
     end_dt = _parse_date(end_date) or latest_played_at or to_naive_utc(utcnow())
     start_dt = _parse_date(start_date) or (end_dt - timedelta(days=safe_days))
 
-    artist_join = cast(Song.artist_id, String) == cast(Artist.id, String)
-
-    top_artists_rows = (
-        db.query(Artist.name, func.count(ListeningHistory.id))
-        .join(Song, artist_join)
-        .join(ListeningHistory, Song.id == ListeningHistory.song_id)
-        .filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-            Song.is_deleted.is_(False),
-        )
-        .group_by(Artist.name)
-        .order_by(func.count(ListeningHistory.id).desc())
-        .limit(10)
-        .all()
+    top_artists_rows = _top_artists(db, user_id, start_dt, end_dt)
+    total_artists = _total_artists(db, user_id, start_dt, end_dt)
+    top_genres_rows = _top_genres(db, user_id, start_dt, end_dt)
+    daily_rows, weekly_rows, hourly_rows = _listening_series(db, user_id, start_dt, end_dt)
+    daily_genre_rows, weekly_genre_rows = _genre_series(db, user_id, start_dt, end_dt)
+    total_plays, total_ms, known_skip_rows, skipped_rows = _engagement_totals(
+        db, user_id, start_dt, end_dt
     )
-
-    # Distinct artists played within the selected window.
-    # top_artists_rows is capped at 10 by the LIMIT, so the stat card needs a
-    # separate COUNT DISTINCT that covers all artists in the period — not just
-    # the top 10.  Filters match the rest of the windowed queries exactly.
-    total_artists = (
-        db.query(func.count(func.distinct(Artist.id)))
-        .select_from(ListeningHistory)
-        .join(Song, Song.id == ListeningHistory.song_id)
-        .join(Artist, artist_join)
-        .filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-            Song.is_deleted.is_(False),
-        )
-        .scalar()
-    ) or 0
-
-    top_genres_rows = (
-        db.query(Song.genre, func.count(ListeningHistory.id))
-        .join(ListeningHistory, Song.id == ListeningHistory.song_id)
-        .filter(
-            Song.genre.is_not(None),
-            Song.is_deleted.is_(False),
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-        )
-        .group_by(Song.genre)
-        .order_by(func.count(ListeningHistory.id).desc())
-        .limit(10)
-        .all()
+    compare_payload = (
+        _comparison(db, user_id, start_dt, end_dt, total_plays) if compare_previous else None
     )
-
-    daily_rows = (
-        db.query(func.date(ListeningHistory.played_at), func.count(ListeningHistory.id))
-        .filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-        )
-        .group_by(func.date(ListeningHistory.played_at))
-        .order_by(func.date(ListeningHistory.played_at).desc())
-        .limit(60)
-        .all()
-    )
-
-    weekly_rows = (
-        db.query(
-            func.date_trunc("week", ListeningHistory.played_at), func.count(ListeningHistory.id)
-        )
-        .filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-        )
-        .group_by(func.date_trunc("week", ListeningHistory.played_at))
-        .order_by(func.date_trunc("week", ListeningHistory.played_at).desc())
-        .limit(20)
-        .all()
-    )
-
-    hourly_rows = (
-        db.query(func.extract("hour", ListeningHistory.played_at), func.count(ListeningHistory.id))
-        .filter(
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-        )
-        .group_by(func.extract("hour", ListeningHistory.played_at))
-        .order_by(func.extract("hour", ListeningHistory.played_at))
-        .all()
-    )
-
-    daily_genre_rows = (
-        db.query(func.date(ListeningHistory.played_at), Song.genre, func.count(ListeningHistory.id))
-        .join(Song, Song.id == ListeningHistory.song_id)
-        .filter(
-            Song.genre.is_not(None),
-            Song.is_deleted.is_(False),
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-        )
-        .group_by(func.date(ListeningHistory.played_at), Song.genre)
-        .order_by(
-            func.date(ListeningHistory.played_at).desc(), func.count(ListeningHistory.id).desc()
-        )
-        .limit(120)
-        .all()
-    )
-
-    weekly_genre_rows = (
-        db.query(
-            func.date_trunc("week", ListeningHistory.played_at),
-            Song.genre,
-            func.count(ListeningHistory.id),
-        )
-        .join(Song, Song.id == ListeningHistory.song_id)
-        .filter(
-            Song.genre.is_not(None),
-            Song.is_deleted.is_(False),
-            ListeningHistory.user_id == user_id,
-            ListeningHistory.played_at >= start_dt,
-            ListeningHistory.played_at <= end_dt,
-        )
-        .group_by(func.date_trunc("week", ListeningHistory.played_at), Song.genre)
-        .order_by(
-            func.date_trunc("week", ListeningHistory.played_at).desc(),
-            func.count(ListeningHistory.id).desc(),
-        )
-        .limit(120)
-        .all()
-    )
-
-    try:
-        _stats = (
-            db.query(
-                func.count(ListeningHistory.id),
-                func.coalesce(func.sum(ListeningHistory.ms_played), 0),
-                func.count(ListeningHistory.id).filter(ListeningHistory.skipped.is_not(None)),
-                func.count(ListeningHistory.id).filter(ListeningHistory.skipped.is_(True)),
-            )
-            .filter(
-                ListeningHistory.user_id == user_id,
-                ListeningHistory.played_at >= start_dt,
-                ListeningHistory.played_at <= end_dt,
-            )
-            .one()
-        )
-        total_plays, total_ms, known_skip_rows, skipped_rows = _stats
-        total_ms = int(total_ms or 0)
-        known_skip_rows = int(known_skip_rows or 0)
-        skipped_rows = int(skipped_rows or 0)
-    except Exception:
-        # Columns may not exist yet on older DB instances; degrade gracefully.
-        db.rollback()
-        total_plays = (
-            db.query(func.count(ListeningHistory.id))
-            .filter(
-                ListeningHistory.user_id == user_id,
-                ListeningHistory.played_at >= start_dt,
-                ListeningHistory.played_at <= end_dt,
-            )
-            .scalar()
-            or 0
-        )
-        total_ms = 0
-        known_skip_rows = 0
-        skipped_rows = 0
-
-    compare_payload = None
-    if compare_previous:
-        span = end_dt - start_dt
-        prev_end = start_dt
-        prev_start = start_dt - span
-
-        prev_total = (
-            db.query(func.count(ListeningHistory.id))
-            .filter(
-                ListeningHistory.user_id == user_id,
-                ListeningHistory.played_at >= prev_start,
-                ListeningHistory.played_at < prev_end,
-            )
-            .scalar()
-        ) or 0
-
-        delta = total_plays - prev_total
-        compare_payload = {
-            "current_total_plays": int(total_plays),
-            "previous_total_plays": int(prev_total),
-            "delta": int(delta),
-            "delta_percent": round((delta / prev_total) * 100, 2) if prev_total else None,
-            "previous_window": {
-                "start": prev_start.isoformat(),
-                "end": prev_end.isoformat(),
-            },
-        }
-
-    top_artists = _serialize_series(top_artists_rows, "artist", "plays")
-    top_genres = _serialize_series(top_genres_rows, "genre", "plays")
-    daily_listening = _serialize_series(daily_rows, "day", "plays")
-    weekly_listening = _serialize_series(weekly_rows, "week", "plays")
-    hourly_listening = _serialize_series(hourly_rows, "hour", "plays")
-
-    daily_genre = [
-        {"day": str(day), "genre": genre, "plays": int(plays)}
-        for day, genre, plays in daily_genre_rows
-    ]
-
-    weekly_genre = [
-        {"week": str(week), "genre": genre, "plays": int(plays)}
-        for week, genre, plays in weekly_genre_rows
-    ]
 
     return {
         "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat(), "days": safe_days},
@@ -269,11 +246,17 @@ def get_stats(
         if known_skip_rows
         else None,
         "comparison": compare_payload,
-        "top_artists": top_artists,
-        "top_genres": top_genres,
-        "daily_listening": daily_listening,
-        "weekly_listening": weekly_listening,
-        "hourly_listening": hourly_listening,
-        "daily_genre": daily_genre,
-        "weekly_genre": weekly_genre,
+        "top_artists": _serialize_series(top_artists_rows, "artist", "plays"),
+        "top_genres": _serialize_series(top_genres_rows, "genre", "plays"),
+        "daily_listening": _serialize_series(daily_rows, "day", "plays"),
+        "weekly_listening": _serialize_series(weekly_rows, "week", "plays"),
+        "hourly_listening": _serialize_series(hourly_rows, "hour", "plays"),
+        "daily_genre": [
+            {"day": str(day), "genre": genre, "plays": int(plays)}
+            for day, genre, plays in daily_genre_rows
+        ],
+        "weekly_genre": [
+            {"week": str(week), "genre": genre, "plays": int(plays)}
+            for week, genre, plays in weekly_genre_rows
+        ],
     }
