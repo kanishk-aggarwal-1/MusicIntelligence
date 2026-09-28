@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..authz import require_capability
 from ..database import get_db
+from ..deps import require_user_id, require_user_session
 from ..models.generated_playlist import GeneratedPlaylist
 from ..models.generated_playlist_track import GeneratedPlaylistTrack
 from ..models.job import Job
@@ -603,10 +604,7 @@ def _build_preview(db: Session, user_id: str, payload: PlaylistGeneratePayload):
 @router.post("/dj")
 def dj_playlist(payload: DJPayload, request: Request, db: Session = Depends(get_db)):
     """Generate a playlist from a natural-language prompt via an AI DJ agent."""
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "preview_playlists")
 
     prompt = (payload.prompt or "").strip()
@@ -647,10 +645,7 @@ def dj_playlist(payload: DJPayload, request: Request, db: Session = Depends(get_
 
 @router.get("/generated")
 def generated_history(request: Request, limit: int = 30, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
 
     records = list_generated_playlists(db, user_id=user_id, limit=limit)
     return {
@@ -660,10 +655,7 @@ def generated_history(request: Request, limit: int = 30, db: Session = Depends(g
 
 @router.get("/generated/{generated_playlist_id}")
 def generated_detail(generated_playlist_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
 
     record = get_generated_playlist(
         db, generated_playlist_id=generated_playlist_id, user_id=user_id
@@ -681,10 +673,7 @@ def update_generated_name(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
 
     name = (payload.name or "").strip()
@@ -726,10 +715,7 @@ def _normalize_track_positions(record):
 def delete_generated_playlist(
     generated_playlist_id: int, request: Request, db: Session = Depends(get_db)
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     record = _owned_playlist(db, generated_playlist_id, user_id)
     db.delete(record)
@@ -744,9 +730,7 @@ def reorder_generated_tracks(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    user_id = load_request_user_session(db, request).get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     record = _owned_playlist(db, generated_playlist_id, user_id)
     existing = {track.id: track for track in record.tracks}
@@ -769,9 +753,7 @@ def update_generated_track(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    user_id = load_request_user_session(db, request).get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     record = _owned_playlist(db, generated_playlist_id, user_id)
     track = next((item for item in record.tracks if item.id == track_id), None)
@@ -786,9 +768,7 @@ def update_generated_track(
 def remove_generated_track(
     generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)
 ):
-    user_id = load_request_user_session(db, request).get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     record = _owned_playlist(db, generated_playlist_id, user_id)
     track = next((item for item in record.tracks if item.id == track_id), None)
@@ -807,9 +787,7 @@ def remove_generated_track(
 def replace_generated_track(
     generated_playlist_id: int, track_id: int, request: Request, db: Session = Depends(get_db)
 ):
-    user_id = load_request_user_session(db, request).get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "mutate_library")
     record = _owned_playlist(db, generated_playlist_id, user_id)
     track = next((item for item in record.tracks if item.id == track_id), None)
@@ -844,10 +822,7 @@ def replace_generated_track(
 
 @router.post("/preview")
 def preview(payload: PlaylistGeneratePayload, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "preview_playlists")
 
     return _build_preview(db, user_id, payload)
@@ -858,11 +833,9 @@ def create_from_preview(
     generated_playlist_id: int, request: Request, db: Session = Depends(get_db)
 ):
     started = time.perf_counter()
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     token = session.get("token")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
     require_capability(user_id, "create_spotify_playlists", spotify_connected=bool(token))
     if not token:
         raise HTTPException(status_code=401, detail="spotify_token_expired")
@@ -917,10 +890,7 @@ def create_from_preview(
 
 @router.post("/generated/{generated_playlist_id}/regenerate")
 def regenerate_preview(generated_playlist_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "preview_playlists")
 
     record = get_generated_playlist(
@@ -1117,10 +1087,7 @@ def _process_due_schedules(db: Session, user_id: str) -> int:
 
 @router.get("/schedules")
 def get_schedules(request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
 
     # Opportunistically run anything due before listing, so simply opening the
     # page keeps schedules fresh without an external cron.
@@ -1131,10 +1098,7 @@ def get_schedules(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/schedules")
 def post_schedule(payload: ScheduleCreatePayload, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "manage_schedules")
 
     if payload.cadence not in VALID_CADENCES:
@@ -1163,10 +1127,7 @@ def post_schedule(payload: ScheduleCreatePayload, request: Request, db: Session 
 
 @router.post("/schedules/{schedule_id}/run")
 def run_schedule_now(schedule_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "manage_schedules")
 
     schedule = get_schedule(db, schedule_id=schedule_id, user_id=user_id)
@@ -1182,10 +1143,7 @@ def run_schedule_now(schedule_id: int, request: Request, db: Session = Depends(g
 
 @router.delete("/schedules/{schedule_id}")
 def remove_schedule(schedule_id: int, request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
     require_capability(user_id, "manage_schedules")
 
     if not delete_schedule(db, schedule_id=schedule_id, user_id=user_id):
