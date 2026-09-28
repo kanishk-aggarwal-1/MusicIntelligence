@@ -17,6 +17,7 @@ from ..authz import capabilities_for, require_capability
 from ..config import settings
 from ..database import engine as _db_engine
 from ..database import get_db
+from ..deps import require_user_session
 from ..models.artist import Artist
 from ..models.dedup_merge_log import DedupMergeLog
 from ..models.generated_playlist import GeneratedPlaylist
@@ -294,10 +295,8 @@ def session_status(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/sync-status")
 def sync_status(request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
 
     user_song_ids = (
         db.query(ListeningHistory.song_id)
@@ -348,10 +347,8 @@ def sync_status(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/onboarding-status")
 def onboarding_status(request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
 
     history_count = (
         db.query(func.count(ListeningHistory.id))
@@ -394,11 +391,9 @@ def onboarding_status(request: Request, db: Session = Depends(get_db)):
 @router.get("/profile")
 def get_profile(request: Request, db: Session = Depends(get_db)):
     """Return Spotify profile data for the logged-in user."""
-    session = load_request_user_session(db, request)
+    session = require_user_session(db, request)
     token = session.get("token")
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = session["user_id"]
 
     # Demo user has no Spotify token — return a synthetic profile.
     if user_id == settings.DEMO_USER_ID:
@@ -439,10 +434,8 @@ def _export_datetime(value):
 @router.get("/export-data")
 def export_user_data(request: Request, db: Session = Depends(get_db)):
     """Return a portable JSON snapshot without credentials or shared catalog internals."""
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     require_capability(user_id, "manage_account")
 
     history_rows = (
@@ -547,11 +540,9 @@ def export_user_data(request: Request, db: Session = Depends(get_db)):
 @router.get("/spotify-auth-debug")
 def spotify_auth_debug(request: Request, db: Session = Depends(get_db)):
     """Return non-secret Spotify auth/session diagnostics for the logged-in user."""
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     token = session.get("token")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
 
     scope = get_stored_session_scope(db, user_id)
     spotify_user = {}
@@ -583,10 +574,8 @@ def delete_user_data(request: Request, db: Session = Depends(get_db)):
     Songs and artists are shared across users and are NOT deleted.
     The session cookie is cleared and the user is logged out.
     """
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     require_capability(user_id, "manage_account")
 
     deleted: dict[str, int] = {}
@@ -653,12 +642,9 @@ def logout(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/sync-history")
 def sync_history(request: Request, db: Session = Depends(get_db)):
-    session = load_request_user_session(db, request)
+    session = require_user_session(db, request)
     token = session.get("token")
-    user_id = session.get("user_id")
-
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = session["user_id"]
     require_capability(user_id, "sync_spotify", spotify_connected=bool(token))
     if not token:
         raise HTTPException(status_code=401, detail="spotify_token_expired")
@@ -775,10 +761,8 @@ def _run_sync_history_job(db: Session, progress, *, user_id: str):
 def sync_history_job(
     request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     require_capability(user_id, "sync_spotify", spotify_connected=bool(session.get("token")))
 
     # Check for a running job first — returning it is free and must not burn tokens.
@@ -810,10 +794,8 @@ def backfill_metadata(
     retry_failed: bool = False,
     db: Session = Depends(get_db),
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     require_capability(user_id, "enrich_metadata")
     enforce_rate_limit(request, namespace="backfill", user_id=user_id, limit=5, window_seconds=60)
 
@@ -1260,10 +1242,8 @@ async def import_history_job(
       Content-Type: multipart/form-data
       Field: file — any StreamingHistory_music_*.json from Spotify
     """
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     require_capability(user_id, "import_history")
 
     enforce_rate_limit(
@@ -1342,10 +1322,8 @@ def backfill_metadata_job(
     retry_failed: bool = False,
     db: Session = Depends(get_db),
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    session = require_user_session(db, request)
+    user_id = session["user_id"]
     require_capability(user_id, "enrich_metadata")
 
     # Return existing job without consuming a rate-limit token.
