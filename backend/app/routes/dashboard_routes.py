@@ -1,14 +1,14 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import String, cast, func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..deps import require_user_id
 from ..models.artist import Artist
 from ..models.listening_history import ListeningHistory
 from ..models.song import Song
-from ..services.spotify_service import load_request_user_session
 from ..time_utils import parse_utc_datetime, to_naive_utc, utcnow
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -34,10 +34,7 @@ def get_stats(
     compare_previous: bool = False,
     db: Session = Depends(get_db),
 ):
-    session = load_request_user_session(db, request)
-    user_id = session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not logged in")
+    user_id = require_user_id(db, request)
 
     safe_days = max(1, min(days, 365))
     latest_played_at = None
