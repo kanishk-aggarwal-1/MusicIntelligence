@@ -1,0 +1,18 @@
+# Pre-commit hooks that auto-run Ruff on staged Python files.
+#
+# Opt-in (pre-commit is not a project dependency). To enable:
+#   pip install pre-commit
+#   pre-commit install
+# Run against everything once:
+#   pre-commit run --all-files
+#
+# Frontend linting is left to `npm run lint` (see CLAUDE.md); add a local
+# eslint hook here if you want it enforced on commit too.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15  # keep in sync with the ruff version used locally/CI
+    hooks:
+      - id: ruff-check      # lint, autofix what it safely can
+        args: [--fix]
+      - id: ruff-format     # format
